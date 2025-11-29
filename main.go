@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -57,8 +58,8 @@ func main() {
 
 			config, err := LoadConfig() // ignore error for now
 			if err != nil {
-				log.Printf("warning loading config: %v", err)
-				log.Printf("New config file will be created...")
+				log.Printf("\033[33mwarning loading config: %v\033[0m", err)
+				log.Printf("\033[38;2;127;255;212mNew config file will be created...\033[0m")
 				YamlLintRulesDefault := &YamlLintRules{
 					Braces:   map[string]any{"max-spaces-inside": 1, "level": "warning"},
 					Brackets: map[string]any{"max-spaces-inside": 1, "level": "warning"},
@@ -71,7 +72,7 @@ func main() {
 				}
 
 				AnsibleLintDefault := &AnsibleLint{
-					ExcludedPaths: []string{"molecule/default/rwara/*.yml", "molecule/default/tests/*/*/*.yml", "tests/test.yml"},
+					ExcludedPaths: []string{"molecule/default/tests/*.yml", "molecule/default/tests/*/*/*.yml", "tests/test.yml"},
 					WarnList:      []string{"meta-no-info", "yaml[line-length]"},
 					SkipList:      []string{"meta-incorrect", "role-name[path]"},
 				}
@@ -123,7 +124,7 @@ func main() {
 				}
 
 				if err := SaveConfig(config); err != nil {
-					log.Printf("warning saving new config: %v", err)
+					log.Printf("\033[33mwarning saving new config: %v\033[0m", err)
 				}
 
 			}
@@ -140,7 +141,7 @@ func main() {
 					log.Printf("Failed to set GIT_PASSWORD: %v", err)
 				}
 			} else {
-				log.Println("HashiCorp Vault integration is disabled in config. Use public repositories.")
+				log.Println("\033[35mHashiCorp Vault integration is disabled in config. Use public repositories.\033[0m")
 			}
 		},
 	}
@@ -228,6 +229,14 @@ func runCommand(name string, args ...string) error {
 	return cmd.Run()
 }
 
+// runCommandHide runs command and discards stdout/stderr
+func runCommandHide(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+
 // runCommandCapture returns stdout (trimmed) and error
 func runCommandCapture(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -244,7 +253,7 @@ func YcCliInit() error {
 	if err != nil {
 		return fmt.Errorf("yc iam create-token failed: %v (%s)", err, token)
 	}
-	_ = os.Setenv("YC_TOKEN", token)
+	_ = os.Setenv("TOKEN", token)
 
 	cloudID, _ := runCommandCapture(ctx, "yc", "config", "get", "cloud-id")
 	if cloudID != "" {
@@ -280,10 +289,10 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 	// handle wipe
 	if WipeFlag {
-		log.Printf("Wiping: removing container molecule-%s and folder %s\n", RoleFlag, roleMoleculePath)
+		log.Printf("\033[38;2;127;255;212mWiping: removing container molecule-%s and folder %s\n\033[0m", RoleFlag, roleMoleculePath)
 		_ = runCommand("docker", "rm", fmt.Sprintf("molecule-%s", RoleFlag), "-f")
 		if err := os.RemoveAll(roleMoleculePath); err != nil {
-			log.Printf("warning: failed remove role path: %v", err)
+			log.Printf("\033[33mwarning: failed remove role path: %v\033[0m", err)
 		}
 		return nil
 	}
@@ -291,29 +300,33 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	// handle lint/verify/idempotence by ensuring files are copied and running docker exec commands
 	if LintFlag || VerifyFlag || IdempotenceFlag {
 		if err := copyRoleData(path, roleMoleculePath); err != nil {
-			log.Printf("warning copying data: %v", err)
+			log.Printf("\033[33mwarning copying data: %v\033[0m", err)
 		}
 		// ensure tests dir exists for verify/lint
 		defaultTestsDir := filepath.Join(roleMoleculePath, "molecule", "default", "tests")
 		if err := os.MkdirAll(defaultTestsDir, 0o755); err != nil {
-			log.Printf("warning: cannot create tests dir: %v", err)
+			log.Printf("\033[33mwarning: cannot create tests dir: %v\033[0m", err)
 		}
 		if LintFlag {
 			// run yamllint and ansible-lint inside container
-			cmdStr := fmt.Sprintf(`(cd ./%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint && echo 'Done!') || echo 'Failed'`, roleDirName)
+			cmdStr := fmt.Sprintf(`(cd ./%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint `, roleDirName)
 			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
-				log.Printf("lint failed: %v", err)
+				log.Printf("\033[31mLint failed: %v\033[0m", err)
+				os.Exit(1)
 			}
+			log.Printf("\033[32mLint Done Successfully!\033[0m")
 			return nil
 		}
 		if VerifyFlag {
 			// copy tests/*
 			testsSrc := filepath.Join(path, "tests")
 			copyIfExists(testsSrc, defaultTestsDir)
-			cmdStr := fmt.Sprintf("cd ./%s && (molecule verify && echo 'Done!') || echo 'Failed'", roleDirName)
+			cmdStr := fmt.Sprintf("cd ./%s && molecule verify", roleDirName)
 			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
-				log.Printf("verify failed: %v", err)
+				log.Printf("\033[31mVerify failed: %v\033[0m", err)
+				os.Exit(1)
 			}
+			log.Printf("Verify Done Successfully!")
 			return nil
 		}
 		if IdempotenceFlag {
@@ -324,6 +337,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			cmdStr := fmt.Sprintf("cd ./%s && (%smolecule idempotence && echo 'Done!') || echo 'Failed'", roleDirName, tagEnv)
 			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
 				log.Printf("idempotence failed: %v", err)
+				os.Exit(1)
 			}
 			return nil
 		}
@@ -333,14 +347,14 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	// check if container exists
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
-		fmt.Printf("Container molecule-%s already exists. To purge use -wipe.\n", RoleFlag)
+		fmt.Printf("\033[38;2;127;255;212mContainer molecule-%s already exists. To purge use -wipe.\n\033[0m", RoleFlag)
 	} else {
 		// create
 		if err := YcCliInit(); err != nil {
 			log.Printf("yc init warning: %v", err)
 		}
-		// docker login cr.yandex --username iam --password $Env:YC_TOKEN
-		if err := runCommand("docker", "login", "cr.yandex", "--username", "iam", "--password", os.Getenv("YC_TOKEN")); err != nil {
+
+		if err := runCommandHide("echo", os.Getenv("TOKEN"), "|", "docker", "login", "cr.yandex", "--username", "iam", "--password-stdin"); err != nil {
 			log.Printf("docker login to cr.yandex failed: %v", err)
 		}
 		// run container
@@ -350,7 +364,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
 			"-v", fmt.Sprintf("%s/molecule:/opt/molecule", path),
 			"-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
-			"-e", "YC_TOKEN=" + os.Getenv("YC_TOKEN"),
+			"-e", "TOKEN=" + os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN=" + os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR=" + os.Getenv("VAULT_ADDR"),
 			"-e", "GIT_USER=" + os.Getenv("GIT_USER"),
@@ -366,20 +380,20 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 	// ensure role exists
 	if exists(roleMoleculePath) {
-		fmt.Println("This role already exists in molecule")
+		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
 	} else {
 		// docker exec -ti molecule-$role /bin/sh -c "ansible-galaxy role init $org.$role"
 		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
-			log.Printf("role init warning: %v", err)
+			log.Printf("\033[33mrole init warning: %v\033[0m", err)
 		}
 	}
 
 	// docker exec login to cr.yandex inside container
-	_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", `docker login cr.yandex --username iam --password $YC_TOKEN`)
+	_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `echo $TOKEN | docker login cr.yandex --username iam --password-stdin`)
 
 	// copy files into molecule structure
 	if err := copyRoleData(path, roleMoleculePath); err != nil {
-		log.Printf("copy role data warning: %v", err)
+		log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
 	}
 
 	// finally create/converge
@@ -397,6 +411,10 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 // copyRoleData copies tasks, handlers, templates, files, vars, defaults, meta, scenarios, .ansible-lint, .yamllint
 func copyRoleData(basePath, roleMoleculePath string) error {
+	config, err := LoadConfig()
+	if err != nil {
+		log.Printf("\033[33mwarning loading config: %v\033[0m", err)
+	}
 	// create role dir base
 	if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
 		return err
@@ -420,13 +438,38 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		}
 		copyIfExists(src, dst)
 	}
+	export := YamlLintExport{
+		Extends: config.YamlLintConfig.Extends,
+		Ignore:  strings.Join(config.YamlLintConfig.Ignore, "\n"),
+		Rules:   config.YamlLintConfig.Rules,
+	}
+	yamllint, err := yaml.Marshal(export)
+	if err != nil {
+		log.Printf("\033[33mwarning marshaling yamllint config: %v\033[0m", err)
+	} else {
+		yamllintPath := filepath.Join(roleMoleculePath, ".yamllint")
+		if err := os.WriteFile(yamllintPath, yamllint, 0o644); err != nil {
+			log.Printf("\033[33mwarning writing .yamllint: %v\033[0m", err)
+		}
+	}
+
+	ansiblelint, err := yaml.Marshal(config.AnsibleLintConfig)
+	if err != nil {
+		log.Printf("\033[33mwarning marshaling ansible-lint config: %v\033[0m", err)
+	} else {
+		ansiblelintPath := filepath.Join(roleMoleculePath, ".ansible-lint")
+		if err := os.WriteFile(ansiblelintPath, ansiblelint, 0o644); err != nil {
+			log.Printf("\033[33mwarning writing .ansible-lint: %v\033[0m", err)
+		}
+	}
+
 	return nil
 }
 
 // copyIfExists copies file/directory if it exists (recursively when directory)
 func copyIfExists(src, dst string) {
 	if !exists(src) {
-		log.Printf("note: %s does not exist, skipping", src)
+		log.Printf("\033[38;2;127;255;212mnote: %s does not exist, skipping\033[0m", src)
 		return
 	}
 	fi, err := os.Stat(src)
@@ -505,6 +548,16 @@ func dockerExecInteractive(role, command string, args ...string) error {
 	return cmd.Run()
 }
 
+// dockerExecInteractiveHide runs: docker exec -ti molecule-role <cmd...>
+func dockerExecInteractiveHide(role, command string, args ...string) error {
+	all := []string{"exec", "-ti", fmt.Sprintf("molecule-%s", role), command}
+	all = append(all, args...)
+	cmd := exec.Command("docker", all...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
 func YcCliInitWrapper() error {
 	return YcCliInit()
 }
@@ -525,13 +578,13 @@ func compactWSLAndOptimize() error {
 	// Stop-Process -Name "Docker Desktop" -Force
 	psStop := `if (Get-Process -Name "Docker Desktop" -ErrorAction SilentlyContinue) { Stop-Process -Name "Docker Desktop" -Force }`
 	if err := runPowerShell(psStop); err != nil {
-		log.Printf("warning stopping Docker Desktop: %v", err)
+		log.Printf("\033[33mwarning stopping Docker Desktop: %v\033[0m", err)
 	}
 
 	// shutdown WSL
 	log.Println("Shutting down WSL...")
 	if err := runCommand("wsl", "--shutdown"); err != nil {
-		log.Printf("warning: wsl --shutdown returned: %v", err)
+		log.Printf("\033[33mwarning: wsl --shutdown returned: %v\033[0m", err)
 	}
 
 	// small wait
@@ -555,7 +608,7 @@ func compactWSLAndOptimize() error {
 	log.Println("Starting Docker Desktop...")
 	startCmd := `Start-Process "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"`
 	if err := runPowerShell(startCmd); err != nil {
-		log.Printf("warning starting Docker Desktop: %v", err)
+		log.Printf("\033[33mwarning starting Docker Desktop: %v\033[0m", err)
 	}
 
 	log.Println("WSL compact/Optimize-VHD completed (check for errors above).")

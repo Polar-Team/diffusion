@@ -19,6 +19,12 @@ type YamlLint struct {
 	Rules   *YamlLintRules `toml:"rules"`
 }
 
+type YamlLintExport struct {
+	Extends string         `toml:"extends"`
+	Ignore  string         `toml:"ignore"`
+	Rules   *YamlLintRules `toml:"rules"`
+}
+
 type AnsibleLint struct {
 	ExcludedPaths []string `toml:"exclude_paths"`
 	WarnList      []string `toml:"warn_list"`
