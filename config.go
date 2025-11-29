@@ -8,15 +8,21 @@ import (
 )
 
 type YamlLintRules struct {
-	Braces   any `toml:"braces"`
-	Brackets any `toml:"brackets"`
-	NewLines any `toml:"new-lines"`
+	Braces             any  `toml:"braces"`
+	Brackets           any  `toml:"brackets"`
+	NewLines           any  `toml:"new-lines"`
+	Comments           any  `toml:"comments"`
+	CommentsIdentation bool `toml:"comments-indentation"`
+	OctalValues        any  `toml:"octal-values"`
 }
 
 type YamlLintRulesExport struct {
-	Braces   any `yaml:"braces"`
-	Brackets any `yaml:"brackets"`
-	NewLines any `yaml:"new-lines"`
+	Braces             any  `yaml:"braces"`
+	Brackets           any  `yaml:"brackets"`
+	NewLines           any  `yaml:"new-lines"`
+	Comments           any  `yaml:"comments"`
+	CommentsIdentation bool `yaml:"comments-indentation"`
+	OctalValues        any  `yaml:"octal-values"`
 }
 
 type YamlLint struct {

@@ -60,10 +60,14 @@ func main() {
 			if err != nil {
 				log.Printf("\033[33mwarning loading config: %v\033[0m", err)
 				log.Printf("\033[38;2;127;255;212mNew config file will be created...\033[0m")
+
 				YamlLintRulesDefault := &YamlLintRules{
-					Braces:   map[string]any{"max-spaces-inside": 1, "level": "warning"},
-					Brackets: map[string]any{"max-spaces-inside": 1, "level": "warning"},
-					NewLines: map[string]any{"type": "platform"},
+					Braces:             map[string]any{"max-spaces-inside": 1, "level": "warning"},
+					Brackets:           map[string]any{"max-spaces-inside": 1, "level": "warning"},
+					NewLines:           map[string]any{"type": "platform"},
+					Comments:           map[string]any{"min-spaces-from-content": 1},
+					CommentsIdentation: false,
+					OctalValues:        map[string]any{"forbid-implicit-octal": true},
 				}
 				YamlLintDefault := &YamlLint{
 					Extends: "default",
@@ -456,9 +460,12 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 	}
 
 	yamlrules := YamlLintRulesExport{
-		Braces:   config.YamlLintConfig.Rules.Braces,
-		Brackets: config.YamlLintConfig.Rules.Brackets,
-		NewLines: config.YamlLintConfig.Rules.NewLines,
+		Braces:             config.YamlLintConfig.Rules.Braces,
+		Brackets:           config.YamlLintConfig.Rules.Brackets,
+		NewLines:           config.YamlLintConfig.Rules.NewLines,
+		Comments:           config.YamlLintConfig.Rules.Comments,
+		CommentsIdentation: config.YamlLintConfig.Rules.CommentsIdentation,
+		OctalValues:        config.YamlLintConfig.Rules.OctalValues,
 	}
 
 	exportYamlLint := YamlLintExport{
