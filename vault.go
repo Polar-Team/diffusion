@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+type HashicorpVault struct {
+	HashicorpVaultIntegration bool   `toml:"enabled"`
+	SecretKV2Path             string `toml:"secret_kv2_path"`
+	SecretKV2Name             string `toml:"secret_kv2_name"`
+	UserNameField             string `toml:"username_field"`
+	TokenField                string `toml:"token_field"`
+}
+
 func vault_client(ctx context.Context, path string, secret string) *vault.Response[schema.KvV2ReadResponse] {
 	client, err := vault.New(
 		vault.WithEnvironment(),

@@ -43,13 +43,6 @@ type AnsibleLint struct {
 	SkipList      []string `toml:"skip_list"`
 }
 
-type HashicorpVault struct {
-	HashicorpVaultIntegration bool   `toml:"enabled"`
-	SecretKV2Path             string `toml:"secret_kv2_path"`
-	UserNameField             string `toml:"username_field"`
-	TokenField                string `toml:"token_field"`
-}
-
 type ContainerRegistry struct {
 	RegistryServer        string `toml:"registry_server"`
 	RegistryProvider      string `toml:"registry_provider"`

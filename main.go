@@ -132,17 +132,6 @@ func main() {
 			if err := os.Setenv("GIT_URL", config.ArtifactUrl); err != nil {
 				log.Printf("Failed to set GIT_URL: %v", err)
 			}
-
-			if config.HashicorpVault.HashicorpVaultIntegration {
-				if err := os.Setenv("GIT_USER", config.HashicorpVault.UserNameField); err != nil {
-					log.Printf("Failed to set GIT_USER: %v", err)
-				}
-				if err := os.Setenv("GIT_PASSWORD", config.HashicorpVault.TokenField); err != nil {
-					log.Printf("Failed to set GIT_PASSWORD: %v", err)
-				}
-			} else {
-				log.Println("\033[35mHashiCorp Vault integration is disabled in config. Use public repositories.\033[0m")
-			}
 		},
 	}
 
@@ -275,6 +264,25 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		log.Printf("\033[33mwarning loading config: %v\033[0m", err)
 	}
 
+	if config.HashicorpVault.HashicorpVaultIntegration {
+
+		git_raw := vault_client(context.Background(), config.HashicorpVault.SecretKV2Path, config.HashicorpVault.SecretKV2Name)
+
+		gitUser := git_raw.Data.Data[config.HashicorpVault.UserNameField].(string)
+
+		if err := os.Setenv("GIT_USER", gitUser); err != nil {
+			log.Printf("Failed to set GIT_USER: %v", err)
+		}
+
+		gitToken := git_raw.Data.Data[config.HashicorpVault.TokenField].(string)
+
+		if err := os.Setenv("GIT_PASSWORD", gitToken); err != nil {
+			log.Printf("Failed to set GIT_PASSWORD: %v", err)
+		}
+	} else {
+		log.Println("\033[35mHashiCorp Vault integration is disabled in config. Use public repositories.\033[0m")
+	}
+
 	// If user requested Windows compaction before running molecule
 	if CompactWSLFlag && runtime.GOOS == "windows" {
 		log.Println("Running Windows WSL compact prior to molecule (requested)...")
@@ -377,6 +385,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			"-e", "GIT_USER=" + os.Getenv("GIT_USER"),
 			"-e", "GIT_PASSWORD=" + os.Getenv("GIT_PASSWORD"),
 			"-e", "GIT_URL=" + os.Getenv("GIT_URL"),
+			"--cgroupns", "host",
 			"--privileged", "--pull", "always",
 			image,
 		}
