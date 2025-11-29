@@ -264,33 +264,6 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		log.Printf("\033[33mwarning loading config: %v\033[0m", err)
 	}
 
-	if config.HashicorpVault.HashicorpVaultIntegration {
-
-		git_raw := vault_client(context.Background(), config.HashicorpVault.SecretKV2Path, config.HashicorpVault.SecretKV2Name)
-
-		gitUser := git_raw.Data.Data[config.HashicorpVault.UserNameField].(string)
-
-		if err := os.Setenv("GIT_USER", gitUser); err != nil {
-			log.Printf("Failed to set GIT_USER: %v", err)
-		}
-
-		gitToken := git_raw.Data.Data[config.HashicorpVault.TokenField].(string)
-
-		if err := os.Setenv("GIT_PASSWORD", gitToken); err != nil {
-			log.Printf("Failed to set GIT_PASSWORD: %v", err)
-		}
-	} else {
-		log.Println("\033[35mHashiCorp Vault integration is disabled in config. Use public repositories.\033[0m")
-	}
-
-	// If user requested Windows compaction before running molecule
-	if CompactWSLFlag && runtime.GOOS == "windows" {
-		log.Println("Running Windows WSL compact prior to molecule (requested)...")
-		if err := compactWSLAndOptimize(); err != nil {
-			log.Printf("compact-wsl failed: %v", err)
-		}
-	}
-
 	// prepare path
 	path, err := os.Getwd()
 	if err != nil {
@@ -364,6 +337,33 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	if err == nil {
 		fmt.Printf("\033[38;2;127;255;212mContainer molecule-%s already exists. To purge use -wipe.\n\033[0m", RoleFlag)
 	} else {
+
+		if config.HashicorpVault.HashicorpVaultIntegration {
+
+			git_raw := vault_client(context.Background(), config.HashicorpVault.SecretKV2Path, config.HashicorpVault.SecretKV2Name)
+
+			gitUser := git_raw.Data.Data[config.HashicorpVault.UserNameField].(string)
+
+			if err := os.Setenv("GIT_USER", gitUser); err != nil {
+				log.Printf("Failed to set GIT_USER: %v", err)
+			}
+
+			gitToken := git_raw.Data.Data[config.HashicorpVault.TokenField].(string)
+
+			if err := os.Setenv("GIT_PASSWORD", gitToken); err != nil {
+				log.Printf("Failed to set GIT_PASSWORD: %v", err)
+			}
+		} else {
+			log.Println("\033[35mHashiCorp Vault integration is disabled in config. Use public repositories.\033[0m")
+		}
+
+		// If user requested Windows compaction before running molecule
+		if CompactWSLFlag && runtime.GOOS == "windows" {
+			log.Println("Running Windows WSL compact prior to molecule (requested)...")
+			if err := compactWSLAndOptimize(); err != nil {
+				log.Printf("compact-wsl failed: %v", err)
+			}
+		}
 		// create
 		if err := YcCliInit(); err != nil {
 			log.Printf("\033[32myc init warning: %v\033[0m", err)
