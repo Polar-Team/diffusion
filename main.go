@@ -269,6 +269,12 @@ func YcCliInit() error {
 
 // runMolecule is the core function that implements the behavior from your PS script
 func runMolecule(cmd *cobra.Command, args []string) error {
+
+	config, err := LoadConfig()
+	if err != nil {
+		log.Printf("\033[33mwarning loading config: %v\033[0m", err)
+	}
+
 	// If user requested Windows compaction before running molecule
 	if CompactWSLFlag && runtime.GOOS == "windows" {
 		log.Println("Running Windows WSL compact prior to molecule (requested)...")
@@ -309,7 +315,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 		if LintFlag {
 			// run yamllint and ansible-lint inside container
-			cmdStr := fmt.Sprintf(`(cd ./%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint `, roleDirName)
+			cmdStr := fmt.Sprintf(`cd ./%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint `, roleDirName)
 			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
 				log.Printf("\033[31mLint failed: %v\033[0m", err)
 				os.Exit(1)
@@ -326,7 +332,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				log.Printf("\033[31mVerify failed: %v\033[0m", err)
 				os.Exit(1)
 			}
-			log.Printf("Verify Done Successfully!")
+			log.Printf("\033[32mVerify Done Successfully!\033[0m")
 			return nil
 		}
 		if IdempotenceFlag {
@@ -334,11 +340,12 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			if TagFlag != "" {
 				tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", TagFlag)
 			}
-			cmdStr := fmt.Sprintf("cd ./%s && (%smolecule idempotence && echo 'Done!') || echo 'Failed'", roleDirName, tagEnv)
+			cmdStr := fmt.Sprintf("cd ./%s && %smolecule idempotence", roleDirName, tagEnv)
 			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
-				log.Printf("idempotence failed: %v", err)
+				log.Printf("\033[31mIdempotence failed: %v\033[0m", err)
 				os.Exit(1)
 			}
+			log.Printf("\033[32mIdempotence Done Successfully!\033[0m")
 			return nil
 		}
 	}
@@ -351,15 +358,15 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	} else {
 		// create
 		if err := YcCliInit(); err != nil {
-			log.Printf("yc init warning: %v", err)
+			log.Printf("\033[32myc init warning: %v\033[0m", err)
 		}
 
-		if err := runCommandHide("echo", os.Getenv("TOKEN"), "|", "docker", "login", "cr.yandex", "--username", "iam", "--password-stdin"); err != nil {
-			log.Printf("docker login to cr.yandex failed: %v", err)
+		if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
+			log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
 		}
 		// run container
 		// docker run --rm -d --name=molecule-$role -v "$path/molecule:/opt/molecule" -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e ... --privileged --pull always cr.yandex/...
-		image := "cr.yandex/crp8cgfah9nqgde7q9rm/molecule_dind:latest"
+		image := fmt.Sprintf("%s/%s:%s", config.ContainerRegistry.RegistryServer, config.ContainerRegistry.MoleculeContainerName, config.ContainerRegistry.MoleculeContainerTag)
 		args := []string{
 			"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
 			"-v", fmt.Sprintf("%s/molecule:/opt/molecule", path),
@@ -374,7 +381,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			image,
 		}
 		if err := runCommand("docker", args...); err != nil {
-			log.Printf("docker run failed: %v", err)
+			log.Printf("\033[33mdocker run failed: %v\033[0m", err)
 		}
 	}
 
@@ -438,12 +445,19 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		}
 		copyIfExists(src, dst)
 	}
-	export := YamlLintExport{
+
+	yamlrules := YamlLintRulesExport{
+		Braces:   config.YamlLintConfig.Rules.Braces,
+		Brackets: config.YamlLintConfig.Rules.Brackets,
+		NewLines: config.YamlLintConfig.Rules.NewLines,
+	}
+
+	exportYamlLint := YamlLintExport{
 		Extends: config.YamlLintConfig.Extends,
 		Ignore:  strings.Join(config.YamlLintConfig.Ignore, "\n"),
-		Rules:   config.YamlLintConfig.Rules,
+		Rules:   &yamlrules,
 	}
-	yamllint, err := yaml.Marshal(export)
+	yamllint, err := yaml.Marshal(exportYamlLint)
 	if err != nil {
 		log.Printf("\033[33mwarning marshaling yamllint config: %v\033[0m", err)
 	} else {
@@ -453,7 +467,13 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		}
 	}
 
-	ansiblelint, err := yaml.Marshal(config.AnsibleLintConfig)
+	exportAnsibleLint := AnsibleLintExport{
+		ExcludedPaths: config.AnsibleLintConfig.ExcludedPaths,
+		WarnList:      config.AnsibleLintConfig.WarnList,
+		SkipList:      config.AnsibleLintConfig.SkipList,
+	}
+
+	ansiblelint, err := yaml.Marshal(exportAnsibleLint)
 	if err != nil {
 		log.Printf("\033[33mwarning marshaling ansible-lint config: %v\033[0m", err)
 	} else {
@@ -593,8 +613,7 @@ func compactWSLAndOptimize() error {
 	// build VHDX paths
 	// $env:LOCALAPPDATA\Docker\wsl\data\docker-desktop-data.vhdx
 	paths := []string{
-		`$env:LOCALAPPDATA\Docker\wsl\data\docker-desktop-data.vhdx`,
-		`$env:LOCALAPPDATA\Docker\wsl\data\docker-desktop.vhdx`,
+		`$env:LOCALAPPDATA\Docker\wsl\disk\docker_data.vhdx`,
 	}
 	for _, p := range paths {
 		log.Printf("Running Optimize-VHD for %s (requires admin)...", p)

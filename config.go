@@ -13,6 +13,12 @@ type YamlLintRules struct {
 	NewLines any `toml:"new-lines"`
 }
 
+type YamlLintRulesExport struct {
+	Braces   any `yaml:"braces"`
+	Brackets any `yaml:"brackets"`
+	NewLines any `yaml:"new-lines"`
+}
+
 type YamlLint struct {
 	Extends string         `toml:"extends"`
 	Ignore  []string       `toml:"ignore"`
@@ -20,9 +26,15 @@ type YamlLint struct {
 }
 
 type YamlLintExport struct {
-	Extends string         `toml:"extends"`
-	Ignore  string         `toml:"ignore"`
-	Rules   *YamlLintRules `toml:"rules"`
+	Extends string               `yaml:"extends"`
+	Ignore  string               `yaml:"ignore"`
+	Rules   *YamlLintRulesExport `yaml:"rules"`
+}
+
+type AnsibleLintExport struct {
+	ExcludedPaths []string `yaml:"exclude_paths"`
+	WarnList      []string `yaml:"warn_list"`
+	SkipList      []string `yaml:"skip_list"`
 }
 
 type AnsibleLint struct {
