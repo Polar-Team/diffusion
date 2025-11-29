@@ -1,9 +1,8 @@
-package diffusion
+package main
 
 import (
 	"fmt"
 	"github.com/BurntSushi/toml"
-
 	"os"
 	"path/filepath"
 )
@@ -15,9 +14,9 @@ type YamlLintRules struct {
 }
 
 type YamlLint struct {
-	Extends string        `toml:"extends"`
-	Ignore  []string      `toml:"ignore"`
-	Rules   YamlLintRules `toml:"rules"`
+	Extends string         `toml:"extends"`
+	Ignore  []string       `toml:"ignore"`
+	Rules   *YamlLintRules `toml:"rules"`
 }
 
 type AnsibleLint struct {
@@ -26,15 +25,30 @@ type AnsibleLint struct {
 	SkipList      []string `toml:"skip_list"`
 }
 
+type HashicorpVault struct {
+	HashicorpVaultIntegration bool   `toml:"enabled"`
+	SecretKV2Path             string `toml:"secret_kv2_path"`
+	UserNameField             string `toml:"username_field"`
+	TokenField                string `toml:"token_field"`
+}
+
+type ContainerRegistry struct {
+	RegistryServer        string `toml:"registry_server"`
+	RegistryProvider      string `toml:"registry_provider"`
+	MoleculeContainerName string `toml:"molecule_container_name"`
+	MoleculeContainerTag  string `toml:"molecule_container_tag"`
+}
+
 type Config struct {
-	HashicorpVaultIntegration bool         `toml:"vault"`
-	ArtifactUrl               string       `toml:"url"`
-	YamlLintConfig            *YamlLint    `toml:"yaml_lint"`
-	AnsibleLintConfig         *AnsibleLint `toml:"ansible_lint"`
+	ContainerRegistry *ContainerRegistry `toml:"container_registry"`
+	HashicorpVault    *HashicorpVault    `toml:"vault"`
+	ArtifactUrl       string             `toml:"url"`
+	YamlLintConfig    *YamlLint          `toml:"yaml_lint"`
+	AnsibleLintConfig *AnsibleLint       `toml:"ansible_lint"`
 }
 
 // LoadConfig reads configuration from a TOML file in the project directory
-func LoadConfig(profileName string) (*Config, error) {
+func LoadConfig() (*Config, error) {
 	projectDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get project directory: %w", err)
@@ -46,37 +60,32 @@ func LoadConfig(profileName string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	var configMap map[string]*Config
+	var configMap *Config
 	if err := toml.Unmarshal(data, &configMap); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	config, ok := configMap[profileName]
-	if !ok {
-		return nil, fmt.Errorf("profile %s not found in config", profileName)
-	}
-
-	return config, nil
+	return configMap, nil
 }
 
-func SaveConfig(profileName string, config *Config) error {
+func SaveConfig(config *Config) error {
 	projectDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get project directory: %w", err)
 	}
 	configPath := filepath.Join(projectDir, "diffusion.toml")
 
-	var configMap map[string]*Config
+	var configMap *Config
 
 	// Read existing config if present
 	data, err := os.ReadFile(configPath)
 	if err == nil {
 		_ = toml.Unmarshal(data, &configMap)
 	} else {
-		configMap = make(map[string]*Config)
+		configMap = nil
 	}
 
-	configMap[profileName] = config
+	configMap = config
 
 	newData, err := toml.Marshal(configMap)
 	if err != nil {

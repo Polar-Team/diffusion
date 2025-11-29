@@ -1,4 +1,4 @@
-package diffusion
+package main
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package diffusion
+package main
 
 // diffusion - Cobra-based cross-platform CLI tool to assist with Molecule workflows,
 // with Windows-only features for WSL compaction.
@@ -35,14 +35,14 @@ import (
 )
 
 var (
-	roleFlag        string
-	orgFlag         string
-	tagFlag         string
-	verifyFlag      bool
-	lintFlag        bool
-	idempotenceFlag bool
-	wipeFlag        bool
-	compactWSLFlag  bool
+	RoleFlag        string
+	OrgFlag         string
+	TagFlag         string
+	VerifyFlag      bool
+	LintFlag        bool
+	IdempotenceFlag bool
+	WipeFlag        bool
+	CompactWSLFlag  bool
 )
 
 func main() {
@@ -50,12 +50,98 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "diffusion",
 		Short: "Molecule workflow helper (cross-platform) with Windows-only WSL compact features",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			// Ensure some env defaults and prompt when needed
 
-			fetchVaultFieldToEnv("infrastructure/Gitlab_Deploy_Users", "ansible_deploy", "GIT_USER")
-			fetchVaultFieldToEnv("infrastructure/Gitlab_Deploy_Tokens", "ansible_deploy", "GIT_PASSWORD")
-			return nil
+			reader := bufio.NewReader(os.Stdin)
+
+			config, err := LoadConfig() // ignore error for now
+			if err != nil {
+				log.Printf("warning loading config: %v", err)
+				log.Printf("New config file will be created...")
+				YamlLintRulesDefault := &YamlLintRules{
+					Braces:   map[string]any{"max-spaces-inside": 1, "level": "warning"},
+					Brackets: map[string]any{"max-spaces-inside": 1, "level": "warning"},
+					NewLines: map[string]any{"type": "platform"},
+				}
+				YamlLintDefault := &YamlLint{
+					Extends: "default",
+					Ignore:  []string{".git/*", "molecule/**", "vars/*", "files/*", ".yamllint", ".ansible-lint"},
+					Rules:   YamlLintRulesDefault,
+				}
+
+				AnsibleLintDefault := &AnsibleLint{
+					ExcludedPaths: []string{"molecule/default/rwara/*.yml", "molecule/default/tests/*/*/*.yml", "tests/test.yml"},
+					WarnList:      []string{"meta-no-info", "yaml[line-length]"},
+					SkipList:      []string{"meta-incorrect", "role-name[path]"},
+				}
+
+				fmt.Print("Enter RegistryServer: ")
+				registryServer, _ := reader.ReadString('\n')
+				registryServer = strings.TrimSpace(registryServer)
+
+				fmt.Print("Enter RegistryProvider: ")
+				registryProvider, _ := reader.ReadString('\n')
+				registryProvider = strings.TrimSpace(registryProvider)
+
+				if registryProvider != "YC" && registryProvider != "AWS" && registryProvider != "GCP" && registryProvider != "Public" {
+					fmt.Fprintln(os.Stderr, "\033[31mInvalid RegistryProvider. Allowed values are: YC, AWS, GCP. \nIf you're using public registry, then choose Public - or choose it, if you want to authenticate externally.\033[0m")
+					os.Exit(1)
+				}
+
+				fmt.Print("Enter MoleculeContainerName: ")
+				moleculeContainerName, _ := reader.ReadString('\n')
+				moleculeContainerName = strings.TrimSpace(moleculeContainerName)
+
+				fmt.Print("Enter MoleculeContainerTag: ")
+				moleculeContainerTag, _ := reader.ReadString('\n')
+				moleculeContainerTag = strings.TrimSpace(moleculeContainerTag)
+
+				ContainerRegistry := &ContainerRegistry{
+					RegistryServer:        registryServer,
+					RegistryProvider:      registryProvider,
+					MoleculeContainerName: moleculeContainerName,
+					MoleculeContainerTag:  moleculeContainerTag,
+				}
+
+				fmt.Print("Enable Vault Integration? (Y/n): ")
+				vaultEnabledStr, _ := reader.ReadString('\n')
+				vaultEnabledStr = strings.TrimSpace(vaultEnabledStr)
+				if vaultEnabledStr == "" {
+					vaultEnabledStr = "n"
+				}
+				vaultEnabled := strings.ToLower(vaultEnabledStr) == "y"
+
+				HashicorpVaultSet := VaultConfigHelper(vaultEnabled)
+
+				config = &Config{
+					ContainerRegistry: ContainerRegistry,
+					HashicorpVault:    HashicorpVaultSet,
+					ArtifactUrl:       "https://example.com/repo",
+					YamlLintConfig:    YamlLintDefault,
+					AnsibleLintConfig: AnsibleLintDefault,
+				}
+
+				if err := SaveConfig(config); err != nil {
+					log.Printf("warning saving new config: %v", err)
+				}
+
+			}
+
+			if err := os.Setenv("GIT_URL", config.ArtifactUrl); err != nil {
+				log.Printf("Failed to set GIT_URL: %v", err)
+			}
+
+			if config.HashicorpVault.HashicorpVaultIntegration {
+				if err := os.Setenv("GIT_USER", config.HashicorpVault.UserNameField); err != nil {
+					log.Printf("Failed to set GIT_USER: %v", err)
+				}
+				if err := os.Setenv("GIT_PASSWORD", config.HashicorpVault.TokenField); err != nil {
+					log.Printf("Failed to set GIT_PASSWORD: %v", err)
+				}
+			} else {
+				log.Println("HashiCorp Vault integration is disabled in config. Use public repositories.")
+			}
 		},
 	}
 
@@ -66,13 +152,13 @@ func main() {
 		RunE:  runMolecule,
 	}
 
-	molCmd.Flags().StringVarP(&roleFlag, "role", "r", "sdl_collector", "role name")
-	molCmd.Flags().StringVarP(&orgFlag, "org", "o", "linru", "organization prefix")
-	molCmd.Flags().StringVarP(&tagFlag, "tag", "t", "", "ANSIBLE_RUN_TAGS value (optional)")
-	molCmd.Flags().BoolVar(&verifyFlag, "verify", false, "run molecule verify")
-	molCmd.Flags().BoolVar(&lintFlag, "lint", false, "run linting (yamllint / ansible-lint)")
-	molCmd.Flags().BoolVar(&idempotenceFlag, "idempotence", false, "run molecule idempotence")
-	molCmd.Flags().BoolVar(&wipeFlag, "wipe", false, "remove container and molecule role folder")
+	molCmd.Flags().StringVarP(&RoleFlag, "role", "r", "sdl_collector", "role name")
+	molCmd.Flags().StringVarP(&OrgFlag, "org", "o", "linru", "organization prefix")
+	molCmd.Flags().StringVarP(&TagFlag, "tag", "t", "", "ANSIBLE_RUN_TAGS value (optional)")
+	molCmd.Flags().BoolVar(&VerifyFlag, "verify", false, "run molecule verify")
+	molCmd.Flags().BoolVar(&LintFlag, "lint", false, "run linting (yamllint / ansible-lint)")
+	molCmd.Flags().BoolVar(&IdempotenceFlag, "idempotence", false, "run molecule idempotence")
+	molCmd.Flags().BoolVar(&WipeFlag, "wipe", false, "remove container and molecule role folder")
 
 	rootCmd.AddCommand(molCmd)
 
@@ -87,34 +173,47 @@ func main() {
 			return compactWSLAndOptimize()
 		},
 	}
-	compactCmd.Flags().BoolVar(&compactWSLFlag, "confirm", false, "confirm running Optimize-VHD (requires admin)")
+	compactCmd.Flags().BoolVar(&CompactWSLFlag, "confirm", false, "confirm running Optimize-VHD (requires admin)")
 	rootCmd.AddCommand(compactCmd)
 
 	// Provide a top-level flag to run compact before molecule (Windows-only)
-	rootCmd.PersistentFlags().BoolVar(&compactWSLFlag, "compact-wsl", false, "on Windows: compact Docker Desktop WSL2 vhdx (runs before molecule actions)")
+	rootCmd.PersistentFlags().BoolVar(&CompactWSLFlag, "compact-wsl", false, "on Windows: compact Docker Desktop WSL2 vhdx (runs before molecule actions)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-// ensureSecretEnv prompts without echoing (if possible)
-func ensureSecretEnv(key, prompt string, secret bool) {
-	if os.Getenv(key) == "" {
-		if secret && runtime.GOOS != "windows" {
-			// try to use /dev/tty for password-like prompt
-			fmt.Print(prompt + ": ")
-			pass, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			pass = strings.TrimSpace(pass)
-			_ = os.Setenv(key, pass)
-		} else {
-			val := promptInput(prompt + ": ")
-			_ = os.Setenv(key, val)
+func VaultConfigHelper(intergration bool) *HashicorpVault {
+	reader := bufio.NewReader(os.Stdin)
+
+	if !intergration {
+		return &HashicorpVault{
+			HashicorpVaultIntegration: false,
 		}
 	}
-}
+	fmt.Print("Enter SecretKV2Path (e.g., secret/data/diffusion): ")
+	secretKV2Path, _ := reader.ReadString('\n')
+	secretKV2Path = strings.TrimSpace(secretKV2Path)
 
-func promptInput(prompt string) string {
+	fmt.Print("Enter Git Username Field in Vault (default: git_username): ")
+	gitUsernameField, _ := reader.ReadString('\n')
+	gitUsernameField = strings.TrimSpace(gitUsernameField)
+
+	fmt.Print("Enter Git Token Field in Vault (default: git_token): ")
+	gitTokenField, _ := reader.ReadString('\n')
+	gitTokenField = strings.TrimSpace(gitTokenField)
+
+	HashicorpVaultSet := &HashicorpVault{
+		HashicorpVaultIntegration: true,
+		SecretKV2Path:             secretKV2Path,
+		UserNameField:             gitUsernameField,
+		TokenField:                gitTokenField,
+	}
+
+	return HashicorpVaultSet
+}
+func PromptInput(prompt string) string {
 	fmt.Print(prompt)
 	r := bufio.NewReader(os.Stdin)
 	val, _ := r.ReadString('\n')
@@ -136,40 +235,10 @@ func runCommandCapture(ctx context.Context, name string, args ...string) (string
 	return strings.TrimSpace(string(out)), err
 }
 
-// vaultLogin runs: vault login -token-only -method=userpass username="$env:vault_user" password="$env:vault_passwd"
-func vaultLogin() error {
-	user := os.Getenv("vault_user")
-	pass := os.Getenv("vault_passwd")
-	if user == "" || pass == "" {
-		return fmt.Errorf("vault_user or vault_passwd not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	out, err := runCommandCapture(ctx, "vault", "login", "-token-only", "-method=userpass", fmt.Sprintf("username=%s", user), fmt.Sprintf("password=%s", pass))
-	if err != nil {
-		return fmt.Errorf("vault login failed: %v (%s)", err, out)
-	}
-	_ = os.Setenv("VAULT_TOKEN", out)
-	return nil
-}
-
-// fetchVaultFieldToEnv: vault kv get -field="FIELD" PATH
-func fetchVaultFieldToEnv(path, field, envName string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := runCommandCapture(ctx, "vault", "kv", "get", "-field="+field, path)
-	if err != nil {
-		// warn only
-		log.Printf("warning: could not get vault field %s from %s: %v", field, path, err)
-		return
-	}
-	_ = os.Setenv(envName, out)
-}
-
 // ycCliInit runs yc commands and sets env variables YC_TOKEN, YC_CLOUD_ID, YC_FOLDER_ID
-func ycCliInit() error {
+func YcCliInit() error {
 	// yc iam create-token
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	token, err := runCommandCapture(ctx, "yc", "iam", "create-token")
 	if err != nil {
@@ -192,7 +261,7 @@ func ycCliInit() error {
 // runMolecule is the core function that implements the behavior from your PS script
 func runMolecule(cmd *cobra.Command, args []string) error {
 	// If user requested Windows compaction before running molecule
-	if compactWSLFlag && runtime.GOOS == "windows" {
+	if CompactWSLFlag && runtime.GOOS == "windows" {
 		log.Println("Running Windows WSL compact prior to molecule (requested)...")
 		if err := compactWSLAndOptimize(); err != nil {
 			log.Printf("compact-wsl failed: %v", err)
@@ -206,13 +275,13 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	}
 	// use forward slashes in mounts where required (docker on windows expects Windows paths but we keep raw)
 	// Compose role path
-	roleDirName := fmt.Sprintf("%s.%s", orgFlag, roleFlag)
+	roleDirName := fmt.Sprintf("%s.%s", OrgFlag, RoleFlag)
 	roleMoleculePath := filepath.Join(path, "molecule", roleDirName)
 
 	// handle wipe
-	if wipeFlag {
-		log.Printf("Wiping: removing container molecule-%s and folder %s\n", roleFlag, roleMoleculePath)
-		_ = runCommand("docker", "rm", fmt.Sprintf("molecule-%s", roleFlag), "-f")
+	if WipeFlag {
+		log.Printf("Wiping: removing container molecule-%s and folder %s\n", RoleFlag, roleMoleculePath)
+		_ = runCommand("docker", "rm", fmt.Sprintf("molecule-%s", RoleFlag), "-f")
 		if err := os.RemoveAll(roleMoleculePath); err != nil {
 			log.Printf("warning: failed remove role path: %v", err)
 		}
@@ -220,8 +289,8 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	}
 
 	// handle lint/verify/idempotence by ensuring files are copied and running docker exec commands
-	if lintFlag || verifyFlag || idempotenceFlag {
-		if err := copyRoleData(path, roleMoleculePath, orgFlag, roleFlag); err != nil {
+	if LintFlag || VerifyFlag || IdempotenceFlag {
+		if err := copyRoleData(path, roleMoleculePath); err != nil {
 			log.Printf("warning copying data: %v", err)
 		}
 		// ensure tests dir exists for verify/lint
@@ -229,31 +298,31 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		if err := os.MkdirAll(defaultTestsDir, 0o755); err != nil {
 			log.Printf("warning: cannot create tests dir: %v", err)
 		}
-		if lintFlag {
+		if LintFlag {
 			// run yamllint and ansible-lint inside container
 			cmdStr := fmt.Sprintf(`(cd ./%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint && echo 'Done!') || echo 'Failed'`, roleDirName)
-			if err := dockerExecInteractive(roleFlag, "/bin/sh", "-c", cmdStr); err != nil {
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
 				log.Printf("lint failed: %v", err)
 			}
 			return nil
 		}
-		if verifyFlag {
+		if VerifyFlag {
 			// copy tests/*
 			testsSrc := filepath.Join(path, "tests")
 			copyIfExists(testsSrc, defaultTestsDir)
 			cmdStr := fmt.Sprintf("cd ./%s && (molecule verify && echo 'Done!') || echo 'Failed'", roleDirName)
-			if err := dockerExecInteractive(roleFlag, "/bin/sh", "-c", cmdStr); err != nil {
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
 				log.Printf("verify failed: %v", err)
 			}
 			return nil
 		}
-		if idempotenceFlag {
+		if IdempotenceFlag {
 			tagEnv := ""
-			if tagFlag != "" {
-				tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", tagFlag)
+			if TagFlag != "" {
+				tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", TagFlag)
 			}
 			cmdStr := fmt.Sprintf("cd ./%s && (%smolecule idempotence && echo 'Done!') || echo 'Failed'", roleDirName, tagEnv)
-			if err := dockerExecInteractive(roleFlag, "/bin/sh", "-c", cmdStr); err != nil {
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
 				log.Printf("idempotence failed: %v", err)
 			}
 			return nil
@@ -262,12 +331,12 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 	// default flow: create/run container if not exists, copy data, converge
 	// check if container exists
-	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", roleFlag)).Run()
+	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
-		fmt.Printf("Container molecule-%s already exists. To purge use -wipe.\n", roleFlag)
+		fmt.Printf("Container molecule-%s already exists. To purge use -wipe.\n", RoleFlag)
 	} else {
 		// create
-		if err := ycCliInit(); err != nil {
+		if err := YcCliInit(); err != nil {
 			log.Printf("yc init warning: %v", err)
 		}
 		// docker login cr.yandex --username iam --password $Env:YC_TOKEN
@@ -278,7 +347,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// docker run --rm -d --name=molecule-$role -v "$path/molecule:/opt/molecule" -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e ... --privileged --pull always cr.yandex/...
 		image := "cr.yandex/crp8cgfah9nqgde7q9rm/molecule_dind:latest"
 		args := []string{
-			"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", roleFlag),
+			"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
 			"-v", fmt.Sprintf("%s/molecule:/opt/molecule", path),
 			"-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
 			"-e", "YC_TOKEN=" + os.Getenv("YC_TOKEN"),
@@ -300,34 +369,34 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		fmt.Println("This role already exists in molecule")
 	} else {
 		// docker exec -ti molecule-$role /bin/sh -c "ansible-galaxy role init $org.$role"
-		if err := dockerExecInteractive(roleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", orgFlag, roleFlag)); err != nil {
+		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
 			log.Printf("role init warning: %v", err)
 		}
 	}
 
 	// docker exec login to cr.yandex inside container
-	_ = dockerExecInteractive(roleFlag, "/bin/sh", "-c", `docker login cr.yandex --username iam --password $YC_TOKEN`)
+	_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", `docker login cr.yandex --username iam --password $YC_TOKEN`)
 
 	// copy files into molecule structure
-	if err := copyRoleData(path, roleMoleculePath, orgFlag, roleFlag); err != nil {
+	if err := copyRoleData(path, roleMoleculePath); err != nil {
 		log.Printf("copy role data warning: %v", err)
 	}
 
 	// finally create/converge
-	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", roleFlag)).Run()
+	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
 		// container exists
-		_ = dockerExecInteractive(roleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
+		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	} else {
-		_ = dockerExecInteractive(roleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
-		_ = dockerExecInteractive(roleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
-	}
+		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
+		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
+	} // copy dotfiles
 
 	return nil
 }
 
 // copyRoleData copies tasks, handlers, templates, files, vars, defaults, meta, scenarios, .ansible-lint, .yamllint
-func copyRoleData(basePath, roleMoleculePath, org, role string) error {
+func copyRoleData(basePath, roleMoleculePath string) error {
 	// create role dir base
 	if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
 		return err
@@ -351,9 +420,6 @@ func copyRoleData(basePath, roleMoleculePath, org, role string) error {
 		}
 		copyIfExists(src, dst)
 	}
-	// copy dotfiles
-	copyIfExists(filepath.Join(basePath, ".ansible-lint"), filepath.Join(roleMoleculePath, ".ansible-lint"))
-	copyIfExists(filepath.Join(basePath, ".yamllint"), filepath.Join(roleMoleculePath, ".yamllint"))
 	return nil
 }
 
@@ -393,12 +459,20 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() {
+		if cerr := in.Close(); cerr != nil {
+			log.Printf("Failed to close source file: %v", cerr)
+		}
+	}()
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		if cerr := out.Close(); cerr != nil {
+			log.Printf("Failed to close destination file: %v", cerr)
+		}
+	}()
 	if _, err := io.Copy(out, in); err != nil {
 		return err
 	}
@@ -431,8 +505,8 @@ func dockerExecInteractive(role, command string, args ...string) error {
 	return cmd.Run()
 }
 
-func ycCliInitWrapper() error {
-	return ycCliInit()
+func YcCliInitWrapper() error {
+	return YcCliInit()
 }
 
 // Windows-only: compact WSL and Optimize-VHD for Docker Desktop VHDX files.
