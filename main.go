@@ -105,19 +105,25 @@ func main() {
 			// Continue with config if loaded successfully
 
 			if meta != nil {
-				fmt.Printf("Current Role Name: %s\n", meta.GalaxyInfo.RoleName)
-				fmt.Printf("Current Namespace: %s\n", meta.GalaxyInfo.Namespace)
+				fmt.Printf("\033[35mCurrent Role Name: \033[0m\033[38;2;127;255;212m%s\033[0m\n", meta.GalaxyInfo.RoleName)
+				fmt.Printf("\033[35mCurrent Namespace: \033[0m\033[38;2;127;255;212m%s\033[0m\n", meta.GalaxyInfo.Namespace)
 			}
 			if req != nil {
-				fmt.Printf("Current Collections: %v\n", req.Collections)
-				fmt.Printf("Current Roles: %v\n", req.Roles)
+				fmt.Printf("\033[35mCurrent Collections:\n\033[0m")
+				for _, collection := range req.Collections {
+					fmt.Printf("\033[38;2;127;255;212m  - %v\n\033[0m", collection)
+				}
+				fmt.Printf("\033[35mCurrent Roles:\n\033[0m")
+				for _, role := range req.Roles {
+					fmt.Printf("\033[38;2;127;255;212m  - %v\n\033[0m", role)
+				}
 			}
 			return nil
 		},
 	}
 
-	roleAddCmd := &cobra.Command{
-		Use:   "add [role-name]",
+	roleAddRoleCmd := &cobra.Command{
+		Use:   "add-role [role-name]",
 		Short: "Add a role to requirements.yml",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -141,22 +147,151 @@ func main() {
 			if err := SaveRequirementFile(req, RoleScenario); err != nil {
 				return fmt.Errorf("failed to save role: %w", err)
 			}
-			fmt.Printf("Role '%s' added successfully to requirements.yml\n", roleName)
+			fmt.Printf("\033[32mRole '%s' added successfully to requirements.yml\n\033[0m", roleName)
 			return nil
 		},
 	}
 
-	roleAddCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
-	roleAddCmd.Flags().StringVarP(&RoleSrcFlag, "src", "", "", "Source URL of the role (required)")
-	roleAddCmd.Flags().StringVarP(&RoleScmFlag, "scm", "", "git", "SCM type (e.g., git) of the role (optional)")
-	roleAddCmd.Flags().StringVarP(&RoleVersionFlag, "version", "v", "main", "Version of the role (optional)")
+	roleRemoveRoleCmd := &cobra.Command{
+		Use:   "remove-role [role-name]",
+		Short: "Remove a role to requirements.yml",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			roleName := args[0]
 
-	roleCmd.AddCommand(roleAddCmd)
+			_, req, err := LoadRoleConfig(RoleScenario)
+			if err != nil {
+				return fmt.Errorf("failed to load requirements file: %w", err)
+			}
+
+			found := false
+			for i, role := range req.Roles {
+				if role.Name == roleName {
+					// Remove the role from the slice
+					req.Roles = append(req.Roles[:i], req.Roles[i+1:]...)
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("role '%s' not found in requirements.yml", roleName)
+			}
+
+			// Save the updated requirements file
+			if err := SaveRequirementFile(req, RoleScenario); err != nil {
+				return fmt.Errorf("failed to save role: %w", err)
+			}
+			fmt.Printf("\033[32mRole '%s' removed successfully from requirements.yml\n\033[0m", roleName)
+			return nil
+		},
+	}
+
+	roleAddCollectionCmd := &cobra.Command{
+		Use:   "add-collection [collection-name]",
+		Short: "Add a role to requirements.yml",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			collectionName := args[0]
+
+			meta, req, err := LoadRoleConfig(RoleScenario)
+			if err != nil {
+				return fmt.Errorf("failed to load requirements file: %w", err)
+			}
+
+			req.Collections = append(req.Collections, collectionName)
+
+			// Save the updated requirements file
+			if err := SaveRequirementFile(req, RoleScenario); err != nil {
+				return fmt.Errorf("failed to save role: %w", err)
+			}
+			fmt.Printf("\033[32mRole '%s' added successfully to requirements.yml\n\033[0m", collectionName)
+
+			meta.Collections = append(meta.Collections, collectionName)
+
+			// Save the updated meta file
+			if err := SaveMetaFile(meta); err != nil {
+				return fmt.Errorf("failed to save meta file: %w", err)
+			}
+			fmt.Printf("\033[32mCollection '%s' added successfully to meta/main.yml\n\033[0m", collectionName)
+
+			return nil
+		},
+	}
+
+	roleRemoveCollectionCmd := &cobra.Command{
+		Use:   "remove-collection [collection-name]",
+		Short: "Add a role to requirements.yml",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			collectionName := args[0]
+
+			meta, req, err := LoadRoleConfig(RoleScenario)
+			if err != nil {
+				return fmt.Errorf("failed to load requirements file: %w", err)
+			}
+
+			found := false
+			for i, coll := range req.Collections {
+				if coll == collectionName {
+					// Remove the collection from the slice
+					req.Collections = append(req.Collections[:i], req.Collections[i+1:]...)
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("collection '%s' not found in requirements.yml", collectionName)
+			}
+
+			found = false
+			for i, coll := range meta.Collections {
+				if coll == collectionName {
+					// Remove the collection from the slice
+					meta.Collections = append(meta.Collections[:i], meta.Collections[i+1:]...)
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("collection '%s' not found in meta/main.yml", collectionName)
+			}
+
+			// Save the updated requirements file
+			if err := SaveRequirementFile(req, RoleScenario); err != nil {
+				return fmt.Errorf("failed to save role: %w", err)
+			}
+			fmt.Printf("\033[32mRole '%s' added successfully to requirements.yml\n\033[0m", collectionName)
+
+			// Save the updated meta file
+			if err := SaveMetaFile(meta); err != nil {
+				return fmt.Errorf("failed to save meta file: %w", err)
+			}
+			fmt.Printf("\033[32mCollection '%s' added successfully to meta/main.yml\n\033[0m", collectionName)
+
+			return nil
+		},
+	}
+
+	roleCmd.AddCommand(roleRemoveRoleCmd)
+
+	roleCmd.AddCommand(roleRemoveCollectionCmd)
+
+	roleAddCollectionCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
+
+	roleCmd.AddCommand(roleAddCollectionCmd)
+
+	roleAddRoleCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
+	roleAddRoleCmd.Flags().StringVarP(&RoleSrcFlag, "src", "", "", "Source URL of the role (required)")
+	roleAddRoleCmd.Flags().StringVarP(&RoleScmFlag, "scm", "", "git", "SCM type (e.g., git) of the role (optional)")
+	roleAddRoleCmd.Flags().StringVarP(&RoleVersionFlag, "version", "v", "main", "Version of the role (optional)")
+
+	roleCmd.AddCommand(roleAddRoleCmd)
 
 	roleCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
 	roleCmd.Flags().BoolVarP(&RoleInitFlag, "init", "i", false, "Initialize a new Ansible role using ansible-galaxy")
-	roleCmd.Flags().StringVarP(&AddRoleFlag, "add-role", "a", "", "Add a role to requirements.yml")
-	roleCmd.Flags().StringVarP(&AddCollectionFlag, "add-collection", "c", "", "Add a collection to requirements.yml and meta/main.yml")
 
 	rootCmd.AddCommand(roleCmd)
 
@@ -278,6 +413,70 @@ func main() {
 	molCmd.Flags().BoolVar(&WipeFlag, "wipe", false, "remove container and molecule role folder")
 
 	rootCmd.AddCommand(molCmd)
+
+	// show command
+	showCmd := &cobra.Command{
+		Use:   "show",
+		Short: "Display all diffusion configuration in readable format",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			fmt.Println("\n\033[1m=== Diffusion Configuration ===\033[0m")
+
+			// Container Registry
+			fmt.Println("\033[35m[Container Registry]\033[0m")
+			fmt.Printf("  Registry Server:         \033[38;2;127;255;212m%s\033[0m\n", config.ContainerRegistry.RegistryServer)
+			fmt.Printf("  Registry Provider:       \033[38;2;127;255;212m%s\033[0m\n", config.ContainerRegistry.RegistryProvider)
+			fmt.Printf("  Molecule Container Name: \033[38;2;127;255;212m%s\033[0m\n", config.ContainerRegistry.MoleculeContainerName)
+			fmt.Printf("  Molecule Container Tag:  \033[38;2;127;255;212m%s\033[0m\n\n", config.ContainerRegistry.MoleculeContainerTag)
+
+			// HashiCorp Vault
+			fmt.Println("\033[35m[HashiCorp Vault]\033[0m")
+			fmt.Printf("  Integration Enabled:     \033[38;2;127;255;212m%t\033[0m\n", config.HashicorpVault.HashicorpVaultIntegration)
+			if config.HashicorpVault.HashicorpVaultIntegration {
+				fmt.Printf("  Secret KV2 Path:         \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.SecretKV2Path)
+				fmt.Printf("  Secret KV2 Name:         \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.SecretKV2Name)
+				fmt.Printf("  Username Field:          \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.UserNameField)
+				fmt.Printf("  Token Field:             \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.TokenField)
+			}
+			fmt.Println()
+
+			// Artifact URL
+			fmt.Println("\033[35m[Artifact Repository]\033[0m")
+			fmt.Printf("  URL:                     \033[38;2;127;255;212m%s\033[0m\n\n", config.ArtifactUrl)
+
+			// YAML Lint Config
+			fmt.Println("\033[35m[YAML Lint Configuration]\033[0m")
+			fmt.Printf("  Extends:                 \033[38;2;127;255;212m%s\033[0m\n", config.YamlLintConfig.Extends)
+			fmt.Printf("  Ignore Patterns:\n")
+			for _, pattern := range config.YamlLintConfig.Ignore {
+				fmt.Printf("    \033[38;2;127;255;212m- %s\033[0m\n", pattern)
+			}
+			fmt.Println()
+
+			// Ansible Lint Config
+			fmt.Println("\033[35m[Ansible Lint Configuration]\033[0m")
+			fmt.Printf("  Excluded Paths:\n")
+			for _, path := range config.AnsibleLintConfig.ExcludedPaths {
+				fmt.Printf("    \033[38;2;127;255;212m- %s\033[0m\n", path)
+			}
+			fmt.Printf("  Warn List:\n")
+			for _, warn := range config.AnsibleLintConfig.WarnList {
+				fmt.Printf("    \033[38;2;127;255;212m- %s\033[0m\n", warn)
+			}
+			fmt.Printf("  Skip List:\n")
+			for _, skip := range config.AnsibleLintConfig.SkipList {
+				fmt.Printf("    \033[38;2;127;255;212m- %s\033[0m\n", skip)
+			}
+			fmt.Println()
+			fmt.Println("\033[1m=== End of Configuration ===\033[0m")
+			return nil
+		},
+	}
+	rootCmd.AddCommand(showCmd)
 
 	// Windows-only helper: compact-wsl
 	compactCmd := &cobra.Command{
@@ -750,7 +949,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	// check if container exists
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
-		fmt.Printf("\033[38;2;127;255;212mContainer molecule-%s already exists. To purge use -wipe.\n\033[0m", RoleFlag)
+		fmt.Printf("\033[38;2;127;255;212mContainer molecule-%s already exists. To purge use --wipe.\n\033[0m", RoleFlag)
 	} else {
 
 		if config.HashicorpVault.HashicorpVaultIntegration {
