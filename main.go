@@ -36,14 +36,21 @@ import (
 )
 
 var (
-	RoleFlag        string
-	OrgFlag         string
-	TagFlag         string
-	VerifyFlag      bool
-	LintFlag        bool
-	IdempotenceFlag bool
-	WipeFlag        bool
-	CompactWSLFlag  bool
+	RoleInitFlag      bool
+	RoleFlag          string
+	OrgFlag           string
+	RoleScenario      string
+	AddRoleFlag       string
+	RoleSrcFlag       string
+	RoleScmFlag       string
+	RoleVersionFlag   string
+	AddCollectionFlag string
+	TagFlag           string
+	VerifyFlag        bool
+	LintFlag          bool
+	IdempotenceFlag   bool
+	WipeFlag          bool
+	CompactWSLFlag    bool
 )
 
 func main() {
@@ -51,6 +58,113 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "diffusion",
 		Short: "Molecule workflow helper (cross-platform) with Windows-only WSL compact features",
+	}
+
+	roleCmd := &cobra.Command{
+		Use:   "role",
+		Short: "Configure role settings interactively",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Handle add-role flag first
+			meta, req, err := LoadRoleConfig("")
+			if err != nil {
+				fmt.Println("Role config not found. Would you like to initialize a new role? (y/n):")
+				var response string
+				_, err := fmt.Scanln(&response)
+				if err != nil {
+					return fmt.Errorf("failed to read input: %w", err)
+				}
+				if response == "y" || response == "Y" {
+					roleName, err := AnsibleGalaxyInit()
+					if err != nil {
+						return fmt.Errorf("failed to initialize role: %w", err)
+					}
+
+					// Change working directory to the newly created role
+					if err := os.Chdir(roleName); err != nil {
+						return fmt.Errorf("failed to change directory to %s: %w", roleName, err)
+					}
+
+					MetaConfig := MetaConfigSetup()
+					RequirementConfig := RequirementConfigSetup(MetaConfig.Collections)
+					err = SaveMetaFile(MetaConfig)
+					if err != nil {
+						return fmt.Errorf("failed to save meta file: %w", err)
+					}
+
+					err = SaveRequirementFile(RequirementConfig, "default")
+					if err != nil {
+						return fmt.Errorf("failed to save requirements file: %w", err)
+					}
+
+					fmt.Println("Role initialized successfully.")
+				} else {
+					fmt.Println("Role initialization skipped.")
+				}
+				return err
+			}
+			// Continue with config if loaded successfully
+
+			if meta != nil {
+				fmt.Printf("Current Role Name: %s\n", meta.GalaxyInfo.RoleName)
+				fmt.Printf("Current Namespace: %s\n", meta.GalaxyInfo.Namespace)
+			}
+			if req != nil {
+				fmt.Printf("Current Collections: %v\n", req.Collections)
+				fmt.Printf("Current Roles: %v\n", req.Roles)
+			}
+			return nil
+		},
+	}
+
+	roleAddCmd := &cobra.Command{
+		Use:   "add [role-name]",
+		Short: "Add a role to requirements.yml",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			roleName := args[0]
+
+			_, req, err := LoadRoleConfig(RoleScenario)
+			if err != nil {
+				return fmt.Errorf("failed to load requirements file: %w", err)
+			}
+
+			// Add the new role to existing roles
+			newRole := RequirementRole{
+				Name:    roleName,
+				Src:     RoleSrcFlag,
+				Scm:     RoleScmFlag,
+				Version: RoleVersionFlag,
+			}
+			req.Roles = append(req.Roles, newRole)
+
+			// Save the updated requirements file
+			if err := SaveRequirementFile(req, RoleScenario); err != nil {
+				return fmt.Errorf("failed to save role: %w", err)
+			}
+			fmt.Printf("Role '%s' added successfully to requirements.yml\n", roleName)
+			return nil
+		},
+	}
+
+	roleAddCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
+	roleAddCmd.Flags().StringVarP(&RoleSrcFlag, "src", "", "", "Source URL of the role (required)")
+	roleAddCmd.Flags().StringVarP(&RoleScmFlag, "scm", "", "git", "SCM type (e.g., git) of the role (optional)")
+	roleAddCmd.Flags().StringVarP(&RoleVersionFlag, "version", "v", "master", "Version of the role (optional)")
+
+	roleCmd.AddCommand(roleAddCmd)
+
+	roleCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
+	roleCmd.Flags().BoolVarP(&RoleInitFlag, "init", "i", false, "Initialize a new Ansible role using ansible-galaxy")
+	roleCmd.Flags().StringVarP(&AddRoleFlag, "add-role", "a", "", "Add a role to requirements.yml")
+	roleCmd.Flags().StringVarP(&AddCollectionFlag, "add-collection", "c", "", "Add a collection to requirements.yml and meta/main.yml")
+
+	rootCmd.AddCommand(roleCmd)
+
+	// molecule command
+	molCmd := &cobra.Command{
+		Use:   "molecule",
+		Short: "run molecule workflow (create/converge/verify/lint/idempotence/wipe)",
+		RunE:  runMolecule,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			// Ensure some env defaults and prompt when needed
 
@@ -139,15 +253,24 @@ func main() {
 		},
 	}
 
-	// molecule command
-	molCmd := &cobra.Command{
-		Use:   "molecule",
-		Short: "run molecule workflow (create/converge/verify/lint/idempotence/wipe)",
-		RunE:  runMolecule,
+	MetaConfig, _, err := LoadRoleConfig("")
+	if err != nil {
+		RoleFlag = ""
+		OrgFlag = ""
+		log.Printf("\033[33mwarning loading role config: %v\033[0m", err)
+	} else {
+		if MetaConfig.GalaxyInfo.RoleName != "" {
+			RoleFlag = MetaConfig.GalaxyInfo.RoleName
+			OrgFlag = MetaConfig.GalaxyInfo.Namespace
+		} else {
+			RoleFlag = ""
+			OrgFlag = ""
+			log.Printf("\033[33mwarning: role name or namespace missing in meta/main.yml\033[0m")
+		}
 	}
 
-	molCmd.Flags().StringVarP(&RoleFlag, "role", "r", "sdl_collector", "role name")
-	molCmd.Flags().StringVarP(&OrgFlag, "org", "o", "linru", "organization prefix")
+	molCmd.Flags().StringVarP(&RoleFlag, "role", "r", RoleFlag, "role name")
+	molCmd.Flags().StringVarP(&OrgFlag, "org", "o", OrgFlag, "organization prefix")
 	molCmd.Flags().StringVarP(&TagFlag, "tag", "t", "", "ANSIBLE_RUN_TAGS value (optional)")
 	molCmd.Flags().BoolVar(&VerifyFlag, "verify", false, "run molecule verify")
 	molCmd.Flags().BoolVar(&LintFlag, "lint", false, "run linting (yamllint / ansible-lint)")
@@ -176,6 +299,294 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func AnsibleGalaxyInit() (string, error) {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("Enter role name: ")
+	roleName, _ := reader.ReadString('\n')
+	roleName = strings.TrimSpace(roleName)
+
+	if roleName == "" {
+		return "", fmt.Errorf("role name cannot be empty")
+	}
+
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	cmd := exec.Command("docker", "run", "--rm",
+		"-v", fmt.Sprintf("%s:/ansible", currentDir),
+		"-w", "/ansible",
+		"cytopia/ansible:latest",
+		"ansible-galaxy", "role", "init", roleName)
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	fmt.Printf("Initializing Ansible role: %s\n", roleName)
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	// Create scenarios/default directory structure
+	scenariosPath := filepath.Join(currentDir, roleName, "scenarios", "default")
+	if err := os.MkdirAll(scenariosPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create scenarios directory: %w", err)
+	}
+
+	converge_content := `# Converge playbook
+---
+- name: Converge
+  hosts: all
+  tasks:
+    - name: "Include Ansible role"
+      ansible.builtin.include_role:
+          name: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') | basename }}"
+      tags:
+#        - YOUR_TAGS
+`
+	verify_content := `# Verify playbook
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+
+`
+
+	molecule_content := `# Molecule default scenario configuration
+---
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+driver:
+  name: docker
+# platforms:
+#  - name: YOUR_PLATFORM_NAME
+#    image: YOUR_TESTING_IMAGE_URL
+#    privileged: true
+#    pre_build_image: true
+#    env:
+#      YC_TOKEN: ${TOKEN}
+#      VAULT_ADDR: ${VAULT_ADDR}
+#      VAULT_TOKEN: ${VAULT_TOKEN}
+#    command: /lib/systemd/systemd
+#    cgroupns_mode: host
+#    tmpfs:
+#      - /tmp
+#      - /run
+#      - /run/lock
+#    volumes:
+#      - /etc/ssl/certs:/etc/ssl/certs
+#      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+#      - dockerroot:/var/lib/docker:rw
+provisioner:
+   name: ansible
+verifier:
+   name: ansible
+`
+	// Create converge.yml
+	convergePath := filepath.Join(currentDir, roleName, "scenarios", "default", "converge.yml")
+	if err := os.WriteFile(convergePath, []byte(converge_content), 0644); err != nil {
+		return "", fmt.Errorf("failed to create converge.yml: %w", err)
+	}
+
+	// Create molecule.yml
+	moleculePath := filepath.Join(currentDir, roleName, "scenarios", "default", "molecule.yml")
+	if err := os.WriteFile(moleculePath, []byte(molecule_content), 0644); err != nil {
+		return "", fmt.Errorf("failed to create converge.yml: %w", err)
+	}
+	// Create verify.yml
+	verifyPath := filepath.Join(currentDir, roleName, "scenarios", "default", "verify.yml")
+	if err := os.WriteFile(verifyPath, []byte(verify_content), 0644); err != nil {
+		return "", fmt.Errorf("failed to create verify.yml: %w", err)
+	}
+
+	// Create .gitignore file
+	gitignoreContent := `**/molecule/*
+**/roles/*
+vars/secrets.yml
+`
+	gitignorePath := filepath.Join(currentDir, roleName, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte(gitignoreContent), 0644); err != nil {
+		return "", fmt.Errorf("failed to create .gitignore: %w", err)
+	}
+
+	fmt.Printf("Created .gitignore in %s\n", roleName)
+	return roleName, nil
+}
+
+func MetaConfigSetup() *Meta {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("What name of the role should be?: ")
+	roleName, _ := reader.ReadString('\n')
+	roleName = strings.TrimSpace(roleName)
+
+	fmt.Print("What namespace of the role should be?: ")
+	roleNamespace, _ := reader.ReadString('\n')
+	roleNamespace = strings.TrimSpace(roleNamespace)
+
+	fmt.Print("What company of the role should be?: ")
+	roleCompany, _ := reader.ReadString('\n')
+	roleCompany = strings.TrimSpace(roleCompany)
+
+	fmt.Print("What author of the role should be?: ")
+	roleAuthor, _ := reader.ReadString('\n')
+	roleAuthor = strings.TrimSpace(roleAuthor)
+
+	fmt.Print("Description of the role (optional): ")
+	roleDescription, _ := reader.ReadString('\n')
+	roleDescription = strings.TrimSpace(roleDescription)
+
+	platformsList := []Platform{}
+	fmt.Print("Enter platforms? (y/n): ")
+	addPlatforms, _ := reader.ReadString('\n')
+	addPlatforms = strings.TrimSpace(strings.ToLower(addPlatforms))
+
+	for addPlatforms == "y" {
+		fmt.Print("Platform OS name (e.g., ubuntu, centos): ")
+		osName, _ := reader.ReadString('\n')
+		osName = strings.TrimSpace(osName)
+
+		if osName != "" {
+			fmt.Print("Platform versions (comma-separated, e.g., 20.04,22.04): ")
+			versionsInput, _ := reader.ReadString('\n')
+			versionsInput = strings.TrimSpace(versionsInput)
+			if versionsInput != "" {
+				// Check if this OS already exists in the list
+				existingIndex := -1
+				for i, platform := range platformsList {
+					if platform.OsName == osName {
+						existingIndex = i
+						break
+					}
+				}
+
+				// Collect versions for this OS
+				versions := []string{}
+
+				// Add new versions
+				for version := range strings.SplitSeq(versionsInput, ",") {
+					version = strings.TrimSpace(version)
+					if version != "" {
+						versions = append(versions, version)
+					}
+				}
+
+				if existingIndex != -1 {
+					platformsList[existingIndex].Versions = versions
+				} else {
+					platformsList = append(platformsList, Platform{
+						OsName:   osName,
+						Versions: versions,
+					})
+				}
+			}
+		}
+
+		fmt.Print("Add another platform? (y/n): ")
+		addPlatforms, _ = reader.ReadString('\n')
+		addPlatforms = strings.TrimSpace(strings.ToLower(addPlatforms))
+	}
+
+	fmt.Print("Galaxy Tags (comma-separated) (optional): ")
+	galaxyTagsInput, _ := reader.ReadString('\n')
+	galaxyTagsInput = strings.TrimSpace(galaxyTagsInput)
+	galaxyTagsList := []string{}
+	if galaxyTagsInput != "" {
+		for t := range strings.SplitSeq(galaxyTagsInput, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				galaxyTagsList = append(galaxyTagsList, t)
+			}
+		}
+	}
+
+	fmt.Print("Collections required (comma-separated) (optional): ")
+	collectionsInput, _ := reader.ReadString('\n')
+	collectionsInput = strings.TrimSpace(collectionsInput)
+	collectionsList := []string{}
+	if collectionsInput != "" {
+		for c := range strings.SplitSeq(collectionsInput, ",") {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				collectionsList = append(collectionsList, c)
+			}
+		}
+	}
+
+	roleSettings := &Meta{
+		GalaxyInfo: &GalaxyInfo{
+			RoleName:          roleName,
+			Namespace:         roleNamespace,
+			Company:           roleCompany,
+			Author:            roleAuthor,
+			Description:       roleDescription,
+			License:           "MIT",
+			MinAnsibleVersion: "2.10",
+			Platforms:         platformsList,
+			GalaxyTags:        galaxyTagsList,
+		},
+		Collections: collectionsList,
+	}
+
+	return roleSettings
+
+}
+func RequirementConfigSetup(collections []string) *Requirement {
+	if collections == nil {
+		collections = []string{}
+	}
+	reader := bufio.NewReader(os.Stdin)
+	collectionsList := collections
+
+	rolesList := []RequirementRole{}
+	fmt.Print("Enter roles to add? (y/n): ")
+	addRoles, _ := reader.ReadString('\n')
+	addRoles = strings.TrimSpace(strings.ToLower(addRoles))
+	for addRoles == "y" {
+		fmt.Print("Role name (e.g., geerlingguy.nginx): ")
+		roleName, _ := reader.ReadString('\n')
+		roleName = strings.TrimSpace(roleName)
+		if roleName != "" {
+			fmt.Print("Role source (e.g., git URL) (required): ")
+			roleSrc, _ := reader.ReadString('\n')
+			roleSrc = strings.TrimSpace(roleSrc)
+			fmt.Print("Role SCM (default: git) (optional): ")
+			roleScm, _ := reader.ReadString('\n')
+			roleScm = strings.TrimSpace(roleScm)
+			if roleScm == "" {
+				roleScm = "git"
+			}
+			fmt.Print("Role version (default: master) (optional): ")
+			roleVersion, _ := reader.ReadString('\n')
+			roleVersion = strings.TrimSpace(roleVersion)
+			if roleVersion == "" {
+				roleVersion = "master"
+			}
+			newRole := RequirementRole{
+				Name:    roleName,
+				Src:     roleSrc,
+				Scm:     roleScm,
+				Version: roleVersion,
+			}
+			rolesList = append(rolesList, newRole)
+		}
+		fmt.Print("Add another role? (y/n): ")
+		addRoles, _ = reader.ReadString('\n')
+		addRoles = strings.TrimSpace(strings.ToLower(addRoles))
+	}
+
+	requirementSettings := &Requirement{
+		Collections: collectionsList,
+		Roles:       rolesList,
+	}
+
+	return requirementSettings
+
 }
 
 func VaultConfigHelper(intergration bool) *HashicorpVault {
@@ -372,9 +783,15 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		if err := YcCliInit(); err != nil {
 			log.Printf("\033[32myc init warning: %v\033[0m", err)
 		}
+		if config.ContainerRegistry.RegistryProvider != "Public" {
 
-		if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
-			log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
+			switch config.ContainerRegistry.RegistryProvider {
+			case "YC":
+				if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
+					log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
+				}
+
+			}
 		}
 		// run container
 		// docker run --rm -d --name=molecule-$role -v "$path/molecule:/opt/molecule" -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e ... --privileged --pull always cr.yandex/...
@@ -405,6 +822,9 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// docker exec -ti molecule-$role /bin/sh -c "ansible-galaxy role init $org.$role"
 		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
 			log.Printf("\033[33mrole init warning: %v\033[0m", err)
+		}
+		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
+			log.Printf("\033mclean role dir warning: %v\033[0m", err)
 		}
 	}
 
