@@ -149,7 +149,7 @@ func main() {
 	roleAddCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
 	roleAddCmd.Flags().StringVarP(&RoleSrcFlag, "src", "", "", "Source URL of the role (required)")
 	roleAddCmd.Flags().StringVarP(&RoleScmFlag, "scm", "", "git", "SCM type (e.g., git) of the role (optional)")
-	roleAddCmd.Flags().StringVarP(&RoleVersionFlag, "version", "v", "master", "Version of the role (optional)")
+	roleAddCmd.Flags().StringVarP(&RoleVersionFlag, "version", "v", "main", "Version of the role (optional)")
 
 	roleCmd.AddCommand(roleAddCmd)
 
@@ -561,11 +561,11 @@ func RequirementConfigSetup(collections []string) *Requirement {
 			if roleScm == "" {
 				roleScm = "git"
 			}
-			fmt.Print("Role version (default: master) (optional): ")
+			fmt.Print("Role version (default: main) (optional): ")
 			roleVersion, _ := reader.ReadString('\n')
 			roleVersion = strings.TrimSpace(roleVersion)
 			if roleVersion == "" {
-				roleVersion = "master"
+				roleVersion = "main"
 			}
 			newRole := RequirementRole{
 				Name:    roleName,
