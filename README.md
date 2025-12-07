@@ -7,6 +7,7 @@
 **A powerful Go-based CLI framework for simplifying Ansible role testing with Molecule**
 
 [![License: MIT](https://img.shields. io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 [![Go Version](https://img.shields.io/badge/Go-1.25.4-00ADD8? logo=go)](https://go.dev/)
 
 </div>
