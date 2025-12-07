@@ -36,21 +36,22 @@ import (
 )
 
 var (
-	RoleInitFlag      bool
-	RoleFlag          string
-	OrgFlag           string
-	RoleScenario      string
-	AddRoleFlag       string
-	RoleSrcFlag       string
-	RoleScmFlag       string
-	RoleVersionFlag   string
-	AddCollectionFlag string
-	TagFlag           string
-	VerifyFlag        bool
-	LintFlag          bool
-	IdempotenceFlag   bool
-	WipeFlag          bool
-	CompactWSLFlag    bool
+	RoleInitFlag       bool
+	RoleFlag           string
+	OrgFlag            string
+	RoleScenario       string
+	AddRoleFlag        string
+	RoleSrcFlag        string
+	RoleScmFlag        string
+	RoleVersionFlag    string
+	AddCollectionFlag  string
+	TagFlag            string
+	VerifyFlag         bool
+	TestsOverWriteFlag bool
+	LintFlag           bool
+	IdempotenceFlag    bool
+	WipeFlag           bool
+	CompactWSLFlag     bool
 )
 
 func main() {
@@ -84,7 +85,7 @@ func main() {
 						return fmt.Errorf("failed to change directory to %s: %w", roleName, err)
 					}
 
-					MetaConfig := MetaConfigSetup()
+					MetaConfig := MetaConfigSetup(roleName)
 					RequirementConfig := RequirementConfigSetup(MetaConfig.Collections)
 					err = SaveMetaFile(MetaConfig)
 					if err != nil {
@@ -347,9 +348,12 @@ func main() {
 				moleculeContainerName, _ := reader.ReadString('\n')
 				moleculeContainerName = strings.TrimSpace(moleculeContainerName)
 
-				fmt.Print("Enter MoleculeContainerTag: ")
+				fmt.Print("Enter MoleculeContainerTag (latest): ")
 				moleculeContainerTag, _ := reader.ReadString('\n')
 				moleculeContainerTag = strings.TrimSpace(moleculeContainerTag)
+				if moleculeContainerTag == "" {
+					moleculeContainerTag = "latest"
+				}
 
 				ContainerRegistry := &ContainerRegistry{
 					RegistryServer:        registryServer,
@@ -368,12 +372,15 @@ func main() {
 
 				HashicorpVaultSet := VaultConfigHelper(vaultEnabled)
 
+				TestsSettings := TestsConfigSetup()
+
 				config = &Config{
 					ContainerRegistry: ContainerRegistry,
 					HashicorpVault:    HashicorpVaultSet,
 					ArtifactUrl:       "https://example.com/repo",
 					YamlLintConfig:    YamlLintDefault,
 					AnsibleLintConfig: AnsibleLintDefault,
+					TestsConfig:       TestsSettings,
 				}
 
 				if err := SaveConfig(config); err != nil {
@@ -408,6 +415,7 @@ func main() {
 	molCmd.Flags().StringVarP(&OrgFlag, "org", "o", OrgFlag, "organization prefix")
 	molCmd.Flags().StringVarP(&TagFlag, "tag", "t", "", "ANSIBLE_RUN_TAGS value (optional)")
 	molCmd.Flags().BoolVar(&VerifyFlag, "verify", false, "run molecule verify")
+	molCmd.Flags().BoolVar(&TestsOverWriteFlag, "testsoverwrite", false, "overwrite molecule tests folder for remote or diffusion type")
 	molCmd.Flags().BoolVar(&LintFlag, "lint", false, "run linting (yamllint / ansible-lint)")
 	molCmd.Flags().BoolVar(&IdempotenceFlag, "idempotence", false, "run molecule idempotence")
 	molCmd.Flags().BoolVar(&WipeFlag, "wipe", false, "remove container and molecule role folder")
@@ -551,7 +559,14 @@ func AnsibleGalaxyInit() (string, error) {
 - name: Verify
   hosts: all
   gather_facts: false
-
+# vars:
+#    system_name: YOUR_PLATFORM_NAME
+#    docker_user_uid: 1000
+#  roles:
+#    - role: tests/diffusion_tests
+#      vars:
+#        port_test: true
+#        port: YOUR_PORT_NUMBER
 `
 
 	molecule_content := `# Molecule default scenario configuration
@@ -617,12 +632,8 @@ vars/secrets.yml
 	return roleName, nil
 }
 
-func MetaConfigSetup() *Meta {
+func MetaConfigSetup(roleName string) *Meta {
 	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Print("What name of the role should be?: ")
-	roleName, _ := reader.ReadString('\n')
-	roleName = strings.TrimSpace(roleName)
 
 	fmt.Print("What namespace of the role should be?: ")
 	roleNamespace, _ := reader.ReadString('\n')
@@ -817,6 +828,44 @@ func VaultConfigHelper(intergration bool) *HashicorpVault {
 
 	return HashicorpVaultSet
 }
+
+func TestsConfigSetup() *TestsSettings {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("What type of configuration you want use? remote / local / diffusion(Default): ")
+	configType, _ := reader.ReadString('\n')
+	configType = strings.TrimSpace(strings.ToLower(configType))
+
+	if configType == "" {
+		configType = "diffusion"
+	}
+	if configType != "remote" && configType != "local" && configType != "diffusion" {
+		fmt.Fprintln(os.Stderr, "\033[31mInvalid configuration type. Allowed values are: remote, local, diffusion.\033[0m")
+		os.Exit(1)
+	}
+
+	remoteReposList := []string{}
+	if configType == "remote" {
+		fmt.Print("Enter remote repository URLs seperated by comma, it should be public or from artifact URL path (if remote selected): ")
+		remoteReposInput, _ := reader.ReadString('\n')
+		remoteReposInput = strings.TrimSpace(remoteReposInput)
+		if remoteReposInput != "" {
+			for r := range strings.SplitSeq(remoteReposInput, ",") {
+				r = strings.TrimSpace(r)
+				if r != "" {
+					remoteReposList = append(remoteReposList, r)
+				}
+			}
+		}
+	}
+	testsSettings := &TestsSettings{
+		Type:               configType,
+		RemoteRepositories: remoteReposList,
+	}
+
+	return testsSettings
+}
+
 func PromptInput(prompt string) string {
 	fmt.Print(prompt)
 	r := bufio.NewReader(os.Stdin)
@@ -920,8 +969,78 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 		if VerifyFlag {
 			// copy tests/*
-			testsSrc := filepath.Join(path, "tests")
-			copyIfExists(testsSrc, defaultTestsDir)
+
+			switch config.TestsConfig.Type {
+			case "local":
+				testsSrc := filepath.Join(path, "tests")
+				copyIfExists(testsSrc, defaultTestsDir)
+			case "remote":
+				for _, repo := range config.TestsConfig.RemoteRepositories {
+					roleName := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(repo), ".git"), "/")
+					testsRolePath := fmt.Sprintf("%s/%s", defaultTestsDir, roleName)
+
+					// Check if path exists before cloning
+					if _, err := os.Stat(testsRolePath); err == nil && !TestsOverWriteFlag {
+						log.Printf("\033[35mTests role %s already exist in %s, skipping clone. To overwrite use --testsoverwrite flag\033[0m", roleName, defaultTestsDir)
+					} else {
+						log.Printf("Cloning remote tests repository: %s", repo)
+						tmpDir, err := os.MkdirTemp("", "diffusion-tests-")
+						if err != nil {
+							log.Printf("\033[33mwarning creating temp dir for tests repo: %v\033[0m", err)
+							continue
+						}
+
+						if err := runCommand("git", "clone", repo, tmpDir); err != nil {
+							log.Printf("\033[33mwarning cloning tests repo %s: %v\033[0m", repo, err)
+							continue
+						}
+
+						testsSrc := tmpDir
+
+						// Remove .git folder from cloned repository
+						gitDir := filepath.Join(testsSrc, ".git")
+						if err := os.RemoveAll(gitDir); err != nil {
+							log.Printf("\033[33mwarning removing .git folder: %v\033[0m", err)
+						}
+
+						copyIfExists(testsSrc, testsRolePath)
+						if err := os.RemoveAll(tmpDir); err != nil {
+							log.Printf("\033[33mwarning removing temp dir for tests repo %s: %v\033[0m", repo, err)
+						}
+					}
+				}
+			case "diffusion":
+				// copy from diffusion_tests repository
+				diffusionTestsPath := fmt.Sprintf("%s/diffusion_tests", defaultTestsDir)
+
+				// Check if path exists and is not empty
+				if _, err := os.Stat(diffusionTestsPath); err == nil && !TestsOverWriteFlag {
+					log.Printf("\033[35mDiffusion tests role already exist in %s, skipping clone. To overwrite use --testsoverwrite flag\033[0m", diffusionTestsPath)
+				} else {
+					diffusionTestsRepo := "https://github.com/Polar-Team/diffusion-ansible-tests-role.git"
+					log.Printf("\033[35mCloning diffusion tests repository:\033[0m \033[38;2;127;255;212m%s\033[0m", diffusionTestsRepo)
+					tmpDir, err := os.MkdirTemp("", "diffusion-tests-")
+					if err != nil {
+						log.Printf("\033[33mwarning creating temp dir for diffusion tests repo: %v\033[0m", err)
+					}
+					if err := runCommand("git", "clone", diffusionTestsRepo, tmpDir); err != nil {
+						log.Printf("\033[33mwarning cloning diffusion tests repo: %v\033[0m", err)
+					}
+					testsSrc := tmpDir
+
+					// Remove .git folder from cloned repository
+					gitDir := filepath.Join(testsSrc, ".git")
+					if err := os.RemoveAll(gitDir); err != nil {
+						log.Printf("\033[33mwarning removing .git folder: %v\033[0m", err)
+					}
+
+					copyIfExists(testsSrc, diffusionTestsPath)
+					if err := os.RemoveAll(tmpDir); err != nil {
+						log.Printf("\033[33mwarning removing temp dir for diffusion tests repo: %v\033[0m", err)
+					}
+				}
+			}
+
 			cmdStr := fmt.Sprintf("cd ./%s && molecule verify", roleDirName)
 			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
 				log.Printf("\033[31mVerify failed: %v\033[0m", err)

@@ -56,9 +56,9 @@ type ContainerRegistry struct {
 	MoleculeContainerTag  string `toml:"molecule_container_tag"`
 }
 
-type RoleSettings struct {
-	Meta        *Meta        `toml:"meta"`
-	Requirement *Requirement `toml:"requirement"`
+type TestsSettings struct {
+	Type               string   `toml:"type"`
+	RemoteRepositories []string `toml:"remote_repositories,omitempty"`
 }
 
 type Config struct {
@@ -67,7 +67,7 @@ type Config struct {
 	ArtifactUrl       string             `toml:"url"`
 	YamlLintConfig    *YamlLint          `toml:"yaml_lint"`
 	AnsibleLintConfig *AnsibleLint       `toml:"ansible_lint"`
-	RoleConfig        *RoleSettings      `toml:"role"`
+	TestsConfig       *TestsSettings     `toml:"tests"`
 }
 
 // LoadConfig reads configuration from a TOML file in the project directory

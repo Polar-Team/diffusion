@@ -10,10 +10,10 @@ import (
 
 type HashicorpVault struct {
 	HashicorpVaultIntegration bool   `toml:"enabled"`
-	SecretKV2Path             string `toml:"secret_kv2_path"`
-	SecretKV2Name             string `toml:"secret_kv2_name"`
-	UserNameField             string `toml:"username_field"`
-	TokenField                string `toml:"token_field"`
+	SecretKV2Path             string `toml:"secret_kv2_path,omitempty"`
+	SecretKV2Name             string `toml:"secret_kv2_name,omitempty"`
+	UserNameField             string `toml:"username_field,omitempty"`
+	TokenField                string `toml:"token_field,omitempty"`
 }
 
 func vault_client(ctx context.Context, path string, secret string) *vault.Response[schema.KvV2ReadResponse] {
