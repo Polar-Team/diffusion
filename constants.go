@@ -91,8 +91,6 @@ const (
 const (
 	ErrInvalidRegistryProvider = "invalid RegistryProvider. Allowed values are: YC, AWS, GCP, Public"
 	ErrRoleNameEmpty           = "role name cannot be empty"
-	ErrCompactWSLWindowsOnly   = "compact-wsl is supported only on Windows"
-	ErrCompactWSLOptimize      = "compactWSLAndOptimize is Windows only"
 )
 
 // Success messages

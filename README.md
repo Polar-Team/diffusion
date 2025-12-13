@@ -22,7 +22,6 @@
 - 📦 **Multiple Registry Support**: Works with Yandex Cloud (YC), AWS, GCP, and public registries
 - 🔍 **Built-in Linting**: Integrated YAML and Ansible linting with customizable rules
 - ✅ **Comprehensive Testing**: Support for convergence, verification, idempotence, and lint testing
-- 💻 **Windows WSL Support**: Special features for Windows users including WSL compaction and VHD optimization
 - 🎯 **Interactive Configuration**: User-friendly prompts for project setup
 
 ## 🛠️ Prerequisites
@@ -33,7 +32,6 @@ Before using Diffusion, ensure you have the following tools installed:
 - **Go 1.25.4+**: For building from source (if needed)
 - **Vault CLI**: (Optional) For HashiCorp Vault integration
 - **YC CLI**: (Optional) For Yandex Cloud registry authentication
-- **WSL2**: (Windows only) For WSL-based features
 
 ## 📥 Installation
 
@@ -163,13 +161,6 @@ Display all Diffusion configuration in a readable format.
 diffusion show
 ```
 
-### `diffusion compact-wsl` (Windows Only)
-Optimize Docker Desktop WSL2 VHDX files. 
-
-```bash
-diffusion compact-wsl --confirm
-```
-
 ## ⚙️ Configuration
 
 Diffusion uses a `diffusion. toml` file for configuration:
@@ -246,11 +237,6 @@ Diffusion can integrate with HashiCorp Vault to securely manage credentials:
 - **AWS ECR**: Support for AWS container registries
 - **GCP Artifact Registry**: Google Cloud registry support
 - **Public Registries**: Docker Hub and other public registries
-
-### Windows-Specific Features
-- WSL2 shutdown and compaction
-- Docker Desktop VHDX optimization
-- Automatic Docker Desktop restart
 
 ## 🤝 Contributing
 

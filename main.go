@@ -1,7 +1,6 @@
 package main
 
-// diffusion - Cobra-based cross-platform CLI tool to assist with Molecule workflows,
-// with Windows-only features for WSL compaction.
+// diffusion - Cobra-based cross-platform CLI tool to assist with Molecule workflows.
 //
 // Features:
 // - Ensures required env vars are set (vault_user, vault_passwd, GIT_URL, PROJECT_ID, VAULT_ADDR)
@@ -11,10 +10,8 @@ package main
 // - Implements "molecule" command with flags: role, org, tag, verify, lint, idempotence, wipe
 // - Copies role files into molecule layout (if present)
 // - Runs docker commands similar to your PowerShell script
-// - Adds Windows-only "compact WSL" feature that stops Docker Desktop, shuts down WSL and runs Optimize-VHD
 //
-// NOTE: This CLI shells out to external tools: vault, yc, docker, wsl, powershell. They must be available in PATH.
-// Optimize-VHD requires elevated (Administrator) powershell rights on Windows.
+// NOTE: This CLI shells out to external tools: vault, yc, docker. They must be available in PATH.
 
 import (
 	"bufio"
@@ -27,7 +24,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -51,14 +47,13 @@ var (
 	LintFlag           bool
 	IdempotenceFlag    bool
 	WipeFlag           bool
-	CompactWSLFlag     bool
 )
 
 func main() {
 
 	rootCmd := &cobra.Command{
 		Use:   "diffusion",
-		Short: "Molecule workflow helper (cross-platform) with Windows-only WSL compact features",
+		Short: "Molecule workflow helper (cross-platform)",
 	}
 
 	roleCmd := &cobra.Command{
@@ -878,6 +873,25 @@ func main() {
 			for _, pattern := range config.YamlLintConfig.Ignore {
 				fmt.Printf("    \033[38;2;127;255;212m- %s\033[0m\n", pattern)
 			}
+			if config.YamlLintConfig.Rules != nil {
+				fmt.Printf("  Rules:\n")
+				if config.YamlLintConfig.Rules.Braces != nil {
+					fmt.Printf("    Braces:                \033[38;2;127;255;212m%v\033[0m\n", config.YamlLintConfig.Rules.Braces)
+				}
+				if config.YamlLintConfig.Rules.Brackets != nil {
+					fmt.Printf("    Brackets:              \033[38;2;127;255;212m%v\033[0m\n", config.YamlLintConfig.Rules.Brackets)
+				}
+				if config.YamlLintConfig.Rules.NewLines != nil {
+					fmt.Printf("    New Lines:             \033[38;2;127;255;212m%v\033[0m\n", config.YamlLintConfig.Rules.NewLines)
+				}
+				if config.YamlLintConfig.Rules.Comments != nil {
+					fmt.Printf("    Comments:              \033[38;2;127;255;212m%v\033[0m\n", config.YamlLintConfig.Rules.Comments)
+				}
+				fmt.Printf("    Comments Indentation:  \033[38;2;127;255;212m%t\033[0m\n", config.YamlLintConfig.Rules.CommentsIdentation)
+				if config.YamlLintConfig.Rules.OctalValues != nil {
+					fmt.Printf("    Octal Values:          \033[38;2;127;255;212m%v\033[0m\n", config.YamlLintConfig.Rules.OctalValues)
+				}
+			}
 			fmt.Println()
 
 			// Ansible Lint Config
@@ -900,23 +914,6 @@ func main() {
 		},
 	}
 	rootCmd.AddCommand(showCmd)
-
-	// Windows-only helper: compact-wsl
-	compactCmd := &cobra.Command{
-		Use:   "compact-wsl",
-		Short: "Windows-only: shutdown WSL / stop Docker Desktop and Optimize-VHD for Docker Desktop VHDX files",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if runtime.GOOS != "windows" {
-				return fmt.Errorf("compact-wsl is supported only on Windows")
-			}
-			return compactWSLAndOptimize()
-		},
-	}
-	compactCmd.Flags().BoolVar(&CompactWSLFlag, "confirm", false, "confirm running Optimize-VHD (requires admin)")
-	rootCmd.AddCommand(compactCmd)
-
-	// Provide a top-level flag to run compact before molecule (Windows-only)
-	rootCmd.PersistentFlags().BoolVar(&CompactWSLFlag, "compact-wsl", false, "on Windows: compact Docker Desktop WSL2 vhdx (runs before molecule actions)")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -1375,8 +1372,12 @@ func runCommand(name string, args ...string) error {
 	return cmd.Run()
 }
 
-// runCommandHide runs command and discards stdout/stderr
+// runCommandHide runs command and discards stdout/stderr with a loading animation
 func runCommandHide(name string, args ...string) error {
+	spinner := NewSpinner(fmt.Sprintf("Running %s", name))
+	spinner.Start()
+	defer spinner.Stop()
+
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -1433,8 +1434,16 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 	// handle wipe
 	if WipeFlag {
-		log.Printf("\033[38;2;127;255;212mWiping: removing container molecule-%s and folder %s\n\033[0m", RoleFlag, roleMoleculePath)
-		_ = runCommand("docker", "rm", fmt.Sprintf("molecule-%s", RoleFlag), "-f")
+		log.Printf("\033[38;2;127;255;212mWiping: running molecule destroy, removing container molecule-%s and folder %s\n\033[0m", RoleFlag, roleMoleculePath)
+
+		// Run molecule destroy inside the container first
+		roleDir := GetRoleDirName(OrgFlag, RoleFlag)
+		_ = dockerExecInteractiveHide(RoleFlag, "bash", "-c", fmt.Sprintf("cd ./%s && molecule destroy", roleDir))
+
+		// Remove the container
+		_ = runCommandHide("docker", "rm", fmt.Sprintf("molecule-%s", RoleFlag), "-f")
+
+		// Remove the role folder
 		if err := os.RemoveAll(roleMoleculePath); err != nil {
 			log.Printf("\033[33mwarning: failed remove role path: %v\033[0m", err)
 		}
@@ -1603,13 +1612,6 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			log.Println("\033[35mNo artifact sources configured. Use public repositories or 'diffusion artifact add' to configure.\033[0m")
 		}
 
-		// If user requested Windows compaction before running molecule
-		if CompactWSLFlag && runtime.GOOS == "windows" {
-			log.Println("Running Windows WSL compact prior to molecule (requested)...")
-			if err := compactWSLAndOptimize(); err != nil {
-				log.Printf("compact-wsl failed: %v", err)
-			}
-		}
 		// Initialize CLI and login based on registry provider
 		switch config.ContainerRegistry.RegistryProvider {
 		case "YC":
@@ -1918,6 +1920,10 @@ func dockerExecInteractive(role, command string, args ...string) error {
 
 // dockerExecInteractiveHide runs: docker exec -ti molecule-role <cmd...>
 func dockerExecInteractiveHide(role, command string, args ...string) error {
+	spinner := NewSpinner(fmt.Sprintf("Running %s in container", command))
+	spinner.Start()
+	defer spinner.Stop()
+
 	all := []string{"exec", "-ti", fmt.Sprintf("molecule-%s", role), command}
 	all = append(all, args...)
 	cmd := exec.Command("docker", all...)
@@ -1925,71 +1931,4 @@ func dockerExecInteractiveHide(role, command string, args ...string) error {
 	cmd.Stderr = io.Discard
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
-}
-
-// YcCliInitWrapper is kept for backward compatibility but is no longer needed
-// Deprecated: Use YcCliInit directly
-func YcCliInitWrapper() error {
-	return YcCliInit()
-}
-
-// Windows-only: compact WSL and Optimize-VHD for Docker Desktop VHDX files.
-// This will:
-// - Stop Docker Desktop process
-// - wsl --shutdown
-// - run Optimize-VHD on $env:LOCALAPPDATA\Docker\wsl\data\*.vhdx (docker-desktop-data vhdx and docker-desktop vhdx)
-// - restart Docker Desktop
-func compactWSLAndOptimize() error {
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("compactWSLAndOptimize is Windows only")
-	}
-
-	// stop Docker Desktop (graceful quit)
-	log.Println("Stopping Docker Desktop (if running)...")
-	// Stop-Process -Name "Docker Desktop" -Force
-	psStop := `if (Get-Process -Name "Docker Desktop" -ErrorAction SilentlyContinue) { Stop-Process -Name "Docker Desktop" -Force }`
-	if err := runPowerShell(psStop); err != nil {
-		log.Printf("\033[33mwarning stopping Docker Desktop: %v\033[0m", err)
-	}
-
-	// shutdown WSL
-	log.Println("Shutting down WSL...")
-	if err := runCommand("wsl", "--shutdown"); err != nil {
-		log.Printf("\033[33mwarning: wsl --shutdown returned: %v\033[0m", err)
-	}
-
-	// small wait
-	time.Sleep(2 * time.Second)
-
-	// build VHDX paths
-	// $env:LOCALAPPDATA\Docker\wsl\data\docker-desktop-data.vhdx
-	paths := []string{
-		`$env:LOCALAPPDATA\Docker\wsl\disk\docker_data.vhdx`,
-	}
-	for _, p := range paths {
-		log.Printf("Running Optimize-VHD for %s (requires admin)...", p)
-		cmd := fmt.Sprintf("Optimize-VHD -Path %s -Mode Full", p)
-		if err := runPowerShell(cmd); err != nil {
-			log.Printf("Optimize-VHD failed for %s: %v", p, err)
-		}
-	}
-
-	// restart Docker Desktop
-	log.Println("Starting Docker Desktop...")
-	startCmd := `Start-Process "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"`
-	if err := runPowerShell(startCmd); err != nil {
-		log.Printf("\033[33mwarning starting Docker Desktop: %v\033[0m", err)
-	}
-
-	log.Println("WSL compact/Optimize-VHD completed (check for errors above).")
-	return nil
-}
-
-// runPowerShell executes a powershell command and streams its output.
-func runPowerShell(cmd string) error {
-	// Use powershell -NoProfile -Command "<cmd>"
-	c := exec.Command("powershell", "-NoProfile", "-Command", cmd)
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
 }
