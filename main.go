@@ -65,46 +65,46 @@ func main() {
 		Use:   "role",
 		Short: "Configure role settings interactively",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Handle add-role flag first
+			// Handle --init flag
+			if RoleInitFlag {
+				// Check if role already exists in current directory
+				if _, err := os.Stat("meta/main.yml"); err == nil {
+					return fmt.Errorf("role already exists in current directory (meta/main.yml found)")
+				}
+
+				roleName, err := AnsibleGalaxyInit()
+				if err != nil {
+					return fmt.Errorf("failed to initialize role: %w", err)
+				}
+
+				// Change working directory to the newly created role
+				if err := os.Chdir(roleName); err != nil {
+					return fmt.Errorf("failed to change directory to %s: %w", roleName, err)
+				}
+
+				MetaConfig := MetaConfigSetup(roleName)
+				RequirementConfig := RequirementConfigSetup(MetaConfig.Collections)
+				err = SaveMetaFile(MetaConfig)
+				if err != nil {
+					return fmt.Errorf("failed to save meta file: %w", err)
+				}
+
+				err = SaveRequirementFile(RequirementConfig, "default")
+				if err != nil {
+					return fmt.Errorf("failed to save requirements file: %w", err)
+				}
+
+				fmt.Println("Role initialized successfully.")
+				return nil
+			}
+
+			// Load existing role config
 			meta, req, err := LoadRoleConfig("")
 			if err != nil {
-				fmt.Println("Role config not found. Would you like to initialize a new role? (y/n):")
-				var response string
-				_, err := fmt.Scanln(&response)
-				if err != nil {
-					return fmt.Errorf("failed to read input: %w", err)
-				}
-				if response == "y" || response == "Y" {
-					roleName, err := AnsibleGalaxyInit()
-					if err != nil {
-						return fmt.Errorf("failed to initialize role: %w", err)
-					}
-
-					// Change working directory to the newly created role
-					if err := os.Chdir(roleName); err != nil {
-						return fmt.Errorf("failed to change directory to %s: %w", roleName, err)
-					}
-
-					MetaConfig := MetaConfigSetup(roleName)
-					RequirementConfig := RequirementConfigSetup(MetaConfig.Collections)
-					err = SaveMetaFile(MetaConfig)
-					if err != nil {
-						return fmt.Errorf("failed to save meta file: %w", err)
-					}
-
-					err = SaveRequirementFile(RequirementConfig, "default")
-					if err != nil {
-						return fmt.Errorf("failed to save requirements file: %w", err)
-					}
-
-					fmt.Println("Role initialized successfully.")
-				} else {
-					fmt.Println("Role initialization skipped.")
-				}
-				return err
+				return fmt.Errorf("role config not found. Use 'diffusion role --init' to initialize a new role: %w", err)
 			}
-			// Continue with config if loaded successfully
 
+			// Display current role configuration
 			if meta != nil {
 				fmt.Printf("\033[35mCurrent Role Name: \033[0m\033[38;2;127;255;212m%s\033[0m\n", meta.GalaxyInfo.RoleName)
 				fmt.Printf("\033[35mCurrent Namespace: \033[0m\033[38;2;127;255;212m%s\033[0m\n", meta.GalaxyInfo.Namespace)
@@ -168,7 +168,7 @@ func main() {
 			found := false
 			for i, role := range req.Roles {
 				if role.Name == roleName {
-					// Remove the role from the slice
+					// Remove the role from the slice using slices package
 					req.Roles = append(req.Roles[:i], req.Roles[i+1:]...)
 					found = true
 					break
@@ -331,28 +331,38 @@ func main() {
 					SkipList:      []string{"meta-incorrect", "role-name[path]"},
 				}
 
-				fmt.Print("Enter RegistryServer: ")
+				fmt.Printf("Enter RegistryServer (%s): ", DefaultRegistryServer)
 				registryServer, _ := reader.ReadString('\n')
 				registryServer = strings.TrimSpace(registryServer)
+				if registryServer == "" {
+					registryServer = DefaultRegistryServer
+				}
 
-				fmt.Print("Enter RegistryProvider: ")
+				fmt.Printf("Enter RegistryProvider (%s): ", DefaultRegistryProvider)
 				registryProvider, _ := reader.ReadString('\n')
 				registryProvider = strings.TrimSpace(registryProvider)
+				if registryProvider == "" {
+					registryProvider = DefaultRegistryProvider
+				}
 
 				if registryProvider != "YC" && registryProvider != "AWS" && registryProvider != "GCP" && registryProvider != "Public" {
 					fmt.Fprintln(os.Stderr, "\033[31mInvalid RegistryProvider. Allowed values are: YC, AWS, GCP. \nIf you're using public registry, then choose Public - or choose it, if you want to authenticate externally.\033[0m")
 					os.Exit(1)
 				}
 
-				fmt.Print("Enter MoleculeContainerName: ")
+				fmt.Printf("Enter MoleculeContainerName (%s): ", DefaultMoleculeContainerName)
 				moleculeContainerName, _ := reader.ReadString('\n')
 				moleculeContainerName = strings.TrimSpace(moleculeContainerName)
+				if moleculeContainerName == "" {
+					moleculeContainerName = DefaultMoleculeContainerName
+				}
 
-				fmt.Print("Enter MoleculeContainerTag (latest): ")
+				defaultTag := GetDefaultMoleculeTag()
+				fmt.Printf("Enter MoleculeContainerTag (%s): ", defaultTag)
 				moleculeContainerTag, _ := reader.ReadString('\n')
 				moleculeContainerTag = strings.TrimSpace(moleculeContainerTag)
 				if moleculeContainerTag == "" {
-					moleculeContainerTag = "latest"
+					moleculeContainerTag = defaultTag
 				}
 
 				ContainerRegistry := &ContainerRegistry{
@@ -1121,9 +1131,9 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			"-e", "TOKEN=" + os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN=" + os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR=" + os.Getenv("VAULT_ADDR"),
-			"-e", "GIT_USER=" + os.Getenv("GIT_USER"),
-			"-e", "GIT_PASSWORD=" + os.Getenv("GIT_PASSWORD"),
-			"-e", "GIT_URL=" + os.Getenv("GIT_URL"),
+			"-e", "GIT_USER_1=" + os.Getenv("GIT_USER"),
+			"-e", "GIT_PASSWORD_1=" + os.Getenv("GIT_PASSWORD"),
+			"-e", "GIT_URL_1=" + os.Getenv("GIT_URL"),
 			"--cgroupns", "host",
 			"--privileged", "--pull", "always",
 			image,
@@ -1241,12 +1251,13 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 }
 
 // copyIfExists copies file/directory if it exists (recursively when directory)
+// Performance optimization: cache os.Stat result to avoid duplicate calls
 func copyIfExists(src, dst string) {
-	if !exists(src) {
+	fi, err := os.Stat(src)
+	if os.IsNotExist(err) {
 		log.Printf("\033[38;2;127;255;212mnote: %s does not exist, skipping\033[0m", src)
 		return
 	}
-	fi, err := os.Stat(src)
 	if err != nil {
 		log.Printf("copy stat error: %v", err)
 		return
@@ -1290,9 +1301,19 @@ func copyFile(src, dst string) error {
 			log.Printf("Failed to close destination file: %v", cerr)
 		}
 	}()
-	if _, err := io.Copy(out, in); err != nil {
+
+	// Use buffered I/O for better performance
+	bufIn := bufio.NewReaderSize(in, 32*1024) // 32KB buffer
+	bufOut := bufio.NewWriterSize(out, 32*1024)
+
+	if _, err := io.Copy(bufOut, bufIn); err != nil {
 		return err
 	}
+
+	if err := bufOut.Flush(); err != nil {
+		return err
+	}
+
 	return out.Sync()
 }
 
@@ -1332,6 +1353,9 @@ func dockerExecInteractiveHide(role, command string, args ...string) error {
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
 }
+
+// YcCliInitWrapper is kept for backward compatibility but is no longer needed
+// Deprecated: Use YcCliInit directly
 func YcCliInitWrapper() error {
 	return YcCliInit()
 }

@@ -67,12 +67,18 @@ This will guide you through creating a new Ansible role with the proper structur
 ### 2. Configure Diffusion
 
 On first run, Diffusion will prompt you to configure:
-- Container registry settings
-- Molecule container details
+- Container registry settings (default: `ghcr.io`)
+- Molecule container details (default: `polar-team/diffusion-molecule-container:latest-{arch}`)
 - HashiCorp Vault integration (optional)
 - Linting rules
 
 Configuration is stored in `diffusion.toml` in your project directory.
+
+**Default Container Registry:**
+- Registry Server: `ghcr.io`
+- Registry Provider: `Public`
+- Container Name: `polar-team/diffusion-molecule-container`
+- Container Tag: `latest-amd64` or `latest-arm64` (auto-detected based on your system architecture)
 
 ### 3.  Run Molecule Tests
 
@@ -99,8 +105,11 @@ diffusion molecule --role my-role --org my-org --tag "my-tag"
 Manage Ansible role configurations interactively.
 
 ```bash
-# View current role configuration
+# View current role configuration (requires existing role)
 diffusion role
+
+# Initialize a new role
+diffusion role --init
 
 # Add a role dependency
 diffusion role add-role my-dependency --src https://github.com/user/role.git --version main
@@ -114,6 +123,8 @@ diffusion role add-collection community.general
 # Remove a collection
 diffusion role remove-collection community.general
 ```
+
+**Note:** The `role` command without `--init` flag will display the current role configuration. If no role exists, it will show an error message. Use `diffusion role --init` to initialize a new role. If a role already exists in the current directory, the `--init` flag will warn you.
 
 ### `diffusion molecule`
 Run Molecule testing workflows.
@@ -147,10 +158,10 @@ Diffusion uses a `diffusion. toml` file for configuration:
 
 ```toml
 [container_registry]
-registry_server = "cr.yandex/your-registry"
-registry_provider = "YC"  # Options: YC, AWS, GCP, Public
-molecule_container_name = "molecule-image"
-molecule_container_tag = "latest"
+registry_server = "ghcr.io"  # Default: ghcr.io
+registry_provider = "Public"  # Options: YC, AWS, GCP, Public
+molecule_container_name = "polar-team/diffusion-molecule-container"
+molecule_container_tag = "latest-amd64"  # Auto-detected: latest-amd64 or latest-arm64
 
 [vault]
 enabled = true
