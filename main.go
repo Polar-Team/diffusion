@@ -42,6 +42,7 @@ var (
 	RoleVersionFlag    string
 	AddCollectionFlag  string
 	TagFlag            string
+	ConvergeFlag       bool
 	VerifyFlag         bool
 	TestsOverWriteFlag bool
 	LintFlag           bool
@@ -803,6 +804,7 @@ func main() {
 	molCmd.Flags().StringVarP(&RoleFlag, "role", "r", RoleFlag, "role name")
 	molCmd.Flags().StringVarP(&OrgFlag, "org", "o", OrgFlag, "organization prefix")
 	molCmd.Flags().StringVarP(&TagFlag, "tag", "t", "", "ANSIBLE_RUN_TAGS value (optional)")
+	molCmd.Flags().BoolVar(&ConvergeFlag, "converge", false, "run molecule converge")
 	molCmd.Flags().BoolVar(&VerifyFlag, "verify", false, "run molecule verify")
 	molCmd.Flags().BoolVar(&TestsOverWriteFlag, "testsoverwrite", false, "overwrite molecule tests folder for remote or diffusion type")
 	molCmd.Flags().BoolVar(&LintFlag, "lint", false, "run linting (yamllint / ansible-lint)")
@@ -1450,8 +1452,8 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// handle lint/verify/idempotence by ensuring files are copied and running docker exec commands
-	if LintFlag || VerifyFlag || IdempotenceFlag {
+	// handle converge/lint/verify/idempotence by ensuring files are copied and running docker exec commands
+	if ConvergeFlag || LintFlag || VerifyFlag || IdempotenceFlag {
 		if err := copyRoleData(path, roleMoleculePath); err != nil {
 			log.Printf("\033[33mwarning copying data: %v\033[0m", err)
 		}
@@ -1459,6 +1461,19 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		defaultTestsDir := filepath.Join(roleMoleculePath, "molecule", "default", "tests")
 		if err := os.MkdirAll(defaultTestsDir, 0o755); err != nil {
 			log.Printf("\033[33mwarning: cannot create tests dir: %v\033[0m", err)
+		}
+		if ConvergeFlag {
+			tagEnv := ""
+			if TagFlag != "" {
+				tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", TagFlag)
+			}
+			cmdStr := fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, tagEnv)
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
+				log.Printf("\033[31mConverge failed: %v\033[0m", err)
+				os.Exit(1)
+			}
+			log.Printf("\033[32mConverge Done Successfully!\033[0m")
+			return nil
 		}
 		if LintFlag {
 			// run yamllint and ansible-lint inside container
