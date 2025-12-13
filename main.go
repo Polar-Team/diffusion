@@ -511,6 +511,176 @@ func main() {
 
 	rootCmd.AddCommand(artifactCmd)
 
+	// cache command for managing Ansible cache
+	cacheCmd := &cobra.Command{
+		Use:   "cache",
+		Short: "Manage Ansible cache for faster role execution",
+	}
+
+	cacheEnableCmd := &cobra.Command{
+		Use:   "enable",
+		Short: "Enable Ansible cache for this role",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// Generate or get cache ID
+			cacheID, err := GetOrCreateCacheID(config)
+			if err != nil {
+				return fmt.Errorf("failed to generate cache ID: %w", err)
+			}
+
+			// Create cache directory
+			cacheDir, err := EnsureCacheDir(cacheID)
+			if err != nil {
+				return fmt.Errorf("failed to create cache directory: %w", err)
+			}
+
+			// Update config
+			if config.CacheConfig == nil {
+				config.CacheConfig = &CacheSettings{}
+			}
+			config.CacheConfig.Enabled = true
+			config.CacheConfig.CacheID = cacheID
+
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			fmt.Printf("\033[32mCache enabled for this role\033[0m\n")
+			fmt.Printf("\033[35mCache ID: \033[0m\033[38;2;127;255;212m%s\033[0m\n", cacheID)
+			fmt.Printf("\033[35mCache Directory: \033[0m\033[38;2;127;255;212m%s\033[0m\n", cacheDir)
+			return nil
+		},
+	}
+
+	cacheDisableCmd := &cobra.Command{
+		Use:   "disable",
+		Short: "Disable Ansible cache for this role",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			if config.CacheConfig == nil {
+				fmt.Println("\033[33mCache is not configured\033[0m")
+				return nil
+			}
+
+			config.CacheConfig.Enabled = false
+
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			fmt.Printf("\033[32mCache disabled for this role\033[0m\n")
+			fmt.Printf("\033[33mNote: Cache directory is preserved. Use 'diffusion cache clean' to remove it.\033[0m\n")
+			return nil
+		},
+	}
+
+	cacheCleanCmd := &cobra.Command{
+		Use:   "clean",
+		Short: "Clean the Ansible cache for this role",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			if config.CacheConfig == nil || config.CacheConfig.CacheID == "" {
+				fmt.Println("\033[33mNo cache configured for this role\033[0m")
+				return nil
+			}
+
+			cacheID := config.CacheConfig.CacheID
+
+			// Get cache size before cleaning
+			size, _ := GetCacheSize(cacheID)
+
+			if err := CleanupCache(cacheID); err != nil {
+				return fmt.Errorf("failed to clean cache: %w", err)
+			}
+
+			fmt.Printf("\033[32mCache cleaned successfully\033[0m\n")
+			if size > 0 {
+				fmt.Printf("\033[35mFreed: \033[0m\033[38;2;127;255;212m%.2f MB\033[0m\n", float64(size)/(1024*1024))
+			}
+			return nil
+		},
+	}
+
+	cacheStatusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show cache status for this role",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			if config.CacheConfig == nil {
+				fmt.Println("\033[33mCache is not configured for this role\033[0m")
+				return nil
+			}
+
+			fmt.Println("\033[35m[Cache Status]\033[0m")
+			fmt.Printf("  Enabled:     \033[38;2;127;255;212m%t\033[0m\n", config.CacheConfig.Enabled)
+			fmt.Printf("  Cache ID:    \033[38;2;127;255;212m%s\033[0m\n", config.CacheConfig.CacheID)
+
+			if config.CacheConfig.CacheID != "" {
+				cacheDir, _ := GetCacheDir(config.CacheConfig.CacheID)
+				fmt.Printf("  Cache Path:  \033[38;2;127;255;212m%s\033[0m\n", cacheDir)
+
+				size, err := GetCacheSize(config.CacheConfig.CacheID)
+				if err == nil && size > 0 {
+					fmt.Printf("  Cache Size:  \033[38;2;127;255;212m%.2f MB\033[0m\n", float64(size)/(1024*1024))
+				} else {
+					fmt.Printf("  Cache Size:  \033[38;2;127;255;212m0 MB (empty)\033[0m\n")
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cacheListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all cache directories",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			caches, err := ListCaches()
+			if err != nil {
+				return fmt.Errorf("failed to list caches: %w", err)
+			}
+
+			if len(caches) == 0 {
+				fmt.Println("\033[33mNo cache directories found\033[0m")
+				return nil
+			}
+
+			fmt.Println("\033[35m[Cache Directories]\033[0m")
+			for _, cache := range caches {
+				// Extract cache ID from directory name (role_<id>)
+				cacheID := cache[5:] // Remove "role_" prefix
+				size, _ := GetCacheSize(cacheID)
+				fmt.Printf("  \033[32m✓\033[0m %s - \033[38;2;127;255;212m%.2f MB\033[0m\n", cache, float64(size)/(1024*1024))
+			}
+
+			return nil
+		},
+	}
+
+	cacheCmd.AddCommand(cacheEnableCmd)
+	cacheCmd.AddCommand(cacheDisableCmd)
+	cacheCmd.AddCommand(cacheCleanCmd)
+	cacheCmd.AddCommand(cacheStatusCmd)
+	cacheCmd.AddCommand(cacheListCmd)
+
+	rootCmd.AddCommand(cacheCmd)
+
 	// m
 	molCmd := &cobra.Command{
 		Use:   "molecule",
@@ -1440,19 +1610,39 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				log.Printf("compact-wsl failed: %v", err)
 			}
 		}
-		// create
-		if err := YcCliInit(); err != nil {
-			log.Printf("\033[32myc init warning: %v\033[0m", err)
-		}
-		if config.ContainerRegistry.RegistryProvider != "Public" {
-
-			switch config.ContainerRegistry.RegistryProvider {
-			case "YC":
-				if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
-					log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
-				}
-
+		// Initialize CLI and login based on registry provider
+		switch config.ContainerRegistry.RegistryProvider {
+		case "YC":
+			// Yandex Cloud: Initialize yc CLI and login
+			if err := YcCliInit(); err != nil {
+				log.Printf("\033[33myc init warning: %v\033[0m", err)
 			}
+			if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
+				log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
+			}
+		case "AWS":
+			// AWS: Initialize AWS CLI and login to ECR (placeholder)
+			// if err := runCommand("aws", "configure", "..."); err != nil {
+			//     log.Printf("\033[33maws configure warning: %v\033[0m", err)
+			// }
+			// if err := runCommand("aws", "ecr", "get-login-password", "..."); err != nil {
+			//     log.Printf("\033[33maws ecr login failed: %v\033[0m", err)
+			// }
+			log.Printf("\033[33mAWS ECR authentication not yet implemented\033[0m")
+		case "GCP":
+			// GCP: Initialize gcloud CLI and login to Artifact Registry (placeholder)
+			// if err := runCommand("gcloud", "init", "..."); err != nil {
+			//     log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
+			// }
+			// if err := runCommand("gcloud", "auth", "configure-docker", "..."); err != nil {
+			//     log.Printf("\033[33mgcloud docker auth failed: %v\033[0m", err)
+			// }
+			log.Printf("\033[33mGCP Artifact Registry authentication not yet implemented\033[0m")
+		case "Public":
+			// Public registry: No CLI init or authentication needed
+			log.Printf("\033[35mUsing public registry, skipping CLI initialization and authentication\033[0m")
+		default:
+			log.Printf("\033[33mUnknown registry provider '%s', skipping CLI initialization\033[0m", config.ContainerRegistry.RegistryProvider)
 		}
 		// run container
 		// docker run --rm -d --name=molecule-$role -v "$path/molecule:/opt/molecule" -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e ... --privileged --pull always cr.yandex/...
@@ -1464,6 +1654,30 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			"-e", "TOKEN=" + os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN=" + os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR=" + os.Getenv("VAULT_ADDR"),
+		}
+
+		// Add cache volume mounts if enabled (roles and collections only)
+		if config.CacheConfig != nil && config.CacheConfig.Enabled && config.CacheConfig.CacheID != "" {
+			cacheDir, err := EnsureCacheDir(config.CacheConfig.CacheID)
+			if err != nil {
+				log.Printf("\033[33mwarning: failed to create cache directory: %v\033[0m", err)
+			} else {
+				// Create subdirectories for roles and collections
+				rolesDir := filepath.Join(cacheDir, "roles")
+				collectionsDir := filepath.Join(cacheDir, "collections")
+
+				if err := os.MkdirAll(rolesDir, 0755); err != nil {
+					log.Printf("\033[33mwarning: failed to create roles cache directory: %v\033[0m", err)
+				}
+				if err := os.MkdirAll(collectionsDir, 0755); err != nil {
+					log.Printf("\033[33mwarning: failed to create collections cache directory: %v\033[0m", err)
+				}
+
+				// Mount only roles and collections directories
+				args = append(args, "-v", fmt.Sprintf("%s:/root/.ansible/roles", rolesDir))
+				args = append(args, "-v", fmt.Sprintf("%s:/root/.ansible/collections", collectionsDir))
+				log.Printf("\033[32mCache enabled: mounting roles and collections from %s\033[0m", cacheDir)
+			}
 		}
 
 		// Add all indexed GIT environment variables
@@ -1499,8 +1713,24 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// docker exec login to cr.yandex inside container
-	_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `echo $TOKEN | docker login cr.yandex --username iam --password-stdin`)
+	// docker exec login to registry inside container (provider-specific)
+	switch config.ContainerRegistry.RegistryProvider {
+	case "YC":
+		// Yandex Cloud registry login
+		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `echo $TOKEN | docker login cr.yandex --username iam --password-stdin`)
+	case "AWS":
+		// AWS ECR login would go here if needed
+		// _ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `aws ecr get-login-password | docker login ...`)
+	case "GCP":
+		// GCP Artifact Registry login would go here if needed
+		// _ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `gcloud auth print-access-token | docker login ...`)
+	case "Public":
+		// No login needed for public registries
+		log.Printf("\033[35mUsing public registry, skipping authentication\033[0m")
+	default:
+		// Unknown provider, skip login
+		log.Printf("\033[33mUnknown registry provider '%s', skipping authentication\033[0m", config.ContainerRegistry.RegistryProvider)
+	}
 
 	// copy files into molecule structure
 	if err := copyRoleData(path, roleMoleculePath); err != nil {

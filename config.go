@@ -62,6 +62,12 @@ type TestsSettings struct {
 	RemoteRepositories []string `toml:"remote_repositories,omitempty"`
 }
 
+type CacheSettings struct {
+	Enabled   bool   `toml:"enabled"`
+	CacheID   string `toml:"cache_id,omitempty"`   // Unique identifier for this role's cache
+	CachePath string `toml:"cache_path,omitempty"` // Custom cache path (optional)
+}
+
 type Config struct {
 	ContainerRegistry *ContainerRegistry `toml:"container_registry"`
 	HashicorpVault    *HashicorpVault    `toml:"vault"`
@@ -69,6 +75,7 @@ type Config struct {
 	YamlLintConfig    *YamlLint          `toml:"yaml_lint"`
 	AnsibleLintConfig *AnsibleLint       `toml:"ansible_lint"`
 	TestsConfig       *TestsSettings     `toml:"tests"`
+	CacheConfig       *CacheSettings     `toml:"cache,omitempty"`
 }
 
 // LoadConfig reads configuration from a TOML file in the project directory

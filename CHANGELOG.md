@@ -5,6 +5,21 @@ All notable changes to the Diffusion project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Ansible Cache Feature**: Persist Ansible roles and collections for faster role execution
+  - CLI commands: `cache enable`, `cache disable`, `cache clean`, `cache status`, `cache list`
+  - Automatic cache directory management at `~/.diffusion/cache/role_<cache_id>/`
+  - Per-role isolated caching with unique cache IDs
+  - Mounts only `roles/` and `collections/` subdirectories to avoid conflicts
+  - Mounted to `/root/.ansible/roles` and `/root/.ansible/collections` in container
+  - Significant performance improvement (3-10x faster on subsequent runs)
+  - See [CACHE_FEATURE.md](CACHE_FEATURE.md) for details
+- **Registry Provider Authentication**: Provider-specific CLI initialization and authentication
+  - YC: Runs `yc` CLI init and logs into Yandex Cloud Registry
+  - AWS: Placeholder for AWS CLI and ECR authentication
+  - GCP: Placeholder for gcloud CLI and Artifact Registry authentication
+  - Public: Skips all CLI initialization and authentication
+  - Only executes provider-specific commands based on configuration
+  - Prevents unnecessary CLI calls for public registries
 - **Artifact Management System**: Secure credential storage for multiple private repositories
   - New `ArtifactSourcesHelper()` function for interactive onboarding
   - Automatic credential storage during initial configuration
