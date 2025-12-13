@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"os"
 	"path/filepath"
+
+	"github.com/BurntSushi/toml"
 )
 
 type YamlLintRules struct {
@@ -64,7 +65,7 @@ type TestsSettings struct {
 type Config struct {
 	ContainerRegistry *ContainerRegistry `toml:"container_registry"`
 	HashicorpVault    *HashicorpVault    `toml:"vault"`
-	ArtifactUrl       string             `toml:"url"`
+	ArtifactSources   []ArtifactSource   `toml:"artifact_sources,omitempty"`
 	YamlLintConfig    *YamlLint          `toml:"yaml_lint"`
 	AnsibleLintConfig *AnsibleLint       `toml:"ansible_lint"`
 	TestsConfig       *TestsSettings     `toml:"tests"`

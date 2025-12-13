@@ -75,15 +75,16 @@ const (
 
 // Environment variables
 const (
-	EnvToken          = "TOKEN"
-	EnvVaultToken     = "VAULT_TOKEN"
-	EnvVaultAddr      = "VAULT_ADDR"
-	EnvGitUser        = "GIT_USER"
-	EnvGitPassword    = "GIT_PASSWORD"
-	EnvGitURL         = "GIT_URL"
-	EnvYCCloudID      = "YC_CLOUD_ID"
-	EnvYCFolderID     = "YC_FOLDER_ID"
-	EnvAnsibleRunTags = "ANSIBLE_RUN_TAGS"
+	EnvToken           = "TOKEN"
+	EnvVaultToken      = "VAULT_TOKEN"
+	EnvVaultAddr       = "VAULT_ADDR"
+	EnvGitUserPrefix   = "GIT_USER_"     // Indexed: GIT_USER_1, GIT_USER_2, etc.
+	EnvGitPassPrefix   = "GIT_PASSWORD_" // Indexed: GIT_PASSWORD_1, GIT_PASSWORD_2, etc.
+	EnvGitURLPrefix    = "GIT_URL_"      // Indexed: GIT_URL_1, GIT_URL_2, etc.
+	EnvYCCloudID       = "YC_CLOUD_ID"
+	EnvYCFolderID      = "YC_FOLDER_ID"
+	EnvAnsibleRunTags  = "ANSIBLE_RUN_TAGS"
+	MaxArtifactSources = 10 // Maximum number of artifact sources supported
 )
 
 // Error messages

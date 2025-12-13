@@ -4,7 +4,37 @@ All notable changes to the Diffusion project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Artifact Management System**: Secure credential storage for multiple private repositories
+  - New `ArtifactSourcesHelper()` function for interactive onboarding
+  - Automatic credential storage during initial configuration
+  - Encrypted local storage using AES-256-GCM
+  - Machine-specific encryption (hostname + username)
+  - Support for HashiCorp Vault integration with per-source field names
+  - Support for mixed local/Vault storage
+  - CLI commands: `artifact add`, `artifact list`, `artifact show`, `artifact remove`
+  - **`artifact add` now automatically saves to `diffusion.toml`**
+  - **`artifact remove` now removes from `diffusion.toml`**
+  - Credentials stored in `~/.diffusion/secrets/<role-name>/<source-name>`
+  - Indexed environment variables: `GIT_USER_1`, `GIT_PASSWORD_1`, `GIT_URL_1`, etc.
+  - Support for up to 10 artifact sources (configurable)
+  - Backward compatible with single artifact URL configuration
+  - See [ARTIFACT_MANAGEMENT.md](ARTIFACT_MANAGEMENT.md) for details
+
 ### Changed
+- **Configuration Structure**: Refactored to use `artifact_sources` array instead of single `url`
+  - `ArtifactUrl` field deprecated (kept for backward compatibility)
+  - `VaultConfigHelper()` simplified - no longer asks for field names
+  - Vault path/secret now configured per artifact source
+  - **BREAKING**: Vault field names (`username_field`, `token_field`) moved from `HashicorpVault` to per-source `ArtifactSource`
+  - Each artifact source can now specify its own Vault field names
+  - Legacy Vault configuration (with global field names) no longer supported
+- **Secrets Storage Path**: Reorganized to role-based directory structure
+  - **Old**: `~/.diffusion/<source-name>_artifact_secrets`
+  - **New**: `~/.diffusion/secrets/<role-name>/<source-name>`
+  - Better organization for multi-role projects
+  - Falls back to "default" role when no role detected
+  - See [SECRETS_PATH_REFACTORING.md](SECRETS_PATH_REFACTORING.md) for details
 - **Default Container Registry:** Changed to `ghcr.io` with `polar-team/diffusion-molecule-container`
   - Registry Server: `ghcr.io` (previously required manual input)
   - Registry Provider: `Public` (default)

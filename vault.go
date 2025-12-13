@@ -2,18 +2,17 @@ package main
 
 import (
 	"context"
-	"github.com/hashicorp/vault-client-go"
-	"github.com/hashicorp/vault-client-go/schema"
 	"log"
 	"time"
+
+	"github.com/hashicorp/vault-client-go"
+	"github.com/hashicorp/vault-client-go/schema"
 )
 
 type HashicorpVault struct {
 	HashicorpVaultIntegration bool   `toml:"enabled"`
-	SecretKV2Path             string `toml:"secret_kv2_path,omitempty"`
-	SecretKV2Name             string `toml:"secret_kv2_name,omitempty"`
-	UserNameField             string `toml:"username_field,omitempty"`
-	TokenField                string `toml:"token_field,omitempty"`
+	SecretKV2Path             string `toml:"secret_kv2_path,omitempty"` // Deprecated: use per-source vault configuration
+	SecretKV2Name             string `toml:"secret_kv2_name,omitempty"` // Deprecated: use per-source vault configuration
 }
 
 func vault_client(ctx context.Context, path string, secret string) *vault.Response[schema.KvV2ReadResponse] {

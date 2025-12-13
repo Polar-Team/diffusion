@@ -1,0 +1,386 @@
+package main
+
+import (
+	"os"
+	"testing"
+)
+
+// TestArtifactAddToConfig tests that artifact add command adds source to config
+func TestArtifactAddToConfig(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Create a minimal config
+	config := &Config{
+		ContainerRegistry: &ContainerRegistry{
+			RegistryServer:        "ghcr.io",
+			RegistryProvider:      "Public",
+			MoleculeContainerName: "test",
+			MoleculeContainerTag:  "latest",
+		},
+		HashicorpVault: &HashicorpVault{
+			HashicorpVaultIntegration: false,
+		},
+		ArtifactSources: []ArtifactSource{},
+		YamlLintConfig: &YamlLint{
+			Extends: "default",
+			Ignore:  []string{},
+			Rules:   &YamlLintRules{},
+		},
+		AnsibleLintConfig: &AnsibleLint{
+			ExcludedPaths: []string{},
+			WarnList:      []string{},
+			SkipList:      []string{},
+		},
+		TestsConfig: &TestsSettings{
+			Type: "diffusion",
+		},
+	}
+
+	// Save initial config
+	if err := SaveConfig(config); err != nil {
+		t.Fatalf("Failed to save initial config: %v", err)
+	}
+
+	// Simulate adding an artifact source (local storage)
+	newSource := ArtifactSource{
+		Name:     "test-source",
+		URL:      "https://test.example.com",
+		UseVault: false,
+	}
+
+	// Load config
+	loadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Add source
+	loadedConfig.ArtifactSources = append(loadedConfig.ArtifactSources, newSource)
+
+	// Save config
+	if err := SaveConfig(loadedConfig); err != nil {
+		t.Fatalf("Failed to save config with new source: %v", err)
+	}
+
+	// Reload and verify
+	reloadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to reload config: %v", err)
+	}
+
+	if len(reloadedConfig.ArtifactSources) != 1 {
+		t.Errorf("Expected 1 artifact source, got %d", len(reloadedConfig.ArtifactSources))
+	}
+
+	if reloadedConfig.ArtifactSources[0].Name != "test-source" {
+		t.Errorf("Expected source name 'test-source', got '%s'", reloadedConfig.ArtifactSources[0].Name)
+	}
+
+	if reloadedConfig.ArtifactSources[0].URL != "https://test.example.com" {
+		t.Errorf("Expected URL 'https://test.example.com', got '%s'", reloadedConfig.ArtifactSources[0].URL)
+	}
+}
+
+// TestArtifactRemoveFromConfig tests that artifact remove command removes source from config
+func TestArtifactRemoveFromConfig(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Create a config with artifact sources
+	config := &Config{
+		ContainerRegistry: &ContainerRegistry{
+			RegistryServer:        "ghcr.io",
+			RegistryProvider:      "Public",
+			MoleculeContainerName: "test",
+			MoleculeContainerTag:  "latest",
+		},
+		HashicorpVault: &HashicorpVault{
+			HashicorpVaultIntegration: false,
+		},
+		ArtifactSources: []ArtifactSource{
+			{
+				Name:     "source1",
+				URL:      "https://source1.example.com",
+				UseVault: false,
+			},
+			{
+				Name:     "source2",
+				URL:      "https://source2.example.com",
+				UseVault: false,
+			},
+		},
+		YamlLintConfig: &YamlLint{
+			Extends: "default",
+			Ignore:  []string{},
+			Rules:   &YamlLintRules{},
+		},
+		AnsibleLintConfig: &AnsibleLint{
+			ExcludedPaths: []string{},
+			WarnList:      []string{},
+			SkipList:      []string{},
+		},
+		TestsConfig: &TestsSettings{
+			Type: "diffusion",
+		},
+	}
+
+	// Save initial config
+	if err := SaveConfig(config); err != nil {
+		t.Fatalf("Failed to save initial config: %v", err)
+	}
+
+	// Load config
+	loadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Remove source1
+	for i, source := range loadedConfig.ArtifactSources {
+		if source.Name == "source1" {
+			loadedConfig.ArtifactSources = append(loadedConfig.ArtifactSources[:i], loadedConfig.ArtifactSources[i+1:]...)
+			break
+		}
+	}
+
+	// Save config
+	if err := SaveConfig(loadedConfig); err != nil {
+		t.Fatalf("Failed to save config after removal: %v", err)
+	}
+
+	// Reload and verify
+	reloadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to reload config: %v", err)
+	}
+
+	if len(reloadedConfig.ArtifactSources) != 1 {
+		t.Errorf("Expected 1 artifact source after removal, got %d", len(reloadedConfig.ArtifactSources))
+	}
+
+	if reloadedConfig.ArtifactSources[0].Name != "source2" {
+		t.Errorf("Expected remaining source to be 'source2', got '%s'", reloadedConfig.ArtifactSources[0].Name)
+	}
+}
+
+// TestArtifactUpdateInConfig tests that updating an existing source works
+func TestArtifactUpdateInConfig(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Create a config with an artifact source
+	config := &Config{
+		ContainerRegistry: &ContainerRegistry{
+			RegistryServer:        "ghcr.io",
+			RegistryProvider:      "Public",
+			MoleculeContainerName: "test",
+			MoleculeContainerTag:  "latest",
+		},
+		HashicorpVault: &HashicorpVault{
+			HashicorpVaultIntegration: false,
+		},
+		ArtifactSources: []ArtifactSource{
+			{
+				Name:     "test-source",
+				URL:      "https://old-url.example.com",
+				UseVault: false,
+			},
+		},
+		YamlLintConfig: &YamlLint{
+			Extends: "default",
+			Ignore:  []string{},
+			Rules:   &YamlLintRules{},
+		},
+		AnsibleLintConfig: &AnsibleLint{
+			ExcludedPaths: []string{},
+			WarnList:      []string{},
+			SkipList:      []string{},
+		},
+		TestsConfig: &TestsSettings{
+			Type: "diffusion",
+		},
+	}
+
+	// Save initial config
+	if err := SaveConfig(config); err != nil {
+		t.Fatalf("Failed to save initial config: %v", err)
+	}
+
+	// Load config
+	loadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Update the source
+	for i, source := range loadedConfig.ArtifactSources {
+		if source.Name == "test-source" {
+			loadedConfig.ArtifactSources[i].URL = "https://new-url.example.com"
+			loadedConfig.ArtifactSources[i].UseVault = true
+			loadedConfig.ArtifactSources[i].VaultPath = "secret/data/test"
+			loadedConfig.ArtifactSources[i].VaultSecretName = "test-secret"
+			loadedConfig.ArtifactSources[i].VaultUsernameField = "user"
+			loadedConfig.ArtifactSources[i].VaultTokenField = "pass"
+			break
+		}
+	}
+
+	// Save config
+	if err := SaveConfig(loadedConfig); err != nil {
+		t.Fatalf("Failed to save updated config: %v", err)
+	}
+
+	// Reload and verify
+	reloadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to reload config: %v", err)
+	}
+
+	if len(reloadedConfig.ArtifactSources) != 1 {
+		t.Errorf("Expected 1 artifact source, got %d", len(reloadedConfig.ArtifactSources))
+	}
+
+	source := reloadedConfig.ArtifactSources[0]
+	if source.URL != "https://new-url.example.com" {
+		t.Errorf("Expected updated URL 'https://new-url.example.com', got '%s'", source.URL)
+	}
+
+	if !source.UseVault {
+		t.Error("Expected UseVault to be true")
+	}
+
+	if source.VaultPath != "secret/data/test" {
+		t.Errorf("Expected VaultPath 'secret/data/test', got '%s'", source.VaultPath)
+	}
+
+	if source.VaultUsernameField != "user" {
+		t.Errorf("Expected VaultUsernameField 'user', got '%s'", source.VaultUsernameField)
+	}
+
+	if source.VaultTokenField != "pass" {
+		t.Errorf("Expected VaultTokenField 'pass', got '%s'", source.VaultTokenField)
+	}
+}
+
+// TestArtifactVaultSourceInConfig tests that Vault-based sources are saved correctly
+func TestArtifactVaultSourceInConfig(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Create a minimal config
+	config := &Config{
+		ContainerRegistry: &ContainerRegistry{
+			RegistryServer:        "ghcr.io",
+			RegistryProvider:      "Public",
+			MoleculeContainerName: "test",
+			MoleculeContainerTag:  "latest",
+		},
+		HashicorpVault: &HashicorpVault{
+			HashicorpVaultIntegration: true,
+		},
+		ArtifactSources: []ArtifactSource{},
+		YamlLintConfig: &YamlLint{
+			Extends: "default",
+			Ignore:  []string{},
+			Rules:   &YamlLintRules{},
+		},
+		AnsibleLintConfig: &AnsibleLint{
+			ExcludedPaths: []string{},
+			WarnList:      []string{},
+			SkipList:      []string{},
+		},
+		TestsConfig: &TestsSettings{
+			Type: "diffusion",
+		},
+	}
+
+	// Save initial config
+	if err := SaveConfig(config); err != nil {
+		t.Fatalf("Failed to save initial config: %v", err)
+	}
+
+	// Add a Vault-based source
+	vaultSource := ArtifactSource{
+		Name:               "vault-source",
+		URL:                "https://vault.example.com",
+		UseVault:           true,
+		VaultPath:          "secret/data/artifacts",
+		VaultSecretName:    "vault-source",
+		VaultUsernameField: "git_user",
+		VaultTokenField:    "git_token",
+	}
+
+	// Load config
+	loadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Add source
+	loadedConfig.ArtifactSources = append(loadedConfig.ArtifactSources, vaultSource)
+
+	// Save config
+	if err := SaveConfig(loadedConfig); err != nil {
+		t.Fatalf("Failed to save config with Vault source: %v", err)
+	}
+
+	// Reload and verify
+	reloadedConfig, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("Failed to reload config: %v", err)
+	}
+
+	if len(reloadedConfig.ArtifactSources) != 1 {
+		t.Errorf("Expected 1 artifact source, got %d", len(reloadedConfig.ArtifactSources))
+	}
+
+	source := reloadedConfig.ArtifactSources[0]
+	if !source.UseVault {
+		t.Error("Expected UseVault to be true")
+	}
+
+	if source.VaultPath != "secret/data/artifacts" {
+		t.Errorf("Expected VaultPath 'secret/data/artifacts', got '%s'", source.VaultPath)
+	}
+
+	if source.VaultSecretName != "vault-source" {
+		t.Errorf("Expected VaultSecretName 'vault-source', got '%s'", source.VaultSecretName)
+	}
+
+	if source.VaultUsernameField != "git_user" {
+		t.Errorf("Expected VaultUsernameField 'git_user', got '%s'", source.VaultUsernameField)
+	}
+
+	if source.VaultTokenField != "git_token" {
+		t.Errorf("Expected VaultTokenField 'git_token', got '%s'", source.VaultTokenField)
+	}
+}

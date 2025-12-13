@@ -296,7 +296,222 @@ func main() {
 
 	rootCmd.AddCommand(roleCmd)
 
-	// molecule command
+	// artifact command for managing private artifact sources
+	artifactCmd := &cobra.Command{
+		Use:   "artifact",
+		Short: "Manage private artifact repository credentials",
+	}
+
+	artifactAddCmd := &cobra.Command{
+		Use:   "add [source-name]",
+		Short: "Add credentials for a private artifact source",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceName := args[0]
+			reader := bufio.NewReader(os.Stdin)
+
+			fmt.Printf("Enter URL for %s: ", sourceName)
+			url, _ := reader.ReadString('\n')
+			url = strings.TrimSpace(url)
+
+			fmt.Print("Store credentials in Vault? (y/N): ")
+			useVaultStr, _ := reader.ReadString('\n')
+			useVaultStr = strings.TrimSpace(strings.ToLower(useVaultStr))
+			useVault := useVaultStr == "y"
+
+			// Create artifact source
+			source := ArtifactSource{
+				Name:     sourceName,
+				URL:      url,
+				UseVault: useVault,
+			}
+
+			if useVault {
+				fmt.Printf("Enter Vault path for %s (e.g., secret/data/artifacts): ", sourceName)
+				vaultPath, _ := reader.ReadString('\n')
+				source.VaultPath = strings.TrimSpace(vaultPath)
+
+				fmt.Printf("Enter Vault secret name for %s: ", sourceName)
+				vaultSecret, _ := reader.ReadString('\n')
+				source.VaultSecretName = strings.TrimSpace(vaultSecret)
+
+				fmt.Print("Enter Username Field in Vault (default: username): ")
+				usernameField, _ := reader.ReadString('\n')
+				usernameField = strings.TrimSpace(usernameField)
+				if usernameField == "" {
+					usernameField = "username"
+				}
+				source.VaultUsernameField = usernameField
+
+				fmt.Print("Enter Token Field in Vault (default: token): ")
+				tokenField, _ := reader.ReadString('\n')
+				tokenField = strings.TrimSpace(tokenField)
+				if tokenField == "" {
+					tokenField = "token"
+				}
+				source.VaultTokenField = tokenField
+
+				fmt.Printf("\033[32mArtifact source '%s' configured to use Vault at %s/%s\033[0m\n", sourceName, source.VaultPath, source.VaultSecretName)
+			} else {
+				// Local storage - prompt for credentials
+				fmt.Printf("Enter Username: ")
+				username, _ := reader.ReadString('\n')
+				username = strings.TrimSpace(username)
+
+				fmt.Printf("Enter Token/Password: ")
+				token, _ := reader.ReadString('\n')
+				token = strings.TrimSpace(token)
+
+				creds := &ArtifactCredentials{
+					Name:     sourceName,
+					URL:      url,
+					Username: username,
+					Token:    token,
+				}
+
+				if err := SaveArtifactCredentials(creds); err != nil {
+					return fmt.Errorf("failed to save credentials: %w", err)
+				}
+
+				roleName := getCurrentRoleName()
+				if roleName == "" {
+					roleName = "default"
+				}
+				fmt.Printf("\033[32mCredentials for '%s' saved successfully (encrypted in ~/.diffusion/secrets/%s/%s)\033[0m\n", sourceName, roleName, sourceName)
+			}
+
+			// Load existing config or create new one
+			config, err := LoadConfig()
+			if err != nil {
+				// Config doesn't exist, create minimal config
+				config = &Config{
+					ArtifactSources: []ArtifactSource{},
+				}
+			}
+
+			// Check if source already exists
+			for i, existing := range config.ArtifactSources {
+				if existing.Name == sourceName {
+					// Update existing source
+					config.ArtifactSources[i] = source
+					if err := SaveConfig(config); err != nil {
+						return fmt.Errorf("failed to update config: %w", err)
+					}
+					fmt.Printf("\033[32mUpdated artifact source '%s' in diffusion.toml\033[0m\n", sourceName)
+					return nil
+				}
+			}
+
+			// Add new source
+			config.ArtifactSources = append(config.ArtifactSources, source)
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			fmt.Printf("\033[32mAdded artifact source '%s' to diffusion.toml\033[0m\n", sourceName)
+			return nil
+		},
+	}
+
+	artifactListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all stored artifact sources",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sources, err := ListStoredCredentials()
+			if err != nil {
+				return fmt.Errorf("failed to list credentials: %w", err)
+			}
+
+			if len(sources) == 0 {
+				fmt.Println("No stored artifact credentials found.")
+				return nil
+			}
+
+			fmt.Println("\033[35mStored Artifact Sources:\033[0m")
+			for _, source := range sources {
+				creds, err := LoadArtifactCredentials(source)
+				if err != nil {
+					fmt.Printf("  \033[31m✗\033[0m %s (error loading: %v)\n", source, err)
+					continue
+				}
+				fmt.Printf("  \033[32m✓\033[0m %s - %s\n", creds.Name, creds.URL)
+			}
+			return nil
+		},
+	}
+
+	artifactRemoveCmd := &cobra.Command{
+		Use:   "remove [source-name]",
+		Short: "Remove stored credentials for an artifact source",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceName := args[0]
+
+			// Delete encrypted credentials (if they exist)
+			if err := DeleteArtifactCredentials(sourceName); err != nil {
+				// Don't fail if credentials don't exist - might be Vault-only
+				fmt.Printf("\033[33mNote: No local credentials found for '%s' (may be using Vault)\033[0m\n", sourceName)
+			} else {
+				fmt.Printf("\033[32mLocal credentials for '%s' removed successfully\033[0m\n", sourceName)
+			}
+
+			// Remove from config file
+			config, err := LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// Find and remove the source
+			found := false
+			for i, source := range config.ArtifactSources {
+				if source.Name == sourceName {
+					config.ArtifactSources = append(config.ArtifactSources[:i], config.ArtifactSources[i+1:]...)
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("artifact source '%s' not found in diffusion.toml", sourceName)
+			}
+
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			fmt.Printf("\033[32mRemoved artifact source '%s' from diffusion.toml\033[0m\n", sourceName)
+			return nil
+		},
+	}
+
+	artifactShowCmd := &cobra.Command{
+		Use:   "show [source-name]",
+		Short: "Show details for an artifact source (without token)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceName := args[0]
+
+			creds, err := LoadArtifactCredentials(sourceName)
+			if err != nil {
+				return fmt.Errorf("failed to load credentials: %w", err)
+			}
+
+			fmt.Printf("\033[35mArtifact Source: \033[0m\033[38;2;127;255;212m%s\033[0m\n", creds.Name)
+			fmt.Printf("\033[35mURL: \033[0m\033[38;2;127;255;212m%s\033[0m\n", creds.URL)
+			fmt.Printf("\033[35mUsername: \033[0m\033[38;2;127;255;212m%s\033[0m\n", creds.Username)
+			fmt.Printf("\033[35mToken: \033[0m\033[38;2;127;255;212m%s\033[0m\n", maskToken(creds.Token))
+			return nil
+		},
+	}
+
+	artifactCmd.AddCommand(artifactAddCmd)
+	artifactCmd.AddCommand(artifactListCmd)
+	artifactCmd.AddCommand(artifactRemoveCmd)
+	artifactCmd.AddCommand(artifactShowCmd)
+
+	rootCmd.AddCommand(artifactCmd)
+
+	// m
 	molCmd := &cobra.Command{
 		Use:   "molecule",
 		Short: "run molecule workflow (create/converge/verify/lint/idempotence/wipe)",
@@ -372,7 +587,7 @@ func main() {
 					MoleculeContainerTag:  moleculeContainerTag,
 				}
 
-				fmt.Print("Enable Vault Integration? (Y/n): ")
+				fmt.Print("Enable Vault Integration for artifact sources? (y/N): ")
 				vaultEnabledStr, _ := reader.ReadString('\n')
 				vaultEnabledStr = strings.TrimSpace(vaultEnabledStr)
 				if vaultEnabledStr == "" {
@@ -382,12 +597,15 @@ func main() {
 
 				HashicorpVaultSet := VaultConfigHelper(vaultEnabled)
 
+				// Configure artifact sources
+				ArtifactSourcesList := ArtifactSourcesHelper()
+
 				TestsSettings := TestsConfigSetup()
 
 				config = &Config{
 					ContainerRegistry: ContainerRegistry,
 					HashicorpVault:    HashicorpVaultSet,
-					ArtifactUrl:       "https://example.com/repo",
+					ArtifactSources:   ArtifactSourcesList,
 					YamlLintConfig:    YamlLintDefault,
 					AnsibleLintConfig: AnsibleLintDefault,
 					TestsConfig:       TestsSettings,
@@ -397,10 +615,6 @@ func main() {
 					log.Printf("\033[33mwarning saving new config: %v\033[0m", err)
 				}
 
-			}
-
-			if err := os.Setenv("GIT_URL", config.ArtifactUrl); err != nil {
-				log.Printf("Failed to set GIT_URL: %v", err)
 			}
 		},
 	}
@@ -455,16 +669,37 @@ func main() {
 			fmt.Println("\033[35m[HashiCorp Vault]\033[0m")
 			fmt.Printf("  Integration Enabled:     \033[38;2;127;255;212m%t\033[0m\n", config.HashicorpVault.HashicorpVaultIntegration)
 			if config.HashicorpVault.HashicorpVaultIntegration {
-				fmt.Printf("  Secret KV2 Path:         \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.SecretKV2Path)
-				fmt.Printf("  Secret KV2 Name:         \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.SecretKV2Name)
-				fmt.Printf("  Username Field:          \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.UserNameField)
-				fmt.Printf("  Token Field:             \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.TokenField)
+				if config.HashicorpVault.SecretKV2Path != "" {
+					fmt.Printf("  \033[33mLegacy Config Detected (deprecated):\033[0m\n")
+					fmt.Printf("    Secret KV2 Path:       \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.SecretKV2Path)
+					fmt.Printf("    Secret KV2 Name:       \033[38;2;127;255;212m%s\033[0m\n", config.HashicorpVault.SecretKV2Name)
+					fmt.Printf("  \033[33mPlease migrate to artifact_sources configuration\033[0m\n")
+				} else {
+					fmt.Printf("  \033[32mVault configured per artifact source\033[0m\n")
+				}
 			}
 			fmt.Println()
 
-			// Artifact URL
-			fmt.Println("\033[35m[Artifact Repository]\033[0m")
-			fmt.Printf("  URL:                     \033[38;2;127;255;212m%s\033[0m\n\n", config.ArtifactUrl)
+			// Artifact Sources
+			fmt.Println("\033[35m[Artifact Sources]\033[0m")
+			if len(config.ArtifactSources) > 0 {
+				for i, source := range config.ArtifactSources {
+					fmt.Printf("  Source %d:\n", i+1)
+					fmt.Printf("    Name:                  \033[38;2;127;255;212m%s\033[0m\n", source.Name)
+					fmt.Printf("    URL:                   \033[38;2;127;255;212m%s\033[0m\n", source.URL)
+					if source.UseVault {
+						fmt.Printf("    Storage:               \033[38;2;127;255;212mVault (%s/%s)\033[0m\n", source.VaultPath, source.VaultSecretName)
+						fmt.Printf("    Username Field:        \033[38;2;127;255;212m%s\033[0m\n", source.VaultUsernameField)
+						fmt.Printf("    Token Field:           \033[38;2;127;255;212m%s\033[0m\n", source.VaultTokenField)
+					} else {
+						fmt.Printf("    Storage:               \033[38;2;127;255;212mLocal (encrypted)\033[0m\n")
+					}
+				}
+			} else {
+				fmt.Printf("  \033[33mNo artifact sources configured\033[0m\n")
+				fmt.Printf("  \033[33mUse 'diffusion artifact add' to configure private repositories\033[0m\n")
+			}
+			fmt.Println()
 
 			// YAML Lint Config
 			fmt.Println("\033[35m[YAML Lint Configuration]\033[0m")
@@ -809,34 +1044,113 @@ func RequirementConfigSetup(collections []string) *Requirement {
 
 }
 
-func VaultConfigHelper(intergration bool) *HashicorpVault {
-	reader := bufio.NewReader(os.Stdin)
+func VaultConfigHelper(integration bool) *HashicorpVault {
+	return &HashicorpVault{
+		HashicorpVaultIntegration: integration,
+	}
+}
 
-	if !intergration {
-		return &HashicorpVault{
-			HashicorpVaultIntegration: false,
+func ArtifactSourcesHelper() []ArtifactSource {
+	reader := bufio.NewReader(os.Stdin)
+	var sources []ArtifactSource
+
+	fmt.Print("Configure artifact sources for private repositories? (y/N): ")
+	configureStr, _ := reader.ReadString('\n')
+	configureStr = strings.TrimSpace(strings.ToLower(configureStr))
+
+	if configureStr != "y" {
+		fmt.Println("Skipping artifact source configuration. You can add sources later with 'diffusion artifact add'")
+		return sources
+	}
+
+	for {
+		fmt.Print("\nEnter artifact source name (or press Enter to finish): ")
+		name, _ := reader.ReadString('\n')
+		name = strings.TrimSpace(name)
+
+		if name == "" {
+			break
+		}
+
+		fmt.Printf("Enter URL for %s: ", name)
+		url, _ := reader.ReadString('\n')
+		url = strings.TrimSpace(url)
+
+		fmt.Print("Store credentials in Vault? (y/N): ")
+		useVaultStr, _ := reader.ReadString('\n')
+		useVaultStr = strings.TrimSpace(strings.ToLower(useVaultStr))
+		useVault := useVaultStr == "y"
+
+		source := ArtifactSource{
+			Name:     name,
+			URL:      url,
+			UseVault: useVault,
+		}
+
+		if useVault {
+			fmt.Printf("Enter Vault path for %s (e.g., secret/data/artifacts): ", name)
+			vaultPath, _ := reader.ReadString('\n')
+			source.VaultPath = strings.TrimSpace(vaultPath)
+
+			fmt.Printf("Enter Vault secret name for %s: ", name)
+			vaultSecret, _ := reader.ReadString('\n')
+			source.VaultSecretName = strings.TrimSpace(vaultSecret)
+
+			fmt.Print("Enter Username Field in Vault (default: username): ")
+			usernameField, _ := reader.ReadString('\n')
+			usernameField = strings.TrimSpace(usernameField)
+			if usernameField == "" {
+				usernameField = "username"
+			}
+			source.VaultUsernameField = usernameField
+
+			fmt.Print("Enter Token Field in Vault (default: token): ")
+			tokenField, _ := reader.ReadString('\n')
+			tokenField = strings.TrimSpace(tokenField)
+			if tokenField == "" {
+				tokenField = "token"
+			}
+			source.VaultTokenField = tokenField
+
+			fmt.Printf("Credentials for '%s' will be retrieved from Vault at %s/%s (fields: %s, %s)\n",
+				name, source.VaultPath, source.VaultSecretName, source.VaultUsernameField, source.VaultTokenField)
+		} else {
+			// Prompt for credentials and save locally
+			fmt.Printf("Enter Username for %s: ", name)
+			username, _ := reader.ReadString('\n')
+			username = strings.TrimSpace(username)
+
+			fmt.Printf("Enter Token/Password for %s: ", name)
+			token, _ := reader.ReadString('\n')
+			token = strings.TrimSpace(token)
+
+			// Save credentials locally
+			creds := &ArtifactCredentials{
+				Name:     name,
+				URL:      url,
+				Username: username,
+				Token:    token,
+			}
+
+			if err := SaveArtifactCredentials(creds); err != nil {
+				fmt.Printf("\033[33mWarning: failed to save credentials for '%s': %v\033[0m\n", name, err)
+			} else {
+				fmt.Printf("\033[32mCredentials for '%s' saved locally (encrypted)\033[0m\n", name)
+			}
+		}
+
+		sources = append(sources, source)
+		fmt.Printf("\033[32mAdded artifact source: %s\033[0m\n", name)
+
+		fmt.Print("Add another artifact source? (y/N): ")
+		addAnother, _ := reader.ReadString('\n')
+		addAnother = strings.TrimSpace(strings.ToLower(addAnother))
+		if addAnother != "y" {
+			break
 		}
 	}
-	fmt.Print("Enter SecretKV2Path (e.g., secret/data/diffusion): ")
-	secretKV2Path, _ := reader.ReadString('\n')
-	secretKV2Path = strings.TrimSpace(secretKV2Path)
 
-	fmt.Print("Enter Git Username Field in Vault (default: git_username): ")
-	gitUsernameField, _ := reader.ReadString('\n')
-	gitUsernameField = strings.TrimSpace(gitUsernameField)
-
-	fmt.Print("Enter Git Token Field in Vault (default: git_token): ")
-	gitTokenField, _ := reader.ReadString('\n')
-	gitTokenField = strings.TrimSpace(gitTokenField)
-
-	HashicorpVaultSet := &HashicorpVault{
-		HashicorpVaultIntegration: true,
-		SecretKV2Path:             secretKV2Path,
-		UserNameField:             gitUsernameField,
-		TokenField:                gitTokenField,
-	}
-
-	return HashicorpVaultSet
+	return sources
 }
 
 func TestsConfigSetup() *TestsSettings {
@@ -1081,23 +1395,42 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\033[38;2;127;255;212mContainer molecule-%s already exists. To purge use --wipe.\n\033[0m", RoleFlag)
 	} else {
 
-		if config.HashicorpVault.HashicorpVaultIntegration {
+		// Load credentials for all configured artifact sources
+		if len(config.ArtifactSources) > 0 {
+			for i, source := range config.ArtifactSources {
+				index := i + 1
+				var creds *ArtifactCredentials
+				var err error
 
-			git_raw := vault_client(context.Background(), config.HashicorpVault.SecretKV2Path, config.HashicorpVault.SecretKV2Name)
+				// Get credentials from Vault or local storage
+				creds, err = GetArtifactCredentials(&source, config.HashicorpVault)
+				if err != nil {
+					log.Printf("\033[33mwarning: failed to load credentials for '%s': %v\033[0m", source.Name, err)
+					continue
+				}
 
-			gitUser := git_raw.Data.Data[config.HashicorpVault.UserNameField].(string)
+				// Set indexed environment variables
+				if err := os.Setenv(fmt.Sprintf("GIT_USER_%d", index), creds.Username); err != nil {
+					log.Printf("Failed to set GIT_USER_%d: %v", index, err)
+				}
+				if err := os.Setenv(fmt.Sprintf("GIT_PASSWORD_%d", index), creds.Token); err != nil {
+					log.Printf("Failed to set GIT_PASSWORD_%d: %v", index, err)
+				}
+				if err := os.Setenv(fmt.Sprintf("GIT_URL_%d", index), creds.URL); err != nil {
+					log.Printf("Failed to set GIT_URL_%d: %v", index, err)
+				}
 
-			if err := os.Setenv("GIT_USER", gitUser); err != nil {
-				log.Printf("Failed to set GIT_USER: %v", err)
+				log.Printf("\033[32mLoaded credentials for artifact source '%s' (GIT_*_%d)\033[0m", source.Name, index)
 			}
-
-			gitToken := git_raw.Data.Data[config.HashicorpVault.TokenField].(string)
-
-			if err := os.Setenv("GIT_PASSWORD", gitToken); err != nil {
-				log.Printf("Failed to set GIT_PASSWORD: %v", err)
-			}
+		} else if config.HashicorpVault != nil && config.HashicorpVault.HashicorpVaultIntegration && config.HashicorpVault.SecretKV2Path != "" {
+			// Legacy Vault configuration is no longer supported
+			log.Println("\033[31mERROR: Legacy Vault configuration detected but is no longer supported.\033[0m")
+			log.Println("\033[33mPlease migrate to artifact_sources configuration.\033[0m")
+			log.Println("\033[33mSee MIGRATION_GUIDE.md for instructions.\033[0m")
+			log.Println("\033[33mUse 'diffusion artifact add' to configure artifact sources with Vault.\033[0m")
+			os.Exit(1)
 		} else {
-			log.Println("\033[35mHashiCorp Vault integration is disabled in config. Use public repositories.\033[0m")
+			log.Println("\033[35mNo artifact sources configured. Use public repositories or 'diffusion artifact add' to configure.\033[0m")
 		}
 
 		// If user requested Windows compaction before running molecule
@@ -1131,13 +1464,23 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			"-e", "TOKEN=" + os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN=" + os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR=" + os.Getenv("VAULT_ADDR"),
-			"-e", "GIT_USER_1=" + os.Getenv("GIT_USER"),
-			"-e", "GIT_PASSWORD_1=" + os.Getenv("GIT_PASSWORD"),
-			"-e", "GIT_URL_1=" + os.Getenv("GIT_URL"),
-			"--cgroupns", "host",
-			"--privileged", "--pull", "always",
-			image,
 		}
+
+		// Add all indexed GIT environment variables
+		for i := 1; i <= MaxArtifactSources; i++ {
+			gitUser := os.Getenv(fmt.Sprintf("%s%d", EnvGitUserPrefix, i))
+			gitPassword := os.Getenv(fmt.Sprintf("%s%d", EnvGitPassPrefix, i))
+			gitURL := os.Getenv(fmt.Sprintf("%s%d", EnvGitURLPrefix, i))
+
+			if gitUser != "" || gitPassword != "" || gitURL != "" {
+				args = append(args, "-e", fmt.Sprintf("%s%d=%s", EnvGitUserPrefix, i, gitUser))
+				args = append(args, "-e", fmt.Sprintf("%s%d=%s", EnvGitPassPrefix, i, gitPassword))
+				args = append(args, "-e", fmt.Sprintf("%s%d=%s", EnvGitURLPrefix, i, gitURL))
+			}
+		}
+
+		args = append(args, "--cgroupns", "host", "--privileged", "--pull", "always", image)
+
 		if err := runCommand("docker", args...); err != nil {
 			log.Printf("\033[33mdocker run failed: %v\033[0m", err)
 		}

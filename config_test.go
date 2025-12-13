@@ -88,11 +88,6 @@ type = "diffusion"
 		t.Error("expected vault integration to be enabled")
 	}
 
-	expectedURL := "https://example.com"
-	if config.ArtifactUrl != expectedURL {
-		t.Errorf("unexpected artifact URL: got %q, want %q",
-			config.ArtifactUrl, expectedURL)
-	}
 }
 
 func TestSaveConfig(t *testing.T) {
@@ -119,7 +114,13 @@ func TestSaveConfig(t *testing.T) {
 		HashicorpVault: &HashicorpVault{
 			HashicorpVaultIntegration: false,
 		},
-		ArtifactUrl: "https://test.example.com",
+		ArtifactSources: []ArtifactSource{
+			{
+				Name:     "test-source",
+				URL:      "https://test.example.com",
+				UseVault: false,
+			},
+		},
 		YamlLintConfig: &YamlLint{
 			Extends: "default",
 			Ignore:  []string{".git/*"},

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // PathCache caches file existence checks to avoid repeated os.Stat calls
@@ -176,4 +177,12 @@ func GetDefaultMoleculeTag() string {
 		// Default to amd64 for unknown architectures
 		return "latest-amd64"
 	}
+}
+
+// maskToken masks a token for display, showing only first and last 4 characters
+func maskToken(token string) string {
+	if len(token) <= 8 {
+		return "****"
+	}
+	return token[:4] + strings.Repeat("*", len(token)-8) + token[len(token)-4:]
 }

@@ -98,6 +98,27 @@ diffusion molecule --role my-role --org my-org --tag "my-tag"
 
 ## 📖 Commands
 
+### `diffusion artifact`
+Manage private artifact repository credentials with encrypted storage.
+
+```bash
+# Add credentials for a private repository
+diffusion artifact add my-private-repo
+
+# List all stored artifact sources
+diffusion artifact list
+
+# Show details for a source (token masked)
+diffusion artifact show my-private-repo
+
+# Remove stored credentials
+diffusion artifact remove my-private-repo
+```
+
+**Security**: Credentials are encrypted using AES-256-GCM with a machine-specific key derived from hostname + username. Stored in `~/.diffusion/secrets/<role-name>/<source-name>` with 0700 directory permissions.
+
+See [ARTIFACT_MANAGEMENT.md](ARTIFACT_MANAGEMENT.md) for detailed documentation.
+
 ### `diffusion role`
 Manage Ansible role configurations interactively.
 
