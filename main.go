@@ -1508,7 +1508,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 							continue
 						}
 
-						if err := runCommand("git", "clone", repo, tmpDir); err != nil {
+						if err := runCommandHide("git", "clone", repo, tmpDir); err != nil {
 							log.Printf("\033[33mwarning cloning tests repo %s: %v\033[0m", repo, err)
 							continue
 						}
@@ -1541,7 +1541,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 					if err != nil {
 						log.Printf("\033[33mwarning creating temp dir for diffusion tests repo: %v\033[0m", err)
 					}
-					if err := runCommand("git", "clone", diffusionTestsRepo, tmpDir); err != nil {
+					if err := runCommandHide("git", "clone", diffusionTestsRepo, tmpDir); err != nil {
 						log.Printf("\033[33mwarning cloning diffusion tests repo: %v\033[0m", err)
 					}
 					testsSrc := tmpDir
@@ -1712,7 +1712,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 		args = append(args, "--cgroupns", "host", "--privileged", "--pull", "always", image)
 
-		if err := runCommand("docker", args...); err != nil {
+		if err := runCommandHide("docker", args...); err != nil {
 			log.Printf("\033[33mdocker run failed: %v\033[0m", err)
 		}
 	}
