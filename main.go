@@ -937,18 +937,18 @@ func AnsibleGalaxyInit() (string, error) {
 		return "", fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	cmd := exec.Command("docker", "run", "--rm",
+	args := []string{
+		"run", "--rm",
 		"-v", fmt.Sprintf("%s:/ansible", currentDir),
 		"-w", "/ansible",
-		"cytopia/ansible:latest",
-		"ansible-galaxy", "role", "init", roleName)
-
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+		fmt.Sprintf("ghcr.io/polar-team/diffusion-molecule-container:%s", GetDefaultMoleculeTag()),
+		"ansible-galaxy", "role", "init", roleName,
+	}
 
 	fmt.Printf("Initializing Ansible role: %s\n", roleName)
-	if err := cmd.Run(); err != nil {
-		return "", err
+	err = runCommandHide("docker", args...)
+	if err != nil {
+		log.Printf("\033[31mInitializing of new role were failed: %v\033[0m", err)
 	}
 
 	// Create scenarios/default directory structure
@@ -1364,14 +1364,6 @@ func PromptInput(prompt string) string {
 	r := bufio.NewReader(os.Stdin)
 	val, _ := r.ReadString('\n')
 	return strings.TrimSpace(val)
-}
-
-// runCommand runs command and streams combined stdout/stderr to our stdout/stderr.
-func runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
 
 // runCommandHide runs command and discards stdout/stderr with a loading animation
