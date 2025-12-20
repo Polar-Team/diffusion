@@ -1,6 +1,6 @@
 # Verifying Diffusion Binaries
 
-All Diffusion releases are signed and include SLSA Level 3 provenance attestations to ensure supply chain security.
+All Diffusion releases are signed with Cosign to ensure supply chain security.
 
 ## Quick Verification
 
@@ -48,26 +48,6 @@ cosign verify-blob \
 Verified OK
 ```
 
-### 3. Verify SLSA Provenance
-
-```bash
-# Install GitHub CLI
-brew install gh  # macOS
-# or
-sudo apt install gh  # Ubuntu/Debian
-
-# Authenticate
-gh auth login
-
-# Verify provenance
-gh attestation verify diffusion-linux-amd64 --repo Polar-Team/diffusion
-```
-
-**Expected output:**
-```
-✓ Verification succeeded!
-```
-
 ## Detailed Verification Steps
 
 ### Understanding the Security Model
@@ -76,7 +56,6 @@ Diffusion uses a multi-layered security approach:
 
 1. **Checksums (SHA256)**: Verify file integrity
 2. **Cosign Signatures**: Verify authenticity (keyless signing via Sigstore)
-3. **SLSA Provenance**: Verify build provenance and supply chain
 
 ### Step-by-Step Verification
 
@@ -124,36 +103,6 @@ This verifies:
 - The binary was signed by Polar-Team's GitHub Actions workflow
 - The signature is valid and hasn't been tampered with
 - The certificate chain is trusted
-
-#### Step 4: Verify SLSA Provenance
-
-```bash
-# Verify the build provenance
-gh attestation verify ${BINARY} --repo Polar-Team/diffusion
-```
-
-This verifies:
-- The binary was built by GitHub Actions
-- The build process is reproducible
-- The source code matches the repository
-- SLSA Level 3 compliance
-
-### Inspecting Provenance
-
-```bash
-# Download provenance file
-wget https://github.com/Polar-Team/diffusion/releases/download/v${VERSION}/diffusion-${VERSION}.intoto.jsonl
-
-# View provenance details
-cat diffusion-${VERSION}.intoto.jsonl | jq .
-```
-
-The provenance includes:
-- Build environment details
-- Source repository and commit
-- Build command and parameters
-- Builder identity
-- Timestamp
 
 ## Platform-Specific Instructions
 
@@ -248,10 +197,6 @@ cosign verify-blob \
   --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
   ${BINARY}
 
-# Verify provenance
-echo "4. Verifying SLSA provenance..."
-gh attestation verify ${BINARY} --repo ${REPO}
-
 echo ""
 echo "✓ All verifications passed!"
 echo "Binary is authentic and safe to use."
@@ -274,15 +219,6 @@ chmod +x verify-diffusion.sh
 --certificate-identity-regexp="https://github.com/Polar-Team/diffusion"
 ```
 
-### Provenance Verification Fails
-
-**Error:** `no attestations found`
-
-**Solution:** 
-1. Ensure you're authenticated with GitHub CLI: `gh auth login`
-2. Check the repository name is correct: `Polar-Team/diffusion`
-3. Verify the binary name matches exactly
-
 ### Checksum Mismatch
 
 **Error:** `FAILED`
@@ -297,8 +233,8 @@ chmod +x verify-diffusion.sh
 1. **Always verify before running**: Never run unverified binaries
 2. **Use HTTPS**: Always download from `https://github.com`
 3. **Check the repository**: Ensure it's `Polar-Team/diffusion`
-4. **Verify all three**: Checksums, signatures, and provenance
-5. **Keep tools updated**: Update Cosign and GitHub CLI regularly
+4. **Verify both**: Checksums and signatures
+5. **Keep tools updated**: Update Cosign regularly
 
 ## Reporting Security Issues
 
@@ -310,8 +246,6 @@ Do not open public issues for security vulnerabilities.
 ## Additional Resources
 
 - [Sigstore Documentation](https://docs.sigstore.dev/)
-- [SLSA Framework](https://slsa.dev/)
-- [GitHub Attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
 - [Cosign Documentation](https://github.com/sigstore/cosign)
 
 ---
