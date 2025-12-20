@@ -40,8 +40,18 @@ Before using Diffusion, ensure you have the following tools installed:
 ```bash
 git clone https://github.com/Polar-Team/diffusion.git
 cd diffusion
-go build -o diffusion
+make build
 ```
+
+The binary will be in the `bin/` directory. See [Building Guide](docs/building.md) for more options including cross-compilation.
+
+### Build for All Platforms
+
+```bash
+make dist
+```
+
+This creates binaries for Linux, macOS, and Windows (AMD64, ARM64, ARM). See [Building Guide](docs/building.md) for details.
 
 ### Using Go Install
 
@@ -96,6 +106,25 @@ diffusion molecule --role my-role --org my-org --tag "my-tag"
 
 ## 📖 Commands
 
+### `diffusion cache`
+Manage Ansible role and collection caching for faster builds.
+
+```bash
+# Enable cache for current role
+diffusion cache enable
+
+# Disable cache
+diffusion cache disable
+
+# Clean cache
+diffusion cache clean
+
+# Show cache status
+diffusion cache status
+```
+
+**Benefits**: Caches downloaded roles and collections between runs, significantly speeding up repeated molecule tests. See [Cache Feature Documentation](docs/cache-feature.md) for details.
+
 ### `diffusion artifact`
 Manage private artifact repository credentials with encrypted storage.
 
@@ -115,7 +144,7 @@ diffusion artifact remove my-private-repo
 
 **Security**: Credentials are encrypted using AES-256-GCM with a machine-specific key derived from hostname + username. Stored in `~/.diffusion/secrets/<role-name>/<source-name>` with 0700 directory permissions.
 
-See [ARTIFACT_MANAGEMENT.md](ARTIFACT_MANAGEMENT.md) for detailed documentation.
+See [Artifact Management Documentation](docs/artifact-management.md) for detailed documentation.
 
 ### `diffusion role`
 Manage Ansible role configurations interactively.
@@ -241,6 +270,20 @@ Diffusion can integrate with HashiCorp Vault to securely manage credentials:
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📚 Documentation
+
+- **[Building from Source](docs/building.md)** - Complete build guide with cross-compilation
+- **[Cache Feature](docs/cache-feature.md)** - Ansible role and collection caching for faster builds
+- **[Artifact Management](docs/artifact-management.md)** - Managing private repository credentials
+- **[Unix Permissions](docs/unix-permissions.md)** - How Diffusion handles permissions on Unix systems
+- **[Migration Guide](docs/migration-guide.md)** - Upgrading from older versions
+- **[Changelog](docs/changelog.md)** - Version history and changes
+- **[E2E Testing](tests/e2e/README.md)** - End-to-end testing with Vagrant
+
+### Technical Archives
+Historical documentation about implementation changes:
+- [Archive](docs/archive/) - Technical implementation notes and refactoring docs
 
 ## 📄 License
 
