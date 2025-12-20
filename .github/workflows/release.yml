@@ -46,8 +46,9 @@ jobs:
           sha256sum * > SHA256SUMS
           echo "Checksums generated:"
           cat SHA256SUMS
-          # Create base64 encoded hashes for SLSA provenance
-          echo "hashes=$(cat SHA256SUMS | base64 -w0)" >> $GITHUB_OUTPUT
+          # Create base64 encoded hashes for SLSA provenance (only binaries, not SHA256SUMS)
+          sha256sum diffusion-* | base64 -w0 > /tmp/hashes.txt
+          echo "hashes=$(cat /tmp/hashes.txt)" >> $GITHUB_OUTPUT
       
       - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v4
@@ -63,11 +64,11 @@ jobs:
       actions: read
       id-token: write
       contents: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+      attestations: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: "${{ needs.build.outputs.hashes }}"
-      upload-assets: true
-      provenance-name: "diffusion-${{ needs.build.outputs.version }}.intoto.jsonl"
+      upload-assets: false
 
   sign:
     name: Sign Binaries with Cosign
@@ -132,9 +133,9 @@ jobs:
       - name: Download provenance
         uses: actions/download-artifact@v4
         with:
-          pattern: "*.intoto.jsonl"
+          name: "${{ needs.build.outputs.version }}.intoto.jsonl"
           path: bin/
-          merge-multiple: true
+        continue-on-error: true
       
       - name: Create release notes
         id: notes
