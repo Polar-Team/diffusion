@@ -33,6 +33,20 @@ Before using Diffusion, ensure you have the following tools installed:
 - **Vault CLI**: (Optional) For HashiCorp Vault integration
 - **YC CLI**: (Optional) For Yandex Cloud registry authentication
 
+### 💡 Recommended Terminal Setup
+
+For the best experience with Diffusion's colored output and Unicode symbols:
+
+**Terminals:**
+- [WezTerm](https://wezfurlong.org/wezterm/) - GPU-accelerated, cross-platform terminal with excellent Unicode support
+- [Ghostty](https://ghostty.org/) - Fast, native terminal emulator with modern features
+
+**Fonts:**
+- [Nerd Fonts](https://www.nerdfonts.com/) - Patched fonts with icons and symbols
+  - Recommended: FiraCode Nerd Font, JetBrains Mono Nerd Font, or Hack Nerd Font
+
+These tools provide proper rendering of Diffusion's colored output, progress indicators, and status symbols.
+
 ## 📥 Installation
 
 ### From Source
@@ -85,23 +99,34 @@ Configuration is stored in `diffusion.toml` in your project directory.
 - Container Name: `polar-team/diffusion-molecule-container`
 - Container Tag: `latest-amd64` or `latest-arm64` (auto-detected based on your system architecture)
 
-### 3.  Run Molecule Tests
+### 3. Run Molecule Tests
+
+Diffusion automatically detects role name and namespace from `meta/main.yml`:
 
 ```bash
-# Run convergence test
-diffusion molecule --role my-role --org my-org
+# Run convergence test (auto-detects role and org from meta/main.yml)
+diffusion molecule
 
 # Run with verification
-diffusion molecule --role my-role --org my-org --verify
+diffusion molecule --verify
 
 # Run linting
-diffusion molecule --role my-role --org my-org --lint
+diffusion molecule --lint
 
 # Run idempotence test
-diffusion molecule --role my-role --org my-org --idempotence
+diffusion molecule --idempotence
 
 # Run with specific tags
-diffusion molecule --role my-role --org my-org --tag "my-tag"
+diffusion molecule --tag "my-tag"
+
+# Clean up (remove container and molecule folder)
+diffusion molecule --wipe
+```
+
+**Note:** If `meta/main.yml` is not found or you want to override, you can still use `--role` and `--org` flags:
+
+```bash
+diffusion molecule --role my-role --org my-org --verify
 ```
 
 ## 📖 Commands
@@ -176,12 +201,62 @@ Run Molecule testing workflows.
 
 **Flags:**
 - `--role, -r`: Role name (auto-detected from meta/main.yml)
-- `--org, -o`: Organization/namespace prefix (auto-detected)
-- `--tag, -t`: Ansible run tags (optional)
+- `--org, -o`: Organization/namespace prefix (auto-detected from meta/main.yml)
+- `--tag, -t`: Ansible run tags (optional, sets ANSIBLE_RUN_TAGS)
+- `--converge`: Run molecule converge (default behavior if no test flags specified)
 - `--verify`: Run molecule verify tests
 - `--lint`: Run yamllint and ansible-lint
 - `--idempotence`: Run molecule idempotence tests
+- `--testsoverwrite`: Overwrite molecule tests folder for remote or diffusion type
 - `--wipe`: Remove container and molecule role folder
+
+**Note:** Test flags (`--converge`, `--verify`, `--lint`, `--idempotence`) are mutually exclusive - only one can be used at a time.
+
+**Examples:**
+```bash
+# Run converge (default)
+diffusion molecule
+
+# Run converge with specific tags
+diffusion molecule --converge --tag "install,configure"
+
+# Run verification tests
+diffusion molecule --verify
+
+# Run linting
+diffusion molecule --lint
+
+# Run idempotence test
+diffusion molecule --idempotence
+
+# Override auto-detected role/org
+diffusion molecule --role custom-role --org custom-org --verify
+
+# Clean up after testing
+diffusion molecule --wipe
+```
+
+**Typical workflow:**
+```bash
+# 1. Run converge to apply the role
+diffusion molecule --converge
+
+# 2. Run verification tests
+diffusion molecule --verify
+
+# 3. Run linting
+diffusion molecule --lint
+
+# 4. Test idempotence
+diffusion molecule --idempotence
+
+# 5. Clean up
+diffusion molecule --wipe
+```
+
+**Testing Resources:**
+- [diffusion-ansible-tests-role](https://github.com/Polar-Team/diffusion-ansible-tests-role) - Comprehensive testing role for verify.yml automation. Validates Docker containers, network ports, shell commands, HTTP endpoints, and PostgreSQL databases in your Molecule tests.
+- [diffusion-molecule-container](https://github.com/Polar-Team/diffusion-molecule-container) - Official Docker container for Diffusion with Molecule, Ansible, and all required testing tools pre-installed. Use this as a base to create your own custom Diffusion container with additional tools or configurations.
 
 ### `diffusion show`
 Display all Diffusion configuration in a readable format.
@@ -192,32 +267,178 @@ diffusion show
 
 ## ⚙️ Configuration
 
-Diffusion uses a `diffusion. toml` file for configuration:
+Diffusion uses a `diffusion.toml` file for configuration. The file is automatically created on first run with interactive prompts.
+
+### Example 1: Public Registry with Local Artifact Storage
 
 ```toml
+# Container Registry Settings
 [container_registry]
-registry_server = "ghcr.io"  # Default: ghcr.io
-registry_provider = "Public"  # Options: YC, AWS, GCP, Public
+registry_server = "ghcr.io"
+registry_provider = "Public"
 molecule_container_name = "polar-team/diffusion-molecule-container"
-molecule_container_tag = "latest-amd64"  # Auto-detected: latest-amd64 or latest-arm64
+molecule_container_tag = "latest-amd64"
 
+# HashiCorp Vault Integration
 [vault]
-enabled = true
-secret_kv2_path = "secret/data/diffusion"
-secret_kv2_name = "git-credentials"
-username_field = "git_username"
-token_field = "git_token"
+enabled = false
 
-url = "https://your-artifact-repo.com"
+# Artifact Sources (Private Repositories)
+[[artifact_sources]]
+name = "my-gitlab"
+url = "https://gitlab.example.com"
+use_vault = false
 
+[[artifact_sources]]
+name = "my-github"
+url = "https://github.example.com"
+use_vault = false
+
+# YAML Linting Configuration
 [yaml_lint]
 extends = "default"
-ignore = [". git/*", "molecule/**", "vars/*"]
+ignore = [".git/*", "molecule/**", "vars/*", "files/*", ".yamllint", ".ansible-lint"]
 
+[yaml_lint.rules]
+braces = { max-spaces-inside = 1, level = "warning" }
+brackets = { max-spaces-inside = 1, level = "warning" }
+comments = { min-spaces-from-content = 1 }
+comments-indentation = false
+octal-values = { forbid-implicit-octal = true }
+
+[yaml_lint.rules.new-lines]
+type = "platform"
+
+# Ansible Linting Configuration
 [ansible_lint]
-exclude_paths = ["molecule/default/tests/*. yml"]
+exclude_paths = [
+  "molecule/default/tests/*.yml",
+  "molecule/default/tests/*/*/*.yml",
+  "tests/test.yml"
+]
 warn_list = ["meta-no-info", "yaml[line-length]"]
 skip_list = ["meta-incorrect", "role-name[path]"]
+
+# Tests Configuration
+[tests]
+type = "local"
+
+# Cache Configuration
+[cache]
+enabled = false
+```
+
+### Example 2: Yandex Cloud Registry with Vault Integration
+
+```toml
+# Container Registry Settings
+[container_registry]
+registry_server = "cr.yandex"
+registry_provider = "YC"
+molecule_container_name = "crp1234567890/diffusion-molecule-container"
+molecule_container_tag = "latest-amd64"
+
+# HashiCorp Vault Integration
+[vault]
+enabled = true
+
+# Artifact Sources (Private Repositories with Vault)
+[[artifact_sources]]
+name = "gitlab-private"
+url = "https://gitlab.company.com"
+use_vault = true
+vault_path = "secret/data/artifacts"
+vault_secret_name = "gitlab-creds"
+vault_username_field = "username"
+vault_token_field = "token"
+
+[[artifact_sources]]
+name = "github-enterprise"
+url = "https://github.company.com"
+use_vault = true
+vault_path = "secret/data/artifacts"
+vault_secret_name = "github-creds"
+vault_username_field = "username"
+vault_token_field = "token"
+
+# YAML Linting Configuration
+[yaml_lint]
+extends = "default"
+ignore = [".git/*", "molecule/**", "vars/*", "files/*", ".yamllint", ".ansible-lint"]
+
+[yaml_lint.rules]
+braces = { max-spaces-inside = 1, level = "warning" }
+brackets = { max-spaces-inside = 1, level = "warning" }
+comments = { min-spaces-from-content = 1 }
+comments-indentation = false
+octal-values = { forbid-implicit-octal = true }
+
+[yaml_lint.rules.new-lines]
+type = "platform"
+
+# Ansible Linting Configuration
+[ansible_lint]
+exclude_paths = [
+  "molecule/default/tests/*.yml",
+  "molecule/default/tests/*/*/*.yml",
+  "tests/test.yml"
+]
+warn_list = ["meta-no-info", "yaml[line-length]"]
+skip_list = ["meta-incorrect", "role-name[path]"]
+
+# Tests Configuration
+[tests]
+type = "diffusion"
+
+# Cache Configuration
+[cache]
+enabled = true
+```
+
+### Configuration Options
+
+**Container Registry:**
+- `registry_server`: Container registry URL
+  - Public: `ghcr.io`, `docker.io`
+  - Yandex Cloud: `cr.yandex`
+  - AWS: `<account-id>.dkr.ecr.<region>.amazonaws.com`
+  - GCP: `gcr.io`, `<region>-docker.pkg.dev`
+- `registry_provider`: Registry type - `YC`, `AWS`, `GCP`, or `Public`
+- `molecule_container_name`: Container image name (with registry path for private registries)
+- `molecule_container_tag`: Container tag (auto-detected: `latest-amd64` or `latest-arm64`)
+
+**Vault Integration:**
+- `enabled`: Enable HashiCorp Vault for credential management
+- Requires `VAULT_ADDR` and `VAULT_TOKEN` environment variables
+
+**Artifact Sources:**
+- Multiple private repositories can be configured
+- `use_vault = false`: Credentials stored encrypted locally in `~/.diffusion/secrets/`
+- `use_vault = true`: Credentials retrieved from HashiCorp Vault
+- See [Artifact Management](docs/artifact-management.md) for details
+
+**Tests:**
+- `local`: Tests in `tests/` directory
+- `remote`: Clone tests from Git repositories (add `remote_repositories` array)
+- `diffusion`: Use [diffusion-ansible-tests-role](https://github.com/Polar-Team/diffusion-ansible-tests-role)
+
+**Cache:**
+- `enabled = true`: Cache Ansible roles and collections between runs
+- `cache_id` is auto-generated when cache is enabled
+- See [Cache Feature](docs/cache-feature.md) for details
+
+### Managing Configuration
+
+```bash
+# View current configuration
+diffusion show
+
+# Edit configuration file
+# Linux/macOS
+nano diffusion.toml
+
+# Windows
+notepad diffusion.toml
 ```
 
 ## 📁 Project Structure
