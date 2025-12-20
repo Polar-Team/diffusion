@@ -186,3 +186,26 @@ func maskToken(token string) string {
 	}
 	return token[:4] + strings.Repeat("*", len(token)-8) + token[len(token)-4:]
 }
+
+// GetUserMappingArgs returns docker user mapping arguments for Unix systems
+// On Unix systems, maps the current user's UID:GID to avoid permission issues
+// On Windows, returns empty slice to use default root user
+func GetUserMappingArgs() []string {
+	if runtime.GOOS == "windows" {
+		return []string{}
+	}
+
+	// On Unix systems, get current user's UID and GID
+	uid := os.Getuid()
+	gid := os.Getgid()
+
+	// Return user mapping argument
+	return []string{"--user", fmt.Sprintf("%d:%d", uid, gid)}
+}
+
+// GetContainerHomePath returns the home directory path inside the container
+// The main molecule container always runs as root (required for Docker-in-Docker)
+// so it always uses /root as the home directory
+func GetContainerHomePath() string {
+	return "/root"
+}

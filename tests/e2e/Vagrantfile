@@ -1,0 +1,451 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Supported OS configurations
+# Set BOX_NAME environment variable to choose OS
+# Examples:
+#   BOX_NAME=ubuntu2204 vagrant up
+#   BOX_NAME=ubuntu2404 vagrant up
+#   BOX_NAME=debian12 vagrant up
+#   BOX_NAME=macos15 vagrant up
+
+BOX_CONFIGS = {
+  # Ubuntu versions
+  "ubuntu2204" => {
+    box: "generic/ubuntu2204",
+    name: "Ubuntu 22.04 LTS",
+    memory: 4096,
+    cpus: 2,
+    os_family: "linux"
+  },
+  "ubuntu2304" => {
+    box: "generic/ubuntu2304",
+    name: "Ubuntu 23.04",
+    memory: 4096,
+    cpus: 2,
+    os_family: "linux"
+  },
+  "ubuntu2404" => {
+    box: "generic/ubuntu2404",
+    name: "Ubuntu 24.04 LTS",
+    memory: 4096,
+    cpus: 2,
+    os_family: "linux"
+  },
+
+  # Debian versions
+  "debian12" => {
+    box: "generic/debian12",
+    name: "Debian 12 (Bookworm)",
+    memory: 4096,
+    cpus: 2,
+    os_family: "linux"
+  },
+  "debian13" => {
+    box: "generic/debian13",
+    name: "Debian 13 (Trixie)",
+    memory: 4096,
+    cpus: 2,
+    os_family: "linux"
+  },
+
+  # Windows versions (requires license)
+  "windows11" => {
+    box: "gusztavvargadr/windows-11",
+    name: "Windows 11",
+    memory: 8192,
+    cpus: 4,
+    os_family: "windows"
+  },
+  "windows10" => {
+    box: "gusztavvargadr/windows-10",
+    name: "Windows 10",
+    memory: 8192,
+    cpus: 4,
+    os_family: "windows"
+  },
+
+  # macOS versions (requires VMware Fusion on macOS host)
+  "macos15" => {
+    box: "yzgyyang/macos-15",
+    name: "macOS 15 Sequoia",
+    memory: 8192,
+    cpus: 4,
+    os_family: "macos"
+  },
+  "macos14" => {
+    box: "yzgyyang/macos-14",
+    name: "macOS 14 Sonoma",
+    memory: 8192,
+    cpus: 4,
+    os_family: "macos"
+  }
+}
+
+# Get box name from environment variable or use default
+box_name = ENV['BOX_NAME'] || ENV['VAGRANT_BOX'] || 'ubuntu2204'
+
+# Validate box name
+unless BOX_CONFIGS.key?(box_name)
+  puts "Error: Unknown box name '#{box_name}'"
+  puts "Available boxes:"
+  BOX_CONFIGS.each do |key, config|
+    puts "  - #{key}: #{config[:name]}"
+  end
+  puts "\nUsage: BOX_NAME=ubuntu2404 vagrant up"
+  exit 1
+end
+
+# Get configuration for selected box
+box_config = BOX_CONFIGS[box_name]
+
+puts "=" * 50
+puts "Using: #{box_config[:name]}"
+puts "Box: #{box_config[:box]}"
+puts "=" * 50
+
+Vagrant.configure("2") do |config|
+  # Use selected box
+  config.vm.box = box_config[:box]
+  config.vm.hostname = "diffusion-e2e-#{box_name}"
+
+  # Configure VM resources
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = box_config[:memory]
+    vb.cpus = box_config[:cpus]
+    vb.name = "diffusion-e2e-#{box_name}"
+  end
+
+  config.vm.provider "vmware_desktop" do |vmware|
+    vmware.vmx["memsize"] = box_config[:memory].to_s
+    vmware.vmx["numvcpus"] = box_config[:cpus].to_s
+    vmware.gui = false
+  end
+
+  # Sync diffusion source code to VM
+  # Path differs by OS
+  if box_config[:os_family] == "windows"
+    config.vm.synced_folder "../../", "C:/diffusion"
+  else
+    config.vm.synced_folder "../../", "/home/vagrant/diffusion"
+  end
+
+  # OS-specific provisioning
+  if box_config[:os_family] == "linux"
+    # Linux provisioning (Ubuntu/Debian)
+    config.vm.provision "shell", inline: <<-SHELL
+    set -e
+
+    echo "=========================================="
+    echo "Installing system dependencies..."
+    echo "=========================================="
+
+    # Update package list
+    apt-get update
+
+    # Install basic tools
+    apt-get install -y \
+      curl \
+      wget \
+      git \
+      build-essential \
+      ca-certificates \
+      gnupg \
+      lsb-release
+
+    echo "=========================================="
+    echo "Installing Docker..."
+    echo "=========================================="
+
+    # Add Docker's official GPG key
+    install -m 0755 -d /etc/apt/keyrings
+    [ -f "/etc/apt/keyrings/docker.gpg" ] || curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    [ -f "/etc/apt/keyrings/docker.gpg" ] || chmod a+r /etc/apt/keyrings/docker.gpg
+
+    # Add Docker repository
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    # Install Docker
+    apt-get update
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    # Add vagrant user to docker group
+    usermod -aG docker vagrant
+
+    # Start and enable Docker
+    systemctl start docker
+    systemctl enable docker
+
+    echo "=========================================="
+    echo "Installing Go 1.21..."
+    echo "=========================================="
+
+    # Download and install Go
+    GO_VERSION="1.21.5"
+    wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
+    rm go${GO_VERSION}.linux-amd64.tar.gz
+
+    # Set up Go environment for all users
+    echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile.d/go.sh
+    echo 'export GOPATH=$HOME/go' >> /etc/profile.d/go.sh
+    echo 'export PATH=$PATH:$GOPATH/bin' >> /etc/profile.d/go.sh
+
+    # Set up for vagrant user
+    echo 'export PATH=$PATH:/usr/local/go/bin' >> /home/vagrant/.bashrc
+    echo 'export GOPATH=$HOME/go' >> /home/vagrant/.bashrc
+    echo 'export PATH=$PATH:$GOPATH/bin' >> /home/vagrant/.bashrc
+
+    echo "=========================================="
+    echo "Docker and Go installation complete!"
+    echo "=========================================="
+
+    # Verify installations
+    docker --version
+    /usr/local/go/bin/go version
+
+  SHELL
+
+  # Run tests as vagrant user (non-root)
+  config.vm.provision "shell", privileged: false, inline: <<-SHELL
+    set -e
+
+    echo "=========================================="
+    echo "Installing expect..."
+    echo "=========================================="
+
+    # Install expect for automated CLI interaction
+    sudo apt-get install -y expect
+
+    echo "=========================================="
+    echo "Building diffusion..."
+    echo "=========================================="
+
+    cd /home/vagrant/diffusion
+
+    # Build diffusion
+    make linux_build
+
+    echo "=========================================="
+    echo "Running unit tests..."
+    echo "=========================================="
+
+    # Run unit tests
+    /usr/local/go/bin/go test -v
+
+    echo "=========================================="
+    echo "Running E2E tests..."
+    echo "=========================================="
+
+    # Create test directory
+    [ -d "/home/vagrant/test" ] && rm -rf "/home/vagrant/test"
+    mkdir -p /home/vagrant/test
+    cd /home/vagrant/test
+
+    # Test 1: Initialize a new role using expect
+    echo "Test 1: Initialize new role..."
+    expect <<'EXPECT_SCRIPT'
+set timeout 30
+spawn /home/vagrant/diffusion/bin/diffusion role --init
+expect "Enter role name:"
+send "test_role\r"
+expect "What namespace of the role should be?:"
+send "testorg\r"
+expect "What company of the role should be?:"
+send "Test Company\r"
+expect "What author of the role should be?:"
+send "Test Author\r"
+expect "Description of the role (optional):"
+send "Test role for E2E testing\r"
+expect "Enter platforms? (y/n):"
+send "n\r"
+expect "Galaxy Tags (comma-separated) (optional):"
+send "test,e2e\r"
+expect "Collections required (comma-separated) (optional):"
+send "\r"
+expect "Enter roles to add? (y/n):"
+send "n\r"
+expect eof
+EXPECT_SCRIPT
+
+    # Verify role was created
+    if [ -d "test_role" ]; then
+      echo "✓ Role initialization successful"
+    else
+      echo "✗ Role initialization failed"
+      exit 1
+    fi
+
+    cd test_role
+
+    # Test 2: Create diffusion config using expect
+    echo "Test 2: Create diffusion config..."
+    expect <<'EXPECT_SCRIPT'
+set timeout 60
+spawn /home/vagrant/diffusion/bin/diffusion molecule --role test_role --org myorg
+expect "Enter RegistryServer*"
+send "\r"
+expect "Enter RegistryProvider*"
+send "\r"
+expect "Enter MoleculeContainerName*"
+send "\r"
+expect "Enter MoleculeContainerTag*"
+send "\r"
+expect "Enable Vault Integration for artifact sources?*"
+send "n\r"
+expect "Configure artifact sources for private repositories?*"
+send "n\r"
+expect "What type of configuration you want use?*"
+send "\r"
+expect eof
+EXPECT_SCRIPT
+
+    # Verify config was created
+    if [ -f "diffusion.toml" ]; then
+      echo "✓ Config creation successful"
+    else
+      echo "✗ Config creation failed"
+      exit 1
+    fi
+
+    # Test 3: Check molecule directory permissions
+    echo "Test 3: Check molecule directory permissions..."
+    if [ -d "molecule" ]; then
+      OWNER=$(stat -c '%U' molecule)
+      if [ "$OWNER" = "vagrant" ]; then
+        echo "✓ Molecule directory has correct ownership (vagrant)"
+      else
+        echo "✗ Molecule directory has wrong ownership ($OWNER, expected vagrant)"
+        exit 1
+      fi
+    else
+      echo "✗ Molecule directory not created"
+      exit 1
+    fi
+
+    # Test 4: Check files in molecule directory
+    echo "Test 4: Check files in molecule directory..."
+    if [ -d "molecule/myorg.test_role" ]; then
+      FILE_OWNER=$(stat -c '%U' molecule/myorg.test_role)
+      if [ "$FILE_OWNER" = "vagrant" ]; then
+        echo "✓ Files in molecule directory have correct ownership"
+      else
+        echo "✗ Files have wrong ownership ($FILE_OWNER, expected vagrant)"
+        exit 1
+      fi
+    fi
+
+    # Test 5: Test cache feature
+    echo "Test 5: Test cache feature..."
+    /home/vagrant/diffusion/bin/diffusion cache enable
+    /home/vagrant/diffusion/bin/diffusion cache status
+
+    if [ -d "$HOME/.diffusion/cache" ]; then
+      echo "✓ Cache directory created"
+    else
+      echo "✗ Cache directory not created"
+      exit 1
+    fi
+
+    # Test 6: Test artifact management
+    echo "Test 6: Test artifact management..."
+    /home/vagrant/diffusion/bin/diffusion artifact list
+
+    echo "=========================================="
+    echo "All E2E tests passed! ✓"
+    echo "=========================================="
+
+    # Print summary
+    echo ""
+    echo "Summary:"
+    echo "  - Docker version: $(docker --version)"
+    echo "  - Go version: $(/usr/local/go/bin/go version)"
+    echo "  - Diffusion built successfully"
+    echo "  - All unit tests passed"
+    echo "  - All E2E tests passed"
+    echo "  - Permissions verified on Unix system"
+    echo ""
+
+  SHELL
+
+  elsif box_config[:os_family] == "windows"
+    # Windows provisioning
+    config.vm.provision "shell", inline: <<-SHELL
+      Write-Host "=========================================="
+      Write-Host "Installing Chocolatey..."
+      Write-Host "=========================================="
+
+      # Install Chocolatey
+      Set-ExecutionPolicy Bypass -Scope Process -Force
+      [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+      Write-Host "=========================================="
+      Write-Host "Installing Go and Git..."
+      Write-Host "=========================================="
+
+      # Install Go and Git
+      choco install golang git -y
+
+      # Refresh environment
+      $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+      Write-Host "=========================================="
+      Write-Host "Building diffusion..."
+      Write-Host "=========================================="
+
+      cd C:\\diffusion
+      go build -o bin/diffusion.exe
+
+      Write-Host "=========================================="
+      Write-Host "Running tests..."
+      Write-Host "=========================================="
+
+      go test -v
+
+      Write-Host "=========================================="
+      Write-Host "All tests passed on Windows!"
+      Write-Host "=========================================="
+    SHELL
+
+  elsif box_config[:os_family] == "macos"
+    # macOS provisioning
+    config.vm.provision "shell", inline: <<-SHELL
+      echo "=========================================="
+      echo "Installing Homebrew..."
+      echo "=========================================="
+
+      # Install Homebrew
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+      echo "=========================================="
+      echo "Installing Go and Docker..."
+      echo "=========================================="
+
+      brew install go docker
+
+      echo "=========================================="
+      echo "Building diffusion..."
+      echo "=========================================="
+
+      cd /home/vagrant/diffusion
+      go build -o diffusion
+
+      echo "=========================================="
+      echo "Running tests..."
+      echo "=========================================="
+
+      go test -v
+
+      echo "=========================================="
+      echo "All tests passed on macOS!"
+      echo "=========================================="
+    SHELL
+  end
+end

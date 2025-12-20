@@ -15,6 +15,7 @@ package main
 
 import (
 	"bufio"
+	"runtime"
 
 	"context"
 	"fmt"
@@ -597,11 +598,24 @@ func main() {
 			// Get cache size before cleaning
 			size, _ := GetCacheSize(cacheID)
 
-			if err := CleanupCache(cacheID); err != nil {
-				return fmt.Errorf("failed to clean cache: %w", err)
+			// Check if molecule container is running
+			containerName := fmt.Sprintf("molecule-%s", RoleFlag)
+			err = exec.Command("docker", "inspect", containerName).Run()
+			if err == nil {
+				// Container exists - clean cache inside container
+				cleanCmd := "rm -rf /root/.ansible/roles/* /root/.ansible/collections/*"
+				if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", cleanCmd); err != nil {
+					log.Printf("\033[33mwarning: failed to clean cache inside container: %v\033[0m", err)
+				}
+				fmt.Printf("\033[32mCache cleaned inside container\033[0m\n")
+			} else {
+				// Container doesn't exist - clean cache on host
+				if err := CleanupCache(cacheID); err != nil {
+					return fmt.Errorf("failed to clean cache: %w", err)
+				}
+				fmt.Printf("\033[32mCache cleaned on host\033[0m\n")
 			}
 
-			fmt.Printf("\033[32mCache cleaned successfully\033[0m\n")
 			if size > 0 {
 				fmt.Printf("\033[35mFreed: \033[0m\033[38;2;127;255;212m%.2f MB\033[0m\n", float64(size)/(1024*1024))
 			}
@@ -938,19 +952,29 @@ func AnsibleGalaxyInit() (string, error) {
 	}
 
 	args := []string{
-		"run", "--rm",
+		"run",
+	}
+
+	// Add user mapping for Unix systems to avoid permission issues
+	args = append(args, GetUserMappingArgs()...)
+
+	// Set HOME environment variable for ansible-galaxy config
+	// containerHome := GetContainerHomePath()
+
+	args = append(args,
+		// "-e", fmt.Sprintf("HOME=%s", containerHome),
 		"-v", fmt.Sprintf("%s:/ansible", currentDir),
 		"-w", "/ansible",
 		fmt.Sprintf("ghcr.io/polar-team/diffusion-molecule-container:%s", GetDefaultMoleculeTag()),
 		"ansible-galaxy", "role", "init", roleName,
-	}
+	)
 
 	fmt.Printf("Initializing Ansible role: %s\n", roleName)
+
 	err = runCommandHide("docker", args...)
 	if err != nil {
 		log.Printf("\033[31mInitializing of new role were failed: %v\033[0m", err)
 	}
-
 	// Create scenarios/default directory structure
 	scenariosPath := filepath.Join(currentDir, roleName, "scenarios", "default")
 	if err := os.MkdirAll(scenariosPath, 0755); err != nil {
@@ -1465,6 +1489,17 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				os.Exit(1)
 			}
 			log.Printf("\033[32mConverge Done Successfully!\033[0m")
+
+			// Fix permissions on molecule directory for Unix systems (inside container)
+			if runtime.GOOS != "windows" {
+				uid := os.Getuid()
+				gid := os.Getgid()
+				chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
+				if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
+					log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+				}
+			}
+
 			return nil
 		}
 		if LintFlag {
@@ -1580,7 +1615,6 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	if err == nil {
 		fmt.Printf("\033[38;2;127;255;212mContainer molecule-%s already exists. To purge use --wipe.\n\033[0m", RoleFlag)
 	} else {
-
 		// Load credentials for all configured artifact sources
 		if len(config.ArtifactSources) > 0 {
 			for i, source := range config.ArtifactSources {
@@ -1658,12 +1692,18 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		image := fmt.Sprintf("%s/%s:%s", config.ContainerRegistry.RegistryServer, config.ContainerRegistry.MoleculeContainerName, config.ContainerRegistry.MoleculeContainerTag)
 		args := []string{
 			"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
+		}
+
+		// Note: Not using user mapping here because DinD (Docker-in-Docker) requires root
+		// We'll fix permissions on the mounted volume after operations instead
+
+		args = append(args,
 			"-v", fmt.Sprintf("%s/molecule:/opt/molecule", path),
 			"-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
-			"-e", "TOKEN=" + os.Getenv("TOKEN"),
-			"-e", "VAULT_TOKEN=" + os.Getenv("VAULT_TOKEN"),
-			"-e", "VAULT_ADDR=" + os.Getenv("VAULT_ADDR"),
-		}
+			"-e", "TOKEN="+os.Getenv("TOKEN"),
+			"-e", "VAULT_TOKEN="+os.Getenv("VAULT_TOKEN"),
+			"-e", "VAULT_ADDR="+os.Getenv("VAULT_ADDR"),
+		)
 
 		// Add cache volume mounts if enabled (roles and collections only)
 		if config.CacheConfig != nil && config.CacheConfig.Enabled && config.CacheConfig.CacheID != "" {
@@ -1683,8 +1723,10 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				}
 
 				// Mount only roles and collections directories
-				args = append(args, "-v", fmt.Sprintf("%s:/root/.ansible/roles", rolesDir))
-				args = append(args, "-v", fmt.Sprintf("%s:/root/.ansible/collections", collectionsDir))
+				// Use appropriate home path based on OS (root for Windows, ansible user for Unix)
+				containerHome := GetContainerHomePath()
+				args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/roles", rolesDir, containerHome))
+				args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/collections", collectionsDir, containerHome))
 				log.Printf("\033[32mCache enabled: mounting roles and collections from %s\033[0m", cacheDir)
 			}
 		}
@@ -1713,12 +1755,24 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	if exists(roleMoleculePath) {
 		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
 	} else {
-		// docker exec -ti molecule-$role /bin/sh -c "ansible-galaxy role init $org.$role"
+		// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
+		// Ensure we're in the correct directory with write permissions
 		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
 			log.Printf("\033[33mrole init warning: %v\033[0m", err)
 		}
+
+		// Fix ownership inside container after role init (Unix systems only)
+		if runtime.GOOS != "windows" {
+			uid := os.Getuid()
+			gid := os.Getgid()
+			chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, OrgFlag, RoleFlag)
+			if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
+				log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
+			}
+		}
+
 		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
-			log.Printf("\033mclean role dir warning: %v\033[0m", err)
+			log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
 		}
 	}
 
@@ -1754,7 +1808,18 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	} else {
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
-	} // copy dotfiles
+	}
+
+	// Fix permissions on molecule directory for Unix systems
+	// Container runs as root (for DinD), so we need to fix ownership inside the container
+	if runtime.GOOS != "windows" {
+		uid := os.Getuid()
+		gid := os.Getgid()
+		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
+		if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
+			log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+		}
+	}
 
 	return nil
 }

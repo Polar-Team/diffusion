@@ -1,0 +1,7 @@
+# Vagrant
+.vagrant/
+*.log
+
+# Test artifacts
+test-role/
+manual-test/

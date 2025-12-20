@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -137,9 +138,18 @@ func TestRunCommandCapture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Test with a simple command that should succeed on Windows
-	// Use 'cmd /c echo hello' on Windows instead of 'echo hello'
-	output, err := runCommandCapture(ctx, "cmd", "/c", "echo hello")
+	// Test with a simple command that works on both Windows and Unix
+	var cmd string
+	var args []string
+	if runtime.GOOS == "windows" {
+		cmd = "cmd"
+		args = []string{"/c", "echo hello"}
+	} else {
+		cmd = "echo"
+		args = []string{"hello"}
+	}
+
+	output, err := runCommandCapture(ctx, cmd, args...)
 	if err != nil {
 		t.Fatalf("runCommandCapture failed: %v", err)
 	}

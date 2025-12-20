@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -366,5 +367,39 @@ func TestGetDefaultMoleculeTag(t *testing.T) {
 	// Verify format
 	if !strings.HasPrefix(tag, "latest-") {
 		t.Errorf("tag should start with 'latest-', got %q", tag)
+	}
+}
+
+func TestGetUserMappingArgs(t *testing.T) {
+	args := GetUserMappingArgs()
+
+	if runtime.GOOS == "windows" {
+		// On Windows, should return empty slice
+		if len(args) != 0 {
+			t.Errorf("expected empty slice on Windows, got %v", args)
+		}
+	} else {
+		// On Unix systems, should return user mapping
+		if len(args) != 2 {
+			t.Errorf("expected 2 arguments, got %d", len(args))
+		}
+		if len(args) == 2 {
+			if args[0] != "--user" {
+				t.Errorf("expected first arg to be '--user', got %q", args[0])
+			}
+			// Second arg should be in format "uid:gid"
+			if !strings.Contains(args[1], ":") {
+				t.Errorf("expected second arg to contain ':', got %q", args[1])
+			}
+		}
+	}
+}
+
+func TestGetContainerHomePath(t *testing.T) {
+	homePath := GetContainerHomePath()
+
+	// Main molecule container always runs as root (for DinD), so always uses /root
+	if homePath != "/root" {
+		t.Errorf("expected '/root', got %q", homePath)
 	}
 }
