@@ -1,0 +1,228 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  id-token: write  # Required for SLSA provenance
+  packages: write
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+      version: ${{ steps.version.outputs.version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+      
+      - name: Build all binaries
+        run: make VERSION=${{ steps.version.outputs.version }} dist
+      
+      - name: Generate checksums
+        id: hash
+        run: |
+          cd bin
+          sha256sum * > SHA256SUMS
+          echo "Checksums generated:"
+          cat SHA256SUMS
+          # Create base64 encoded hashes for SLSA provenance
+          echo "hashes=$(cat SHA256SUMS | base64 -w0)" >> $GITHUB_OUTPUT
+      
+      - name: Upload binaries as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: bin/*
+          retention-days: 5
+
+  provenance:
+    name: Generate SLSA Provenance
+    needs: [build]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.10.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      upload-assets: true
+      provenance-name: "diffusion-${{ needs.build.outputs.version }}.intoto.jsonl"
+
+  sign:
+    name: Sign Binaries with Cosign
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+      
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: bin/
+      
+      - name: Sign binaries with Cosign (keyless)
+        run: |
+          cd bin
+          for file in *; do
+            if [[ -f "$file" && ! "$file" =~ \.(sig|pem|jsonl)$ ]]; then
+              echo "Signing $file..."
+              cosign sign-blob --yes "$file" --output-signature "${file}.sig" --output-certificate "${file}.pem"
+            fi
+          done
+      
+      - name: Upload signatures
+        uses: actions/upload-artifact@v4
+        with:
+          name: signatures
+          path: |
+            bin/*.sig
+            bin/*.pem
+          retention-days: 5
+
+  release:
+    name: Create GitHub Release
+    needs: [build, provenance, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: bin/
+      
+      - name: Download signatures
+        uses: actions/download-artifact@v4
+        with:
+          name: signatures
+          path: bin/
+      
+      - name: Download provenance
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*.intoto.jsonl"
+          path: bin/
+          merge-multiple: true
+      
+      - name: Create release notes
+        id: notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          cat > release-notes.md << 'EOF'
+          ## Diffusion $VERSION
+          
+          ### Installation
+          
+          Download the appropriate binary for your platform:
+          
+          **Linux:**
+          - AMD64: `diffusion-linux-amd64`
+          - ARM64: `diffusion-linux-arm64`
+          - ARM: `diffusion-linux-arm`
+          
+          **macOS:**
+          - Intel: `diffusion-darwin-amd64`
+          - Apple Silicon: `diffusion-darwin-arm64`
+          
+          **Windows:**
+          - AMD64: `diffusion-windows-amd64.exe`
+          - ARM64: `diffusion-windows-arm64.exe`
+          - ARM: `diffusion-windows-arm.exe`
+          
+          ### Verification
+          
+          All binaries are signed with Cosign and include SLSA Level 3 provenance.
+          
+          **Verify checksums:**
+          ```bash
+          sha256sum --check SHA256SUMS --ignore-missing
+          ```
+          
+          **Verify Cosign signature:**
+          ```bash
+          cosign verify-blob \
+            --certificate diffusion-linux-amd64.pem \
+            --signature diffusion-linux-amd64.sig \
+            --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            diffusion-linux-amd64
+          ```
+          
+          **Verify SLSA provenance:**
+          ```bash
+          gh attestation verify diffusion-linux-amd64 --repo Polar-Team/diffusion
+          ```
+          
+          ### What's Changed
+          
+          See [CHANGELOG](https://github.com/Polar-Team/diffusion/blob/main/docs/changelog.md) for details.
+          
+          ### Documentation
+          
+          - [Installation Guide](https://github.com/Polar-Team/diffusion#-installation)
+          - [Building from Source](https://github.com/Polar-Team/diffusion/blob/main/docs/building.md)
+          - [Verification Guide](https://github.com/Polar-Team/diffusion/blob/main/docs/verification.md)
+          
+          ---
+          
+          **Full Changelog**: https://github.com/Polar-Team/diffusion/compare/v$PREVIOUS_VERSION...v$VERSION
+          EOF
+          
+          sed -i "s/\$VERSION/$VERSION/g" release-notes.md
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bin/*
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Summary
+        run: |
+          echo "## Release Created Successfully! 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${GITHUB_REF#refs/tags/v}" >> $GITHUB_STEP_SUMMARY
+          echo "**Binaries:** $(ls bin/ | grep -v '\.(sig|pem|jsonl|SHA256SUMS)' | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "**Signatures:** $(ls bin/*.sig | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "**Provenance:** ✓ SLSA Level 3" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Files Released:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh bin/ >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

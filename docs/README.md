@@ -11,6 +11,14 @@ Complete guide to building Diffusion for different platforms:
 - Platform-specific builds (AMD64, ARM64, ARM)
 - CI/CD integration examples
 
+### [Verification Guide](verification.md)
+Learn how to verify Diffusion binary authenticity and integrity:
+- Checksum verification with SHA256
+- Cosign signature verification (keyless)
+- SLSA Level 3 provenance verification
+- Platform-specific instructions
+- Automated verification scripts
+
 ### [Cache Feature](cache-feature.md)
 Learn how to use Ansible role and collection caching to speed up your molecule tests. Covers:
 - Enabling and disabling cache

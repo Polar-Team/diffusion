@@ -4,8 +4,9 @@
 # Binary name
 BINARY_NAME=diffusion
 
-# Version (can be overridden: make VERSION=1.0.0 dist)
-VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# Version - extract semver from git tags (x.x.x format only)
+# Strips git commit info and dirty flag, keeps only version number
+VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null | sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/' || echo "0.0.0")
 
 # Build flags
 LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
@@ -44,10 +45,22 @@ endif
 .PHONY: all build clean test dist help linux darwin windows \
         linux-amd64 linux-arm64 linux-arm \
         darwin-amd64 darwin-arm64 \
-        windows-amd64 windows-arm64 windows-arm
+        windows-amd64 windows-arm64 windows-arm \
+        version
 
 # Default target
 all: build
+
+# Show version information
+version:
+	@echo "$(COLOR_BOLD)Diffusion Build Information$(COLOR_RESET)"
+	@echo "Version:     $(COLOR_GREEN)$(VERSION)$(COLOR_RESET)"
+	@echo "Go Version:  $(COLOR_BLUE)$(shell go version | cut -d' ' -f3)$(COLOR_RESET)"
+	@echo "Build OS:    $(COLOR_BLUE)$(GOOS)$(COLOR_RESET)"
+	@echo "Build Arch:  $(COLOR_BLUE)$(GOARCH)$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_BOLD)Build flags:$(COLOR_RESET)"
+	@echo "LDFLAGS:     $(LDFLAGS)"
 
 # Help target
 help:
@@ -61,6 +74,7 @@ help:
 	@echo "  $(COLOR_GREEN)windows$(COLOR_RESET)        - Build for all Windows architectures"
 	@echo "  $(COLOR_GREEN)test$(COLOR_RESET)           - Run unit tests"
 	@echo "  $(COLOR_GREEN)clean$(COLOR_RESET)          - Remove build artifacts"
+	@echo "  $(COLOR_GREEN)version$(COLOR_RESET)        - Show version and build information"
 	@echo ""
 	@echo "$(COLOR_BOLD)Platform-specific targets:$(COLOR_RESET)"
 	@echo "  $(COLOR_BLUE)linux-amd64$(COLOR_RESET)    - Build for Linux AMD64"
@@ -77,6 +91,7 @@ help:
 	@echo "  make dist                     # Build for all platforms"
 	@echo "  make linux                    # Build for all Linux architectures"
 	@echo "  make VERSION=1.0.0 dist       # Build with specific version"
+	@echo "  make version                  # Show version information"
 
 # Build for current platform
 build:

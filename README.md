@@ -274,6 +274,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📚 Documentation
 
 - **[Building from Source](docs/building.md)** - Complete build guide with cross-compilation
+- **[Verification Guide](docs/verification.md)** - Verify binary signatures and SLSA provenance
 - **[Cache Feature](docs/cache-feature.md)** - Ansible role and collection caching for faster builds
 - **[Artifact Management](docs/artifact-management.md)** - Managing private repository credentials
 - **[Unix Permissions](docs/unix-permissions.md)** - How Diffusion handles permissions on Unix systems

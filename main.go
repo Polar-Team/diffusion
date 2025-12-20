@@ -32,6 +32,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Version is set at build time via ldflags
+var Version = "dev"
+
 var (
 	RoleInitFlag       bool
 	RoleFlag           string
@@ -930,6 +933,18 @@ func main() {
 		},
 	}
 	rootCmd.AddCommand(showCmd)
+
+	// version command
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Show version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Diffusion version %s\n", Version)
+			fmt.Printf("Go version: %s\n", runtime.Version())
+			fmt.Printf("OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		},
+	}
+	rootCmd.AddCommand(versionCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
