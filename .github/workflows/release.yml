@@ -142,7 +142,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           cat > release-notes.md << 'EOF'
-          ## Diffusion $VERSION
+          ## Diffusion cli tool $VERSION
           
           ### Installation
           
