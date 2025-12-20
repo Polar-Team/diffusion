@@ -820,7 +820,7 @@ func main() {
 
 	molCmd.Flags().StringVarP(&RoleFlag, "role", "r", RoleFlag, "role name")
 	molCmd.Flags().StringVarP(&OrgFlag, "org", "o", OrgFlag, "organization prefix")
-	molCmd.Flags().StringVarP(&TagFlag, "tag", "t", "", "ANSIBLE_RUN_TAGS value (optional)")
+	molCmd.Flags().StringVarP(&TagFlag, "tag", "t", "", "Ansible tags to run (comma-separated, e.g., 'install,configure')")
 	molCmd.Flags().BoolVar(&ConvergeFlag, "converge", false, "run molecule converge")
 	molCmd.Flags().BoolVar(&VerifyFlag, "verify", false, "run molecule verify")
 	molCmd.Flags().BoolVar(&TestsOverWriteFlag, "testsoverwrite", false, "overwrite molecule tests folder for remote or diffusion type")

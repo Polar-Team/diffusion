@@ -10,6 +10,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/Polar-Team/diffusion)](https://github.com/Polar-Team/diffusion)
 
+---
+
+> *"To every action there is always opposed an equal reaction; or the mutual actions of two bodies upon each other are always equal, and directed to contrary parts."*  
+> — Isaac Newton
+
+We kept this in mind when creating Diffusion, to make Molecule testing more fun 🎉
+
 </div>
 
 ---
@@ -120,14 +127,20 @@ diffusion molecule --lint
 # Run idempotence test
 diffusion molecule --idempotence
 
-# Run with specific tags
-diffusion molecule --tag "my-tag"
+# Run converge with specific Ansible tags
+diffusion molecule --converge --tag "install,configure"
+
+# Run idempotence with specific tags
+diffusion molecule --idempotence --tag "my-tag"
 
 # Clean up (remove container and molecule folder)
 diffusion molecule --wipe
 ```
 
-**Note:** If `meta/main.yml` is not found or you want to override, you can still use `--role` and `--org` flags:
+**Notes:**
+- Role name and namespace are auto-detected from `meta/main.yml`
+- The `--tag` flag only works with `--converge` and `--idempotence` commands
+- If `meta/main.yml` is not found, use `--role` and `--org` flags to override:
 
 ```bash
 diffusion molecule --role my-role --org my-org --verify
@@ -185,18 +198,32 @@ diffusion role
 # Initialize a new role
 diffusion role --init
 
-# Add a role dependency
+# Add a role dependency (default scenario)
 diffusion role add-role my-dependency --src https://github.com/user/role.git --version main
+
+# Add a role dependency to specific scenario
+diffusion role add-role my-dependency --src https://github.com/user/role.git --scenario custom
 
 # Remove a role dependency
 diffusion role remove-role my-dependency
 
+# Remove a role dependency from specific scenario
+diffusion role remove-role my-dependency --scenario custom
+
 # Add a collection
 diffusion role add-collection community.general
+
+# Add a collection to specific scenario
+diffusion role add-collection community.general --scenario custom
 
 # Remove a collection
 diffusion role remove-collection community.general
 ```
+
+**Scenario Flag:**
+- Use `--scenario, -s` flag to manage dependencies in different Molecule scenarios
+- Default scenario is `default` (molecule/default/)
+- Allows managing separate requirements.yml files for different test scenarios
 
 **Note:** The `role` command without `--init` flag will display the current role configuration. If no role exists, it will show an error message. Use `diffusion role --init` to initialize a new role. If a role already exists in the current directory, the `--init` flag will warn you.
 
@@ -411,9 +438,34 @@ enabled = true
 - `molecule_container_name`: Container image name (with registry path for private registries)
 - `molecule_container_tag`: Container tag (auto-detected: `latest-amd64` or `latest-arm64`)
 
+**Passing Credentials to Test Containers:**
+
+When using non-public registries or Vault integration, you can pass environment variables to test containers inside the Diffusion container via `molecule.yml`:
+
+```yaml
+# molecule/default/molecule.yml
+platforms:
+  - name: instance
+    image: your-registry/test-image:latest
+    env:
+      TOKEN: "${TOKEN}"              # Pass registry token (YC, AWS, GCP, etc.)
+      VAULT_ADDR: "${VAULT_ADDR}"    # Pass Vault address
+      VAULT_TOKEN: "${VAULT_TOKEN}"  # Pass Vault token
+```
+
+**Note:** Environment variables are passed if they exist in your environment, regardless of whether you're using Public or Private registry configuration. This allows flexible credential management:
+- `TOKEN`: Automatically passed for private registry authentication
+- `VAULT_ADDR` and `VAULT_TOKEN`: Passed when available, enabling Vault access in test containers even with Public registries
+
+This allows test containers to:
+- Pull images from private registries (YC, AWS, GCP)
+- Access HashiCorp Vault for secrets
+- Authenticate with cloud services during tests
+
 **Vault Integration:**
 - `enabled`: Enable HashiCorp Vault for credential management
 - Requires `VAULT_ADDR` and `VAULT_TOKEN` environment variables
+- Can be passed to test containers via molecule.yml (see above)
 
 **Artifact Sources:**
 - Multiple private repositories can be configured
@@ -422,9 +474,35 @@ enabled = true
 - See [Artifact Management](docs/artifact-management.md) for details
 
 **Tests:**
-- `local`: Tests in `tests/` directory
-- `remote`: Clone tests from Git repositories (add `remote_repositories` array)
-- `diffusion`: Use [diffusion-ansible-tests-role](https://github.com/Polar-Team/diffusion-ansible-tests-role)
+
+Diffusion supports three test types for Molecule verify stage:
+
+1. **`local`** - Use tests from local `tests/` directory
+   - Tests are copied from your project's `tests/` folder
+   - Best for project-specific tests
+   - No external dependencies
+
+2. **`remote`** - Clone test roles from Git repositories
+   - Clones test roles to `molecule/default/tests/`
+   - Supports multiple test repositories
+   - Can use artifact sources for private repositories
+   - Add `remote_repositories` array with Git URLs
+   - Example:
+     ```toml
+     [tests]
+     type = "remote"
+     remote_repositories = [
+       "https://github.com/org/test-role1.git",
+       "https://github.com/org/test-role2.git"
+     ]
+     ```
+
+3. **`diffusion`** - Use the official Diffusion testing role
+   - Automatically clones [diffusion-ansible-tests-role](https://github.com/Polar-Team/diffusion-ansible-tests-role)
+   - Comprehensive testing framework for common scenarios
+   - Validates Docker containers, ports, shell commands, HTTP endpoints, PostgreSQL
+   - DRY approach with reusable test definitions
+   - Best for standardized testing across multiple roles
 
 **Cache:**
 - `enabled = true`: Cache Ansible roles and collections between runs
@@ -439,10 +517,10 @@ diffusion show
 
 # Edit configuration file
 # Linux/macOS
-nano diffusion.toml
+nvim diffusion.toml
 
 # Windows
-notepad diffusion.toml
+nvim diffusion.toml
 ```
 
 ## 📁 Project Structure
