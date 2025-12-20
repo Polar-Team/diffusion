@@ -7,16 +7,45 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # Required for SLSA provenance
+  id-token: write  # Required for Cosign signing
   packages: write
 
 jobs:
   build:
     name: Build Binaries
     runs-on: ubuntu-latest
-    outputs:
-      hashes: ${{ steps.hash.outputs.hashes }}
-      version: ${{ steps.version.outputs.version }}
+    strategy:
+      matrix:
+        include:
+          # Linux builds
+          - goos: linux
+            goarch: amd64
+            binary: diffusion-linux-amd64
+          - goos: linux
+            goarch: arm64
+            binary: diffusion-linux-arm64
+          - goos: linux
+            goarch: arm
+            goarm: 7
+            binary: diffusion-linux-arm
+          # macOS builds
+          - goos: darwin
+            goarch: amd64
+            binary: diffusion-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            binary: diffusion-darwin-arm64
+          # Windows builds
+          - goos: windows
+            goarch: amd64
+            binary: diffusion-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            binary: diffusion-windows-arm64.exe
+          - goos: windows
+            goarch: arm
+            goarm: 7
+            binary: diffusion-windows-arm.exe
     
     steps:
       - name: Checkout code
@@ -36,26 +65,48 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
       
-      - name: Build all binaries
-        run: make VERSION=${{ steps.version.outputs.version }} dist
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p bin
+          go build -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }}" -o bin/${{ matrix.binary }} .
+          echo "Built: bin/${{ matrix.binary }}"
+      
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: bin/${{ matrix.binary }}
+          retention-days: 1
+
+  checksums:
+    name: Generate Checksums
+    needs: [build]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: bin/
+          merge-multiple: true
       
       - name: Generate checksums
-        id: hash
         run: |
           cd bin
           sha256sum * > SHA256SUMS
           echo "Checksums generated:"
           cat SHA256SUMS
-          # Create base64 encoded hashes for SLSA provenance (only binaries, not SHA256SUMS)
-          sha256sum diffusion-* | base64 -w0 > /tmp/hashes.txt
-          echo "hashes=$(cat /tmp/hashes.txt)" >> $GITHUB_OUTPUT
       
-      - name: Upload binaries as artifacts
+      - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
-          name: binaries
-          path: bin/*
-          retention-days: 5
+          name: SHA256SUMS
+          path: bin/SHA256SUMS
+          retention-days: 1
 
   sign:
     name: Sign Binaries with Cosign
@@ -69,17 +120,17 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
       
-      - name: Download binaries
+      - name: Download all binaries
         uses: actions/download-artifact@v4
         with:
-          name: binaries
           path: bin/
+          merge-multiple: true
       
       - name: Sign binaries with Cosign (keyless)
         run: |
           cd bin
-          for file in *; do
-            if [[ -f "$file" && ! "$file" =~ \.(sig|pem|jsonl)$ ]]; then
+          for file in diffusion-*; do
+            if [[ -f "$file" ]]; then
               echo "Signing $file..."
               cosign sign-blob --yes "$file" --output-signature "${file}.sig" --output-certificate "${file}.pem"
             fi
@@ -92,11 +143,11 @@ jobs:
           path: |
             bin/*.sig
             bin/*.pem
-          retention-days: 5
+          retention-days: 1
 
   release:
     name: Create GitHub Release
-    needs: [build, sign]
+    needs: [build, checksums, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -105,17 +156,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Download binaries
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: binaries
           path: bin/
-      
-      - name: Download signatures
-        uses: actions/download-artifact@v4
-        with:
-          name: signatures
-          path: bin/
+          merge-multiple: true
       
       - name: Create release notes
         id: notes
