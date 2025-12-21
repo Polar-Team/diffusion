@@ -1899,12 +1899,26 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		if p.src == "scenarios" {
 			dst = filepath.Join(roleMoleculePath, "molecule")
 		}
+		if CIMode {
+			log.Printf("Copying %s -> %s", src, dst)
+		}
 		copyIfExists(src, dst)
 	}
 
 	// Verify that molecule.yml was copied successfully
 	copiedMoleculeYml := filepath.Join(roleMoleculePath, "molecule", "default", "molecule.yml")
+	if CIMode {
+		log.Printf("Checking if molecule.yml exists at: %s", copiedMoleculeYml)
+	}
 	if _, err := os.Stat(copiedMoleculeYml); os.IsNotExist(err) {
+		// List what's actually in the molecule directory for debugging
+		moleculeDir := filepath.Join(roleMoleculePath, "molecule")
+		if entries, err := os.ReadDir(moleculeDir); err == nil {
+			log.Printf("\033[33mContents of %s:\033[0m", moleculeDir)
+			for _, entry := range entries {
+				log.Printf("  - %s (isDir: %v)", entry.Name(), entry.IsDir())
+			}
+		}
 		return fmt.Errorf("\033[31mFailed to copy molecule.yml to container.\nSource: %s\nDestination: %s\n\nThis may be a permission or file system issue in CI/CD.\nTry running with --ci flag: diffusion molecule --ci --converge\033[0m", moleculeYml, copiedMoleculeYml)
 	}
 
