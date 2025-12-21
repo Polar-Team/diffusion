@@ -239,7 +239,7 @@ Run Molecule testing workflows.
 **Flags:**
 - `--role, -r`: Role name (auto-detected from meta/main.yml)
 - `--org, -o`: Organization/namespace prefix (auto-detected from meta/main.yml)
-- `--tag, -t`: Ansible run tags (comma-separated, works with --converge and --idempotence)
+- `--tag, -t`: Ansible run tags (comma-separated, works with --converge, --verify, and --idempotence)
 - `--converge`: Run molecule converge (default behavior if no test flags specified)
 - `--verify`: Run molecule verify tests
 - `--lint`: Run yamllint and ansible-lint
