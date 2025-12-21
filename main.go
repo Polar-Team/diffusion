@@ -1498,6 +1498,18 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			log.Printf("\033[33mwarning: cannot create tests dir: %v\033[0m", err)
 		}
 		if ConvergeFlag {
+			// Verify molecule.yml exists inside container before running
+			if CIMode {
+				checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
+				log.Printf("Checking molecule.yml in container...")
+				if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", checkCmd); err != nil {
+					log.Printf("\033[31mmolecule.yml not found in container at /opt/molecule/%s/molecule/default/\033[0m", roleDirName)
+					log.Printf("\033[33mListing container directory structure:\033[0m")
+					_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
+					os.Exit(1)
+				}
+			}
+
 			tagEnv := ""
 			if TagFlag != "" {
 				tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", TagFlag)
