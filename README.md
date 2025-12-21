@@ -239,7 +239,7 @@ Run Molecule testing workflows.
 **Flags:**
 - `--role, -r`: Role name (auto-detected from meta/main.yml)
 - `--org, -o`: Organization/namespace prefix (auto-detected from meta/main.yml)
-- `--tag, -t`: Ansible run tags (comma-separated, works with --converge, --verify, and --idempotence)
+- `--tag, -t`: Ansible run tags (comma-separated, works with --converge and --idempotence)
 - `--converge`: Run molecule converge (default behavior if no test flags specified)
 - `--verify`: Run molecule verify tests
 - `--lint`: Run yamllint and ansible-lint
@@ -247,6 +247,24 @@ Run Molecule testing workflows.
 - `--destroy`: Run molecule destroy to clean up test instances
 - `--testsoverwrite`: Overwrite molecule tests folder for remote or diffusion type
 - `--wipe`: Remove container and molecule role folder
+- `--ci`: CI/CD mode (non-interactive, skip TTY and permission fixes)
+
+**CI/CD Mode:**
+
+Use `--ci` flag in CI/CD pipelines to avoid TTY and permission errors:
+- Removes `-ti` flags from docker exec (fixes "input device is not a TTY" errors)
+- Skips permission fixes that fail in containerized environments
+- Disables spinner animations for cleaner logs
+
+```yaml
+# GitHub Actions example
+- name: Run Molecule tests
+  run: diffusion molecule --ci --converge
+
+# GitLab CI example
+script:
+  - diffusion molecule --ci --verify
+```
 
 **Note:** Test flags (`--converge`, `--verify`, `--lint`, `--idempotence`, `--destroy`) are mutually exclusive - only one can be used at a time.
 
@@ -257,6 +275,9 @@ diffusion molecule
 
 # Run converge with specific tags
 diffusion molecule --converge --tag "install,configure"
+
+# Run in CI/CD mode
+diffusion molecule --ci --converge
 
 # Run verification tests
 diffusion molecule --verify
