@@ -1847,8 +1847,30 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
 		// container exists
+		// Verify molecule.yml exists inside container before running (CI mode)
+		if CIMode {
+			checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
+			log.Printf("Checking molecule.yml in container...")
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", checkCmd); err != nil {
+				log.Printf("\033[31mmolecule.yml not found in container at /opt/molecule/%s/molecule/default/\033[0m", roleDirName)
+				log.Printf("\033[33mListing container directory structure:\033[0m")
+				_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
+				os.Exit(1)
+			}
+		}
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	} else {
+		// Verify molecule.yml exists inside container before running (CI mode)
+		if CIMode {
+			checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
+			log.Printf("Checking molecule.yml in container...")
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", checkCmd); err != nil {
+				log.Printf("\033[31mmolecule.yml not found in container at /opt/molecule/%s/molecule/default/\033[0m", roleDirName)
+				log.Printf("\033[33mListing container directory structure:\033[0m")
+				_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
+				os.Exit(1)
+			}
+		}
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	}
