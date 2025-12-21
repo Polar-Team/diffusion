@@ -51,6 +51,7 @@ var (
 	TestsOverWriteFlag bool
 	LintFlag           bool
 	IdempotenceFlag    bool
+	DestroyFlag        bool
 	WipeFlag           bool
 )
 
@@ -826,6 +827,7 @@ func main() {
 	molCmd.Flags().BoolVar(&TestsOverWriteFlag, "testsoverwrite", false, "overwrite molecule tests folder for remote or diffusion type")
 	molCmd.Flags().BoolVar(&LintFlag, "lint", false, "run linting (yamllint / ansible-lint)")
 	molCmd.Flags().BoolVar(&IdempotenceFlag, "idempotence", false, "run molecule idempotence")
+	molCmd.Flags().BoolVar(&DestroyFlag, "destroy", false, "run molecule destroy")
 	molCmd.Flags().BoolVar(&WipeFlag, "wipe", false, "remove container and molecule role folder")
 
 	rootCmd.AddCommand(molCmd)
@@ -1483,8 +1485,8 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// handle converge/lint/verify/idempotence by ensuring files are copied and running docker exec commands
-	if ConvergeFlag || LintFlag || VerifyFlag || IdempotenceFlag {
+	// handle converge/lint/verify/idempotence/destroy by ensuring files are copied and running docker exec commands
+	if ConvergeFlag || LintFlag || VerifyFlag || IdempotenceFlag || DestroyFlag {
 		if err := copyRoleData(path, roleMoleculePath); err != nil {
 			log.Printf("\033[33mwarning copying data: %v\033[0m", err)
 		}
@@ -1602,6 +1604,9 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			}
 
 			cmdStr := fmt.Sprintf("cd ./%s && molecule verify", roleDirName)
+			if TagFlag != "" {
+				cmdStr = fmt.Sprintf("cd ./%s && ANSIBLE_RUN_TAGS=%s molecule verify", roleDirName, TagFlag)
+			}
 			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
 				log.Printf("\033[31mVerify failed: %v\033[0m", err)
 				os.Exit(1)
@@ -1620,6 +1625,15 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				os.Exit(1)
 			}
 			log.Printf("\033[32mIdempotence Done Successfully!\033[0m")
+			return nil
+		}
+		if DestroyFlag {
+			cmdStr := fmt.Sprintf("cd ./%s && molecule destroy", roleDirName)
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", cmdStr); err != nil {
+				log.Printf("\033[31mDestroy failed: %v\033[0m", err)
+				os.Exit(1)
+			}
+			log.Printf("\033[32mDestroy Done Successfully!\033[0m")
 			return nil
 		}
 	}

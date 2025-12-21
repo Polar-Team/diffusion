@@ -121,6 +121,9 @@ diffusion molecule
 # Run with verification
 diffusion molecule --verify
 
+# Run verification with specific tags
+diffusion molecule --verify --tag "check-config"
+
 # Run linting
 diffusion molecule --lint
 
@@ -133,13 +136,16 @@ diffusion molecule --converge --tag "install,configure"
 # Run idempotence with specific tags
 diffusion molecule --idempotence --tag "my-tag"
 
+# Destroy test instances
+diffusion molecule --destroy
+
 # Clean up (remove container and molecule folder)
 diffusion molecule --wipe
 ```
 
 **Notes:**
 - Role name and namespace are auto-detected from `meta/main.yml`
-- The `--tag` flag only works with `--converge` and `--idempotence` commands
+- The `--tag` flag works with `--converge`, `--verify`, and `--idempotence` commands
 - If `meta/main.yml` is not found, use `--role` and `--org` flags to override:
 
 ```bash
@@ -233,15 +239,16 @@ Run Molecule testing workflows.
 **Flags:**
 - `--role, -r`: Role name (auto-detected from meta/main.yml)
 - `--org, -o`: Organization/namespace prefix (auto-detected from meta/main.yml)
-- `--tag, -t`: Ansible run tags (optional, sets ANSIBLE_RUN_TAGS)
+- `--tag, -t`: Ansible run tags (comma-separated, works with --converge, --verify, and --idempotence)
 - `--converge`: Run molecule converge (default behavior if no test flags specified)
 - `--verify`: Run molecule verify tests
 - `--lint`: Run yamllint and ansible-lint
 - `--idempotence`: Run molecule idempotence tests
+- `--destroy`: Run molecule destroy to clean up test instances
 - `--testsoverwrite`: Overwrite molecule tests folder for remote or diffusion type
 - `--wipe`: Remove container and molecule role folder
 
-**Note:** Test flags (`--converge`, `--verify`, `--lint`, `--idempotence`) are mutually exclusive - only one can be used at a time.
+**Note:** Test flags (`--converge`, `--verify`, `--lint`, `--idempotence`, `--destroy`) are mutually exclusive - only one can be used at a time.
 
 **Examples:**
 ```bash
@@ -254,11 +261,20 @@ diffusion molecule --converge --tag "install,configure"
 # Run verification tests
 diffusion molecule --verify
 
+# Run verification with specific tags
+diffusion molecule --verify --tag "check-config"
+
 # Run linting
 diffusion molecule --lint
 
 # Run idempotence test
 diffusion molecule --idempotence
+
+# Run idempotence with tags
+diffusion molecule --idempotence --tag "install"
+
+# Destroy test instances
+diffusion molecule --destroy
 
 # Override auto-detected role/org
 diffusion molecule --role custom-role --org custom-org --verify
@@ -277,6 +293,16 @@ diffusion molecule --verify
 
 # 3. Run linting
 diffusion molecule --lint
+
+# 4. Test idempotence
+diffusion molecule --idempotence
+
+# 5. Destroy test instances
+diffusion molecule --destroy
+
+# 6. Clean up container and files
+diffusion molecule --wipe
+```
 
 # 4. Test idempotence
 diffusion molecule --idempotence
