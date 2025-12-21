@@ -48,6 +48,11 @@ jobs:
             binary: diffusion-windows-arm.exe
     
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
       - name: Check if tag is on main branch
         run: |
           git fetch origin main
@@ -55,9 +60,6 @@ jobs:
             echo "Error: Tag must be created from main branch"
             exit 1
           fi
-      
-      - name: Checkout code
-        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
