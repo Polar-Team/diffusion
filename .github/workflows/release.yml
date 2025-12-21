@@ -60,8 +60,6 @@ jobs:
             echo "Error: Tag must be created from main branch"
             exit 1
           fi
-        with:
-          fetch-depth: 0
       
       - name: Set up Go
         uses: actions/setup-go@v5
