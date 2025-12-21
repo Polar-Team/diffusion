@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'v*.*.*'
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -50,6 +48,14 @@ jobs:
             binary: diffusion-windows-arm.exe
     
     steps:
+      - name: Check if tag is on main branch
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor ${{ github.sha }} origin/main; then
+            echo "Error: Tag must be created from main branch"
+            exit 1
+          fi
+      
       - name: Checkout code
         uses: actions/checkout@v4
         with:
