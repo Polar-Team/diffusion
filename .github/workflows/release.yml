@@ -6,7 +6,7 @@ on:
       - 'v*.*.*'
     branches:
       - main
-      
+
 permissions:
   contents: write
   id-token: write  # Required for Cosign signing
