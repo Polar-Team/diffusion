@@ -53,6 +53,7 @@ var (
 	IdempotenceFlag    bool
 	DestroyFlag        bool
 	WipeFlag           bool
+	CIMode             bool
 )
 
 func main() {
@@ -829,6 +830,7 @@ func main() {
 	molCmd.Flags().BoolVar(&IdempotenceFlag, "idempotence", false, "run molecule idempotence")
 	molCmd.Flags().BoolVar(&DestroyFlag, "destroy", false, "run molecule destroy")
 	molCmd.Flags().BoolVar(&WipeFlag, "wipe", false, "remove container and molecule role folder")
+	molCmd.Flags().BoolVar(&CIMode, "ci", false, "CI/CD mode (non-interactive, skip TTY and permission fixes)")
 
 	rootCmd.AddCommand(molCmd)
 
@@ -2009,9 +2011,14 @@ func copyDir(src, dst string) error {
 }
 
 // dockerExecInteractive runs: docker exec -ti molecule-role <cmd...>
+// In CI mode, removes -ti flags to avoid TTY errors
 func dockerExecInteractive(role, command string, args ...string) error {
-	all := []string{"exec", "-ti", fmt.Sprintf("molecule-%s", role), command}
-	all = append(all, args...)
+	execFlags := []string{"exec"}
+	if !CIMode {
+		execFlags = append(execFlags, "-ti")
+	}
+	execFlags = append(execFlags, fmt.Sprintf("molecule-%s", role), command)
+	all := append(execFlags, args...)
 	cmd := exec.Command("docker", all...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -2020,13 +2027,20 @@ func dockerExecInteractive(role, command string, args ...string) error {
 }
 
 // dockerExecInteractiveHide runs: docker exec -ti molecule-role <cmd...>
+// In CI mode, removes -ti flags to avoid TTY errors
 func dockerExecInteractiveHide(role, command string, args ...string) error {
-	spinner := NewSpinner(fmt.Sprintf("Running %s in container", command))
-	spinner.Start()
-	defer spinner.Stop()
+	if !CIMode {
+		spinner := NewSpinner(fmt.Sprintf("Running %s in container", command))
+		spinner.Start()
+		defer spinner.Stop()
+	}
 
-	all := []string{"exec", "-ti", fmt.Sprintf("molecule-%s", role), command}
-	all = append(all, args...)
+	execFlags := []string{"exec"}
+	if !CIMode {
+		execFlags = append(execFlags, "-ti")
+	}
+	execFlags = append(execFlags, fmt.Sprintf("molecule-%s", role), command)
+	all := append(execFlags, args...)
 	cmd := exec.Command("docker", all...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
