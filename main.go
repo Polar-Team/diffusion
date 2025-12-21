@@ -1861,6 +1861,23 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 	if err != nil {
 		log.Printf("\033[33mwarning loading config: %v\033[0m", err)
 	}
+
+	// Validate that scenarios/default directory exists
+	scenariosPath := filepath.Join(basePath, "scenarios", "default")
+	if _, err := os.Stat(scenariosPath); os.IsNotExist(err) {
+		return fmt.Errorf("\033[31mscenarios/default directory not found in %s\n\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create the directory structure manually:\n   mkdir -p scenarios/default\n   # Add molecule.yml, converge.yml, verify.yml to scenarios/default/\033[0m", basePath)
+	}
+
+	// Validate that molecule.yml exists
+	moleculeYml := filepath.Join(scenariosPath, "molecule.yml")
+	if _, err := os.Stat(moleculeYml); os.IsNotExist(err) {
+		return fmt.Errorf("\033[31mscenarios/default/molecule.yml not found in %s\n\nThis file is required for Molecule testing.\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create molecule.yml manually in scenarios/default/\033[0m", basePath)
+	}
+
+	if !CIMode {
+		log.Printf("\033[38;2;127;255;212mCopying role data from %s to %s\033[0m", basePath, roleMoleculePath)
+	}
+
 	// create role dir base
 	if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
 		return err
@@ -1883,6 +1900,12 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 			dst = filepath.Join(roleMoleculePath, "molecule")
 		}
 		copyIfExists(src, dst)
+	}
+
+	// Verify that molecule.yml was copied successfully
+	copiedMoleculeYml := filepath.Join(roleMoleculePath, "molecule", "default", "molecule.yml")
+	if _, err := os.Stat(copiedMoleculeYml); os.IsNotExist(err) {
+		return fmt.Errorf("\033[31mFailed to copy molecule.yml to container.\nSource: %s\nDestination: %s\n\nThis may be a permission or file system issue in CI/CD.\nTry running with --ci flag: diffusion molecule --ci --converge\033[0m", moleculeYml, copiedMoleculeYml)
 	}
 
 	yamlrules := YamlLintRulesExport{
