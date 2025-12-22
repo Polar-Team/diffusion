@@ -1525,6 +1525,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			if runtime.GOOS != "windows" {
 				uid := os.Getuid()
 				gid := os.Getgid()
+				log.Printf("User UID: %d, GID: %d", uid, gid)
 				chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
 				if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
 					log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
@@ -1742,11 +1743,15 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 		args = append(args,
 			"-v", fmt.Sprintf("%s/molecule:/opt/molecule", path),
-			"-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
 			"-e", "TOKEN="+os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN="+os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR="+os.Getenv("VAULT_ADDR"),
 		)
+
+		// Add cgroup mount only if it exists (may not be available in WSL2)
+		if _, err := os.Stat("/sys/fs/cgroup"); err == nil {
+			args = append(args, "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw")
+		}
 
 		// Add cache volume mounts if enabled (roles and collections only)
 		if config.CacheConfig != nil && config.CacheConfig.Enabled && config.CacheConfig.CacheID != "" {
@@ -1789,8 +1794,25 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 		args = append(args, "--cgroupns", "host", "--privileged", "--pull", "always", image)
 
-		if err := runCommandHide("docker", args...); err != nil {
-			log.Printf("\033[33mdocker run failed: %v\033[0m", err)
+		// Run docker with error capture for better debugging
+		cmd := exec.Command("docker", args...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("\033[31mdocker run failed: %v\033[0m", err)
+			if len(output) > 0 {
+				log.Printf("\033[31mDocker error output: %s\033[0m", string(output))
+			}
+
+			// Check for common WSL2 credential helper issue
+			if strings.Contains(string(output), "docker-credential-desktop.exe") {
+				log.Printf("\033[33m\nWSL2 Docker credential issue detected!\033[0m")
+				log.Printf("\033[33mTo fix this, edit ~/.docker/config.json and either:\033[0m")
+				log.Printf("\033[33m  1. Remove the 'credsStore' line, OR\033[0m")
+				log.Printf("\033[33m  2. Change 'credsStore': 'desktop.exe' to 'credsStore': 'desktop'\033[0m")
+				log.Printf("\033[33m\nExample fix: sed -i 's/desktop.exe/desktop/g' ~/.docker/config.json\033[0m")
+			}
+
+			return err
 		}
 	}
 
