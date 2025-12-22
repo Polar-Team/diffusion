@@ -1866,7 +1866,9 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	}
 
 	// ensure role exists (skip in CI mode as we already prepared it)
-	if !CIMode && !exists(roleMoleculePath) {
+	if CIMode {
+		log.Printf("\033[35mCI Mode: Role directory already prepared, skipping init\033[0m")
+	} else if !exists(roleMoleculePath) {
 		// Normal mode: use ansible-galaxy role init
 		// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
 		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
@@ -1887,10 +1889,8 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
 			log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
 		}
-	} else if exists(roleMoleculePath) {
+	} else {
 		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
-	} else if CIMode {
-		log.Printf("\033[35mCI Mode: Role directory already prepared, skipping init\033[0m")
 	}
 
 	// docker exec login to registry inside container (provider-specific)
