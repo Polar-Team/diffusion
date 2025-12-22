@@ -1820,25 +1820,34 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	if exists(roleMoleculePath) {
 		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
 	} else {
-		// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
-		// Ensure we're in the correct directory with write permissions
-		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
-			log.Printf("\033[33mrole init warning: %v\033[0m", err)
-		}
-
-		log.Printf("Runtime OS: %s", runtime.GOOS)
-		// Fix ownership inside container after role init (Unix systems only)
-		if runtime.GOOS != "windows" {
-			uid := os.Getuid()
-			gid := os.Getgid()
-			chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, OrgFlag, RoleFlag)
-			if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
-				log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
+		// In CI mode, skip ansible-galaxy role init and copy files directly
+		if CIMode {
+			log.Printf("\033[35mCI Mode: Creating role directory structure directly\033[0m")
+			// Create the role directory on host (will be visible in container via volume mount)
+			if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
+				log.Printf("\033[33mwarning: failed to create role directory: %v\033[0m", err)
 			}
-		}
+		} else {
+			// Normal mode: use ansible-galaxy role init
+			// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
+				log.Printf("\033[33mrole init warning: %v\033[0m", err)
+			}
 
-		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
-			log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
+			// Fix ownership inside container after role init (Unix systems only)
+			if runtime.GOOS != "windows" {
+				uid := os.Getuid()
+				gid := os.Getgid()
+				chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, OrgFlag, RoleFlag)
+				if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
+					log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
+				}
+			}
+
+			// Clean up ansible-galaxy skeleton files
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
+				log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
+			}
 		}
 	}
 
@@ -1931,7 +1940,9 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		return fmt.Errorf("\033[31mscenarios/default/molecule.yml not found in %s\n\nThis file is required for Molecule testing.\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create molecule.yml manually in scenarios/default/\033[0m", basePath)
 	}
 
-	if !CIMode {
+	if CIMode {
+		log.Printf("\033[35mCI Mode: Copying role data from %s to %s\033[0m", basePath, roleMoleculePath)
+	} else {
 		log.Printf("\033[38;2;127;255;212mCopying role data from %s to %s\033[0m", basePath, roleMoleculePath)
 	}
 
@@ -1939,7 +1950,8 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 	if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
 		return err
 	}
-	// helper copy pairs
+	
+	// helper copy pairs - copy scenarios/ to molecule/ in destination
 	pairs := []struct{ src, dst string }{
 		{"tasks", "tasks"},
 		{"handlers", "handlers"},
@@ -1948,14 +1960,12 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		{"vars", "vars"},
 		{"defaults", "defaults"},
 		{"meta", "meta"},
-		{"scenarios", "molecule"}, // copy scenarios into molecule/<role>/molecule/
+		{"scenarios", "molecule"}, // copy scenarios/ into molecule/<role>/molecule/
 	}
+	
 	for _, p := range pairs {
 		src := filepath.Join(basePath, p.src)
 		dst := filepath.Join(roleMoleculePath, p.dst)
-		if p.src == "scenarios" {
-			dst = filepath.Join(roleMoleculePath, "molecule")
-		}
 		if CIMode {
 			log.Printf("Copying %s -> %s", src, dst)
 		}
@@ -1965,10 +1975,23 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 	// Verify that molecule.yml was copied successfully
 	copiedMoleculeYml := filepath.Join(roleMoleculePath, "molecule", "default", "molecule.yml")
 	if CIMode {
-		log.Printf("Checking if molecule.yml exists at: %s", copiedMoleculeYml)
+		log.Printf("Verifying molecule.yml exists at: %s", copiedMoleculeYml)
 	}
 	if _, err := os.Stat(copiedMoleculeYml); os.IsNotExist(err) {
 		// List what's actually in the molecule directory for debugging
+		moleculeDir := filepath.Join(roleMoleculePath, "molecule")
+		if entries, err := os.ReadDir(moleculeDir); err == nil {
+			log.Printf("\033[33mContents of %s:\033[0m", moleculeDir)
+			for _, entry := range entries {
+				log.Printf("  - %s (isDir: %v)", entry.Name(), entry.IsDir())
+			}
+		}
+		return fmt.Errorf("\033[31mFailed to copy molecule.yml to %s\nSource: %s\n\nThis may be a permission or file system issue.\033[0m", copiedMoleculeYml, moleculeYml)
+	}
+	
+	if CIMode {
+		log.Printf("\033[32m✓ molecule.yml successfully copied\033[0m")
+	}
 		moleculeDir := filepath.Join(roleMoleculePath, "molecule")
 		if entries, err := os.ReadDir(moleculeDir); err == nil {
 			log.Printf("\033[33mContents of %s:\033[0m", moleculeDir)
