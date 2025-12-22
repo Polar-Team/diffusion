@@ -6,7 +6,7 @@
 
 **A powerful Go-based CLI framework for simplifying Ansible role testing with Molecule**
 
-[![Release](https://github.com/Polar-Team/diffusion/actions/workflows/release.yml/badge.svg)](https://github.com/Polar-Team/diffusion/actions/workflows/release.yml)
+[![Release](https://github.com/Polar-Team/diffusion/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/Polar-Team/diffusion/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/Polar-Team/diffusion)](https://github.com/Polar-Team/diffusion)
 
