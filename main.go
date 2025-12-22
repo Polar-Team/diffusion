@@ -1654,6 +1654,25 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	}
 
 	// default flow: create/run container if not exists, copy data, converge
+	// In CI mode, always remove existing container to ensure clean state
+	if CIMode {
+		containerName := fmt.Sprintf("molecule-%s", RoleFlag)
+		// Check if container exists
+		if exec.Command("docker", "inspect", containerName).Run() == nil {
+			log.Printf("\033[35mCI Mode: Removing existing container for clean state\033[0m")
+			// Stop and remove container
+			_ = exec.Command("docker", "stop", containerName).Run()
+			_ = exec.Command("docker", "rm", containerName).Run()
+		}
+		// Also remove the role directory to start fresh
+		if exists(roleMoleculePath) {
+			log.Printf("\033[35mCI Mode: Removing existing role directory for clean state\033[0m")
+			if err := os.RemoveAll(roleMoleculePath); err != nil {
+				log.Printf("\033[33mwarning: failed to remove role directory: %v\033[0m", err)
+			}
+		}
+	}
+
 	// check if container exists
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
