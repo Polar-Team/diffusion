@@ -1697,6 +1697,30 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			log.Println("\033[35mNo artifact sources configured. Use public repositories or 'diffusion artifact add' to configure.\033[0m")
 		}
 
+		// In CI mode, prepare role directory and copy files BEFORE starting container
+		if CIMode {
+			log.Printf("\033[35mCI Mode: Preparing role directory before container start\033[0m")
+
+			// Create role directory structure
+			if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
+				log.Printf("\033[33mwarning: failed to create role directory: %v\033[0m", err)
+			}
+
+			// Copy role data to host filesystem (will be mounted into container)
+			if err := copyRoleData(path, roleMoleculePath); err != nil {
+				log.Printf("\033[31mFailed to copy role data: %v\033[0m", err)
+				os.Exit(1)
+			}
+
+			// Verify files exist on host
+			hostMoleculeYml := filepath.Join(roleMoleculePath, "molecule", "default", "molecule.yml")
+			if _, err := os.Stat(hostMoleculeYml); err != nil {
+				log.Printf("\033[31mmolecule.yml not found on host at: %s\033[0m", hostMoleculeYml)
+				os.Exit(1)
+			}
+			log.Printf("\033[32m✓ Role files prepared on host, ready for container mount\033[0m")
+		}
+
 		// Initialize CLI and login based on registry provider
 		switch config.ContainerRegistry.RegistryProvider {
 		case "YC":
@@ -1822,39 +1846,32 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// ensure role exists
-	if exists(roleMoleculePath) {
-		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
-	} else {
-		// In CI mode, skip ansible-galaxy role init and copy files directly
-		if CIMode {
-			log.Printf("\033[35mCI Mode: Creating role directory structure directly\033[0m")
-			// Create the role directory on host (will be visible in container via volume mount)
-			if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
-				log.Printf("\033[33mwarning: failed to create role directory: %v\033[0m", err)
-			}
-		} else {
-			// Normal mode: use ansible-galaxy role init
-			// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
-			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
-				log.Printf("\033[33mrole init warning: %v\033[0m", err)
-			}
+	// ensure role exists (skip in CI mode as we already prepared it)
+	if !CIMode && !exists(roleMoleculePath) {
+		// Normal mode: use ansible-galaxy role init
+		// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
+		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
+			log.Printf("\033[33mrole init warning: %v\033[0m", err)
+		}
 
-			// Fix ownership inside container after role init (Unix systems only)
-			if runtime.GOOS != "windows" {
-				uid := os.Getuid()
-				gid := os.Getgid()
-				chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, OrgFlag, RoleFlag)
-				if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
-					log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
-				}
-			}
-
-			// Clean up ansible-galaxy skeleton files
-			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
-				log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
+		// Fix ownership inside container after role init (Unix systems only)
+		if runtime.GOOS != "windows" {
+			uid := os.Getuid()
+			gid := os.Getgid()
+			chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, OrgFlag, RoleFlag)
+			if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
+				log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
 			}
 		}
+
+		// Clean up ansible-galaxy skeleton files
+		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
+			log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
+		}
+	} else if exists(roleMoleculePath) {
+		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
+	} else if CIMode {
+		log.Printf("\033[35mCI Mode: Role directory already prepared, skipping init\033[0m")
 	}
 
 	// docker exec login to registry inside container (provider-specific)
@@ -1876,9 +1893,13 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		log.Printf("\033[33mUnknown registry provider '%s', skipping authentication\033[0m", config.ContainerRegistry.RegistryProvider)
 	}
 
-	// copy files into molecule structure
-	if err := copyRoleData(path, roleMoleculePath); err != nil {
-		log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
+	// copy files into molecule structure (skip in CI mode as already done before container start)
+	if !CIMode {
+		if err := copyRoleData(path, roleMoleculePath); err != nil {
+			log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
+		}
+	} else {
+		log.Printf("\033[35mCI Mode: Files already copied before container start\033[0m")
 	}
 
 	// In CI mode, verify files exist on host before checking container
