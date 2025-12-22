@@ -1741,12 +1741,18 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// Note: Not using user mapping here because DinD (Docker-in-Docker) requires root
 		// We'll fix permissions on the mounted volume after operations instead
 
+		volumeMount := fmt.Sprintf("%s/molecule:/opt/molecule", path)
 		args = append(args,
-			"-v", fmt.Sprintf("%s/molecule:/opt/molecule", path),
+			"-v", volumeMount,
 			"-e", "TOKEN="+os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN="+os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR="+os.Getenv("VAULT_ADDR"),
 		)
+
+		if CIMode {
+			log.Printf("\033[35mCI Mode: Volume mount: %s\033[0m", volumeMount)
+			log.Printf("\033[35mCI Mode: Role will be at: /opt/molecule/%s\033[0m", roleDirName)
+		}
 
 		// Add cgroup mount only if it exists (may not be available in WSL2)
 		if _, err := os.Stat("/sys/fs/cgroup"); err == nil {
@@ -1873,6 +1879,28 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	// copy files into molecule structure
 	if err := copyRoleData(path, roleMoleculePath); err != nil {
 		log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
+	}
+
+	// In CI mode, verify files exist on host before checking container
+	if CIMode {
+		log.Printf("\033[35mCI Mode: Verifying files on host filesystem\033[0m")
+		log.Printf("Host path: %s", roleMoleculePath)
+		if entries, err := os.ReadDir(roleMoleculePath); err == nil {
+			log.Printf("Host directory contents:")
+			for _, entry := range entries {
+				log.Printf("  - %s (isDir: %v)", entry.Name(), entry.IsDir())
+			}
+		} else {
+			log.Printf("\033[31mFailed to read host directory: %v\033[0m", err)
+		}
+
+		// Check if molecule.yml exists on host
+		hostMoleculeYml := filepath.Join(roleMoleculePath, "molecule", "default", "molecule.yml")
+		if _, err := os.Stat(hostMoleculeYml); err == nil {
+			log.Printf("\033[32m✓ molecule.yml exists on host at: %s\033[0m", hostMoleculeYml)
+		} else {
+			log.Printf("\033[31m✗ molecule.yml NOT found on host at: %s\033[0m", hostMoleculeYml)
+		}
 	}
 
 	// finally create/converge
