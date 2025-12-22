@@ -1950,7 +1950,7 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 	if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
 		return err
 	}
-	
+
 	// helper copy pairs - copy scenarios/ to molecule/ in destination
 	pairs := []struct{ src, dst string }{
 		{"tasks", "tasks"},
@@ -1962,7 +1962,7 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		{"meta", "meta"},
 		{"scenarios", "molecule"}, // copy scenarios/ into molecule/<role>/molecule/
 	}
-	
+
 	for _, p := range pairs {
 		src := filepath.Join(basePath, p.src)
 		dst := filepath.Join(roleMoleculePath, p.dst)
@@ -1988,18 +1988,9 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 		}
 		return fmt.Errorf("\033[31mFailed to copy molecule.yml to %s\nSource: %s\n\nThis may be a permission or file system issue.\033[0m", copiedMoleculeYml, moleculeYml)
 	}
-	
+
 	if CIMode {
 		log.Printf("\033[32m✓ molecule.yml successfully copied\033[0m")
-	}
-		moleculeDir := filepath.Join(roleMoleculePath, "molecule")
-		if entries, err := os.ReadDir(moleculeDir); err == nil {
-			log.Printf("\033[33mContents of %s:\033[0m", moleculeDir)
-			for _, entry := range entries {
-				log.Printf("  - %s (isDir: %v)", entry.Name(), entry.IsDir())
-			}
-		}
-		return fmt.Errorf("\033[31mFailed to copy molecule.yml to container.\nSource: %s\nDestination: %s\n\nThis may be a permission or file system issue in CI/CD.\nTry running with --ci flag: diffusion molecule --ci --converge\033[0m", moleculeYml, copiedMoleculeYml)
 	}
 
 	yamlrules := YamlLintRulesExport{
