@@ -1826,6 +1826,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			log.Printf("\033[33mrole init warning: %v\033[0m", err)
 		}
 
+		log.Printf("Runtime OS: %s", runtime.GOOS)
 		// Fix ownership inside container after role init (Unix systems only)
 		if runtime.GOOS != "windows" {
 			uid := os.Getuid()
