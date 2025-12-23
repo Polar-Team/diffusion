@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // PathCache caches file existence checks to avoid repeated os.Stat calls
@@ -185,6 +188,75 @@ func maskToken(token string) string {
 		return "****"
 	}
 	return token[:4] + strings.Repeat("*", len(token)-8) + token[len(token)-4:]
+}
+
+func exportLinters(config *Config, roleMoleculePath string, CIMode bool, roleFlag string, orgFlag string) error {
+
+	yamlrules := YamlLintRulesExport{
+		Braces:             config.YamlLintConfig.Rules.Braces,
+		Brackets:           config.YamlLintConfig.Rules.Brackets,
+		NewLines:           config.YamlLintConfig.Rules.NewLines,
+		Comments:           config.YamlLintConfig.Rules.Comments,
+		CommentsIdentation: config.YamlLintConfig.Rules.CommentsIdentation,
+		OctalValues:        config.YamlLintConfig.Rules.OctalValues,
+	}
+
+	exportYamlLint := YamlLintExport{
+		Extends: config.YamlLintConfig.Extends,
+		Ignore:  strings.Join(config.YamlLintConfig.Ignore, "\n"),
+		Rules:   &yamlrules,
+	}
+	yamllint, err := yaml.Marshal(exportYamlLint)
+	if err != nil {
+		log.Printf("\033[33mwarning marshaling yamllint config: %v\033[0m", err)
+	} else {
+		if !CIMode {
+			yamllintPath := filepath.Join(roleMoleculePath, ".yamllint")
+			if err := os.WriteFile(yamllintPath, yamllint, 0o644); err != nil {
+				log.Printf("\033[33mwarning writing .yamllint: %v\033[0m", err)
+			}
+		} else {
+			// In CI mode, write to container using cat with heredoc
+			roleDirName := fmt.Sprintf("%s.%s", orgFlag, roleFlag)
+			containerPath := fmt.Sprintf("/opt/molecule/%s/.yamllint", roleDirName)
+			// Use base64 encoding to safely transfer content
+			yamllintB64 := base64.StdEncoding.EncodeToString(yamllint)
+			cmdCreateFile := fmt.Sprintf("echo '%s' | base64 -d > %s", yamllintB64, containerPath)
+			if err := dockerExecInteractiveHide(roleFlag, "/bin/sh", "-c", cmdCreateFile); err != nil {
+				log.Printf("\033[33mwarning writing .yamllint in CI mode: %v\033[0m", err)
+			}
+		}
+	}
+
+	exportAnsibleLint := AnsibleLintExport{
+		ExcludedPaths: config.AnsibleLintConfig.ExcludedPaths,
+		WarnList:      config.AnsibleLintConfig.WarnList,
+		SkipList:      config.AnsibleLintConfig.SkipList,
+	}
+
+	ansiblelint, err := yaml.Marshal(exportAnsibleLint)
+	if err != nil {
+		log.Printf("\033[33mwarning marshaling ansible-lint config: %v\033[0m", err)
+	} else {
+		if !CIMode {
+			ansiblelintPath := filepath.Join(roleMoleculePath, ".ansible-lint")
+			if err := os.WriteFile(ansiblelintPath, ansiblelint, 0o644); err != nil {
+				log.Printf("\033[33mwarning writing .ansible-lint: %v\033[0m", err)
+			}
+		} else {
+			// In CI mode, write to container using cat with heredoc
+			roleDirName := fmt.Sprintf("%s.%s", orgFlag, roleFlag)
+			containerPath := fmt.Sprintf("/opt/molecule/%s/.ansible-lint", roleDirName)
+			// Use base64 encoding to safely transfer content
+			ansiblelintB64 := base64.StdEncoding.EncodeToString(ansiblelint)
+			cmdCreateFile := fmt.Sprintf("echo '%s' | base64 -d > %s", ansiblelintB64, containerPath)
+			if err := dockerExecInteractiveHide(roleFlag, "/bin/sh", "-c", cmdCreateFile); err != nil {
+				log.Printf("\033[33mwarning writing .ansible-lint in CI mode: %v\033[0m", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // GetUserMappingArgs returns docker user mapping arguments for Unix systems

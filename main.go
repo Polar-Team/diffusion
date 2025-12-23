@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // Version is set at build time via ldflags
@@ -1489,11 +1488,20 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 	// handle converge/lint/verify/idempotence/destroy by ensuring files are copied and running docker exec commands
 	if ConvergeFlag || LintFlag || VerifyFlag || IdempotenceFlag || DestroyFlag {
+
 		if !CIMode {
 			if err := copyRoleData(path, roleMoleculePath); err != nil {
 				log.Printf("\033[33mwarning copying data: %v\033[0m", err)
 			}
 		}
+
+		linters := roleMoleculePath
+		// In CI mode, set linters to Org.Role format
+		if CIMode {
+			linters = fmt.Sprintf("%s.%s", OrgFlag, RoleFlag)
+		}
+		exportLinters(config, linters, CIMode, RoleFlag, OrgFlag)
+
 		// Determine scenario name for tests directory
 		scenario := "default"
 		if RoleScenario != "" {
@@ -1967,6 +1975,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		if err := copyRoleData(path, roleMoleculePath); err != nil {
 			log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
 		}
+		exportLinters(config, roleMoleculePath, CIMode, RoleFlag, OrgFlag)
 	}
 
 	// finally create/converge
@@ -1995,10 +2004,6 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 // copyRoleData copies tasks, handlers, templates, files, vars, defaults, meta, scenarios, .ansible-lint, .yamllint
 func copyRoleData(basePath, roleMoleculePath string) error {
-	config, err := LoadConfig()
-	if err != nil {
-		log.Printf("\033[33mwarning loading config: %v\033[0m", err)
-	}
 
 	// Validate that scenarios/default directory exists
 	scenariosPath := filepath.Join(basePath, "scenarios", "default")
@@ -2058,46 +2063,6 @@ func copyRoleData(basePath, roleMoleculePath string) error {
 			}
 		}
 		return fmt.Errorf("\033[31mFailed to copy molecule.yml to container.\nSource: %s\nDestination: %s\n\nThis may be a permission or file system issue in CI/CD.\nTry running with --ci flag: diffusion molecule --ci --converge\033[0m", moleculeYml, copiedMoleculeYml)
-	}
-
-	yamlrules := YamlLintRulesExport{
-		Braces:             config.YamlLintConfig.Rules.Braces,
-		Brackets:           config.YamlLintConfig.Rules.Brackets,
-		NewLines:           config.YamlLintConfig.Rules.NewLines,
-		Comments:           config.YamlLintConfig.Rules.Comments,
-		CommentsIdentation: config.YamlLintConfig.Rules.CommentsIdentation,
-		OctalValues:        config.YamlLintConfig.Rules.OctalValues,
-	}
-
-	exportYamlLint := YamlLintExport{
-		Extends: config.YamlLintConfig.Extends,
-		Ignore:  strings.Join(config.YamlLintConfig.Ignore, "\n"),
-		Rules:   &yamlrules,
-	}
-	yamllint, err := yaml.Marshal(exportYamlLint)
-	if err != nil {
-		log.Printf("\033[33mwarning marshaling yamllint config: %v\033[0m", err)
-	} else {
-		yamllintPath := filepath.Join(roleMoleculePath, ".yamllint")
-		if err := os.WriteFile(yamllintPath, yamllint, 0o644); err != nil {
-			log.Printf("\033[33mwarning writing .yamllint: %v\033[0m", err)
-		}
-	}
-
-	exportAnsibleLint := AnsibleLintExport{
-		ExcludedPaths: config.AnsibleLintConfig.ExcludedPaths,
-		WarnList:      config.AnsibleLintConfig.WarnList,
-		SkipList:      config.AnsibleLintConfig.SkipList,
-	}
-
-	ansiblelint, err := yaml.Marshal(exportAnsibleLint)
-	if err != nil {
-		log.Printf("\033[33mwarning marshaling ansible-lint config: %v\033[0m", err)
-	} else {
-		ansiblelintPath := filepath.Join(roleMoleculePath, ".ansible-lint")
-		if err := os.WriteFile(ansiblelintPath, ansiblelint, 0o644); err != nil {
-			log.Printf("\033[33mwarning writing .ansible-lint: %v\033[0m", err)
-		}
 	}
 
 	return nil
