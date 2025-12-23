@@ -1741,12 +1741,46 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// Note: Not using user mapping here because DinD (Docker-in-Docker) requires root
 		// We'll fix permissions on the mounted volume after operations instead
 
+		// CI Mode: Don't mount /opt/molecule, we'll clone repo inside container
+		if !CIMode {
+			args = append(args, "-v", fmt.Sprintf("%s/molecule:/opt/molecule", path))
+		}
+
 		args = append(args,
-			"-v", fmt.Sprintf("%s/molecule:/opt/molecule", path),
 			"-e", "TOKEN="+os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN="+os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR="+os.Getenv("VAULT_ADDR"),
 		)
+
+		// CI Mode: Pass git remote and commit SHA for cloning inside container
+		if CIMode {
+			// Get git remote URL from current repository
+			gitRemoteCmd := exec.Command("git", "config", "--get", "remote.origin.url")
+			gitRemoteCmd.Dir = path
+			gitRemoteOutput, err := gitRemoteCmd.Output()
+			if err != nil {
+				return fmt.Errorf("CI mode: failed to get git remote URL: %w", err)
+			}
+			gitRemote := strings.TrimSpace(string(gitRemoteOutput))
+
+			// Get current commit SHA
+			gitShaCmd := exec.Command("git", "rev-parse", "HEAD")
+			gitShaCmd.Dir = path
+			gitShaOutput, err := gitShaCmd.Output()
+			if err != nil {
+				return fmt.Errorf("CI mode: failed to get git commit SHA: %w", err)
+			}
+			gitSha := strings.TrimSpace(string(gitShaOutput))
+
+			args = append(args,
+				"-e", "CI_MODE=true",
+				"-e", "GIT_REMOTE="+gitRemote,
+				"-e", "GIT_SHA="+gitSha,
+				"-e", "ROLE_NAME="+RoleFlag,
+				"-e", "ORG_NAME="+OrgFlag,
+			)
+			log.Printf("\033[32mCI Mode: Will clone %s (commit: %s) inside container\033[0m", gitRemote, gitSha[:8])
+		}
 
 		// Add cgroup mount only if it exists (may not be available in WSL2)
 		if _, err := os.Stat("/sys/fs/cgroup"); err == nil {
@@ -1816,28 +1850,77 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// ensure role exists
-	if exists(roleMoleculePath) {
-		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
-	} else {
-		// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
-		// Ensure we're in the correct directory with write permissions
-		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
-			log.Printf("\033[33mrole init warning: %v\033[0m", err)
+	// CI Mode: Clone repository and setup files inside container
+	if CIMode {
+		log.Printf("\033[32mCI Mode: Setting up repository inside container...\033[0m")
+
+		// Clone repository to /tmp/repo and checkout specific commit
+		cloneCmd := `cd /tmp && git clone "$GIT_REMOTE" repo && cd repo && git checkout "$GIT_SHA"`
+		if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", cloneCmd); err != nil {
+			return fmt.Errorf("failed to clone repository in container: %w", err)
+		}
+		log.Printf("\033[32mCI Mode: Repository cloned to /tmp/repo\033[0m")
+
+		// Create role directory structure
+		roleDirName := fmt.Sprintf("%s.%s", OrgFlag, RoleFlag)
+		mkdirCmd := fmt.Sprintf("mkdir -p /opt/molecule/%s", roleDirName)
+		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", mkdirCmd); err != nil {
+			return fmt.Errorf("failed to create role directory in container: %w", err)
 		}
 
-		// Fix ownership inside container after role init (Unix systems only)
-		if runtime.GOOS != "windows" {
-			uid := os.Getuid()
-			gid := os.Getgid()
-			chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, OrgFlag, RoleFlag)
-			if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
-				log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
+		// Copy role files from /tmp/repo to /opt/molecule/org.role/
+		copyDirs := []string{"tasks", "defaults", "meta", "handlers", "templates", "files", "vars"}
+		for _, dir := range copyDirs {
+			copyCmd := fmt.Sprintf("if [ -d /tmp/repo/%s ]; then cp -r /tmp/repo/%s /opt/molecule/%s/; fi", dir, dir, roleDirName)
+			_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", copyCmd)
+		}
+
+		// Copy scenarios to molecule directory
+		copyScenarios := fmt.Sprintf("if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios /opt/molecule/%s/molecule; fi", roleDirName)
+		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", copyScenarios); err != nil {
+			return fmt.Errorf("failed to copy scenarios in container: %w", err)
+		}
+
+		// Copy lint configs
+		copyLintCmd := fmt.Sprintf("if [ -f /tmp/repo/.ansible-lint ]; then cp /tmp/repo/.ansible-lint /opt/molecule/%s/; fi && if [ -f /tmp/repo/.yamllint ]; then cp /tmp/repo/.yamllint /opt/molecule/%s/; fi", roleDirName, roleDirName)
+		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", copyLintCmd)
+
+		log.Printf("\033[32mCI Mode: Role files copied to /opt/molecule/%s\033[0m", roleDirName)
+
+		// Verify molecule.yml exists
+		verifyCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
+		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", verifyCmd); err != nil {
+			log.Printf("\033[31mCI Mode: molecule.yml not found!\033[0m")
+			_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
+			return fmt.Errorf("molecule.yml not found in container")
+		}
+		log.Printf("\033[32mCI Mode: Setup complete!\033[0m")
+	}
+
+	// ensure role exists (skip in CI mode - already handled)
+	if !CIMode {
+		if exists(roleMoleculePath) {
+			fmt.Println("\033[35mThis role already exists in molecule\033[0m")
+		} else {
+			// docker exec -ti molecule-$role /bin/sh -c "cd /opt/molecule && ansible-galaxy role init $org.$role"
+			// Ensure we're in the correct directory with write permissions
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", OrgFlag, RoleFlag)); err != nil {
+				log.Printf("\033[33mrole init warning: %v\033[0m", err)
 			}
-		}
 
-		if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
-			log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
+			// Fix ownership inside container after role init (Unix systems only)
+			if runtime.GOOS != "windows" {
+				uid := os.Getuid()
+				gid := os.Getgid()
+				chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, OrgFlag, RoleFlag)
+				if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd); err != nil {
+					log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
+				}
+			}
+
+			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("rm -f %s.%s/*/*", OrgFlag, RoleFlag)); err != nil {
+				log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
+			}
 		}
 	}
 
@@ -1860,46 +1943,26 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		log.Printf("\033[33mUnknown registry provider '%s', skipping authentication\033[0m", config.ContainerRegistry.RegistryProvider)
 	}
 
-	// copy files into molecule structure
-	if err := copyRoleData(path, roleMoleculePath); err != nil {
-		log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
+	// copy files into molecule structure (skip in CI mode - already handled)
+	if !CIMode {
+		if err := copyRoleData(path, roleMoleculePath); err != nil {
+			log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
+		}
 	}
 
 	// finally create/converge
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
 		// container exists
-		// Verify molecule.yml exists inside container before running (CI mode)
-		if CIMode {
-			checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
-			log.Printf("Checking molecule.yml in container...")
-			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", checkCmd); err != nil {
-				log.Printf("\033[31mmolecule.yml not found in container at /opt/molecule/%s/molecule/default/\033[0m", roleDirName)
-				log.Printf("\033[33mListing container directory structure:\033[0m")
-				_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
-				os.Exit(1)
-			}
-		}
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	} else {
-		// Verify molecule.yml exists inside container before running (CI mode)
-		if CIMode {
-			checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
-			log.Printf("Checking molecule.yml in container...")
-			if err := dockerExecInteractive(RoleFlag, "/bin/sh", "-c", checkCmd); err != nil {
-				log.Printf("\033[31mmolecule.yml not found in container at /opt/molecule/%s/molecule/default/\033[0m", roleDirName)
-				log.Printf("\033[33mListing container directory structure:\033[0m")
-				_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
-				os.Exit(1)
-			}
-		}
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	}
 
-	// Fix permissions on molecule directory for Unix systems
+	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
 	// Container runs as root (for DinD), so we need to fix ownership inside the container
-	if runtime.GOOS != "windows" {
+	if !CIMode && runtime.GOOS != "windows" {
 		uid := os.Getuid()
 		gid := os.Getgid()
 		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
