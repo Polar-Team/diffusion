@@ -4,6 +4,16 @@ All notable changes to the Diffusion project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.13] - 2024-12-23
+
+### Changed
+- **Code Readability**: Improved multiline command formatting in CI mode
+  - Refactored long git clone command to multiline format for better readability
+  - Added proper line continuation with backslashes
+  - Fixed log message typo (`/tmp/role/tests` → `/tmp/repo/tests`)
+
+## [0.3.12] - 2024-12-23
+
 ## [0.3.11] - 2024-12-23
 
 ### Fixed

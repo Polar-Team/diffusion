@@ -1509,7 +1509,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 
 		// Create tests directory for verify/lint
-		moleculeDefaultTestsPath := fmt.Sprintf("%s.%s/molecule/%s/tests", RoleFlag, OrgFlag, scenario)
+		moleculeDefaultTestsPath := fmt.Sprintf("%s.%s/molecule/%s/tests", OrgFlag, RoleFlag, scenario)
 		if err := os.MkdirAll(moleculeDefaultTestsPath, 0o755); err != nil {
 			log.Printf("\033[33mwarning: cannot create scenario tests dir: %v\033[0m", err)
 		}
@@ -1570,8 +1570,15 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			case "local":
 				testsSrc := filepath.Join(path, "tests")
 				if CIMode {
-					log.Printf("CIMode detected, copying tests from /tmp/role/tests to %s.%s/molecule/%s/tests/", OrgFlag, RoleFlag, scenario)
-					cmdCopy := fmt.Sprintf("cp -r /tmp/repo/tests %s.%s/molecule/%s/tests/", OrgFlag, RoleFlag, scenario)
+					log.Printf("CIMode detected, copying tests from /tmp/repo/tests to %s.%s/molecule/%s/tests/", OrgFlag, RoleFlag, scenario)
+					cmdCopy := fmt.Sprintf(`
+						cd /tmp && \
+						rm -rf repo && \
+						git clone "${GIT_REMOTE}" repo && \
+						cd repo && \
+						git checkout "${GIT_SHA}" && \
+						cp -rf /tmp/repo/tests /opt/molecule/%s.%s/molecule/%s/
+					`, OrgFlag, RoleFlag, scenario)
 					if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", cmdCopy); err != nil {
 						log.Printf("\033[33mwarning copying tests in CI mode: %v\033[0m", err)
 					}
