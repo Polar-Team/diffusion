@@ -4,6 +4,54 @@ All notable changes to the Diffusion project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.10] - 2024-12-23
+
+### Added
+- **CI Mode**: New `--ci` flag for CI/CD environments
+  - Clones repository inside container instead of using volume mounts
+  - Automatically detects git remote URL and commit SHA from current repository
+  - Passes repository information as environment variables (`GIT_REMOTE`, `GIT_SHA`) to container
+  - Container workflow: clone to `/tmp/repo` → checkout specific commit → copy files to `/opt/molecule/org.role/`
+  - Skips ansible-galaxy role init (not needed in CI)
+  - Skips volume mount of `/opt/molecule` (avoids permission and timing issues)
+  - Skips permission fixes (no volume mount to fix)
+  - Skips host-side file copying (all operations inside container)
+  - Works with any git provider (GitHub, GitLab, Bitbucket, self-hosted)
+  - Ensures reproducible builds by checking out specific commit SHA
+  - Eliminates volume mount timing and permission issues in CI runners
+  - Git is pre-installed in diffusion-molecule-container (no installation needed)
+- **Windows E2E Testing**: Added Cygwin expect automation for Windows Vagrantfile
+  - Automated CLI interaction testing with expect scripts
+  - Docker Desktop installation support (requires manual configuration in VMs)
+  - Complete test suite matching Linux functionality
+  - Build flag `-buildvcs=false` to prevent Git VCS errors
+- **WSL2 Docker Support**: Improved Docker credential helper error detection
+  - Detects `docker-credential-desktop.exe` errors in WSL2
+  - Provides clear fix instructions for WSL2 Docker configuration
+  - Conditional cgroup mount (only if `/sys/fs/cgroup` exists)
+- **Enhanced Error Logging**: Better Docker error diagnostics
+  - Captures and displays Docker command output on failures
+  - Shows full error messages for debugging
+  - Volume mount path logging in verbose mode
+
+### Changed
+- **Git Operations**: Improved git command execution for CI mode
+  - Uses `exec.CommandContext` with 10-second timeout for safety
+  - Uses `git -C <path>` flag for cleaner working directory handling
+  - Proper error handling with `CombinedOutput()` for both stdout and stderr
+  - Detects git remote and commit SHA automatically from current repository
+- **Cgroup Mount**: Made conditional based on path existence
+  - Prevents errors in WSL2 where cgroup may not be accessible
+  - Improves compatibility across different Linux environments
+
+### Fixed
+- Docker run error handling with detailed output capture
+- WSL2 compatibility issues with Docker credential helpers
+- Cgroup mount failures in containerized environments
+- Git clone command in CI mode now properly expands environment variables with double quotes
+
+## [0.3.3] - 2024-12-22
+
 ### Added
 - **Ansible Cache Feature**: Persist Ansible roles and collections for faster role execution
   - CLI commands: `cache enable`, `cache disable`, `cache clean`, `cache status`, `cache list`

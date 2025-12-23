@@ -1489,14 +1489,25 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 	// handle converge/lint/verify/idempotence/destroy by ensuring files are copied and running docker exec commands
 	if ConvergeFlag || LintFlag || VerifyFlag || IdempotenceFlag || DestroyFlag {
-		if err := copyRoleData(path, roleMoleculePath); err != nil {
-			log.Printf("\033[33mwarning copying data: %v\033[0m", err)
+		if !CIMode {
+			if err := copyRoleData(path, roleMoleculePath); err != nil {
+				log.Printf("\033[33mwarning copying data: %v\033[0m", err)
+			}
 		}
-		// ensure tests dir exists for verify/lint
-		defaultTestsDir := filepath.Join(roleMoleculePath, "molecule", "default", "tests")
-		if err := os.MkdirAll(defaultTestsDir, 0o755); err != nil {
-			log.Printf("\033[33mwarning: cannot create tests dir: %v\033[0m", err)
+		// Determine scenario name for tests directory
+		scenario := "default"
+		if RoleScenario != "" {
+			scenario = RoleScenario
 		}
+
+		// Create tests directory for verify/lint
+		moleculeDefaultTestsPath := fmt.Sprintf("%s.%s/molecule/%s/tests", RoleFlag, OrgFlag, scenario)
+		if err := os.MkdirAll(moleculeDefaultTestsPath, 0o755); err != nil {
+			log.Printf("\033[33mwarning: cannot create scenario tests dir: %v\033[0m", err)
+		}
+		defaultTestsDir := moleculeDefaultTestsPath
+		log.Printf("Default tests dir: %s", defaultTestsDir)
+
 		if ConvergeFlag {
 			// Verify molecule.yml exists inside container before running
 			if CIMode {
@@ -1550,7 +1561,15 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			switch config.TestsConfig.Type {
 			case "local":
 				testsSrc := filepath.Join(path, "tests")
-				copyIfExists(testsSrc, defaultTestsDir)
+				if CIMode {
+					log.Printf("CIMode detected, copying tests from /tmp/role/tests to %s.%s/molecule/%s/tests/", OrgFlag, RoleFlag, scenario)
+					cmdCopy := fmt.Sprintf("cp -r /tmp/repo/tests %s.%s/molecule/%s/tests/", OrgFlag, RoleFlag, scenario)
+					if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", cmdCopy); err != nil {
+						log.Printf("\033[33mwarning copying tests in CI mode: %v\033[0m", err)
+					}
+				} else {
+					copyIfExists(testsSrc, defaultTestsDir)
+				}
 			case "remote":
 				for _, repo := range config.TestsConfig.RemoteRepositories {
 					roleName := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(repo), ".git"), "/")
@@ -1855,7 +1874,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		log.Printf("\033[32mCI Mode: Setting up repository inside container...\033[0m")
 
 		// Clone repository to /tmp/repo and checkout specific commit
-		cloneCmd := `cd /tmp && git clone "$GIT_REMOTE" repo && cd repo && git checkout "$GIT_SHA"`
+		cloneCmd := `cd /tmp && rm -rf repo && git clone "$GIT_REMOTE" repo && cd repo && git checkout "$GIT_SHA"`
 		if err := dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", cloneCmd); err != nil {
 			return fmt.Errorf("failed to clone repository in container: %w", err)
 		}
