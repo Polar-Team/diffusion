@@ -4,6 +4,16 @@ All notable changes to the Diffusion project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.11] - 2024-12-23
+
+### Fixed
+- **CI Mode Lint Configuration**: Fixed yamllint and ansible-lint file creation in CI mode
+  - Now writes to correct container paths (`/opt/molecule/org.role/`)
+  - Uses base64 encoding for safe content transfer to container
+  - Fixes docker exec call to use roleFlag instead of hardcoded "CI"
+  - Handles YAML content with quotes, newlines, and special characters safely
+  - Resolves exit code 1 errors when running lint commands in CI mode
+
 ## [0.3.10] - 2024-12-23
 
 ### Added
