@@ -9,19 +9,25 @@ import (
 )
 
 // GetCacheDir returns the cache directory for the current role
-func GetCacheDir(cacheID string) (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
-	}
+func GetCacheDir(cacheID string, customPath string) (string, error) {
 
-	cacheDir := filepath.Join(homeDir, ".diffusion", "cache", fmt.Sprintf("role_%s", cacheID))
+	cacheDir := ""
+	if _, err := os.Stat(customPath); err == nil {
+		cacheDir = filepath.Join(customPath, "cache", fmt.Sprintf("role_%s", cacheID))
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+
+		cacheDir = filepath.Join(homeDir, ".diffusion", "cache", fmt.Sprintf("role_%s", cacheID))
+	}
 	return cacheDir, nil
 }
 
 // EnsureCacheDir creates the cache directory if it doesn't exist
-func EnsureCacheDir(cacheID string) (string, error) {
-	cacheDir, err := GetCacheDir(cacheID)
+func EnsureCacheDir(cacheID string, customPath string) (string, error) {
+	cacheDir, err := GetCacheDir(cacheID, customPath)
 	if err != nil {
 		return "", err
 	}
@@ -52,8 +58,8 @@ func GetOrCreateCacheID(config *Config) (string, error) {
 }
 
 // CleanupCache removes the cache directory for a given cache ID
-func CleanupCache(cacheID string) error {
-	cacheDir, err := GetCacheDir(cacheID)
+func CleanupCache(cacheID string, customPath string) error {
+	cacheDir, err := GetCacheDir(cacheID, customPath)
 	if err != nil {
 		return err
 	}
@@ -93,8 +99,8 @@ func ListCaches() ([]string, error) {
 }
 
 // GetCacheSize returns the size of a cache directory in bytes
-func GetCacheSize(cacheID string) (int64, error) {
-	cacheDir, err := GetCacheDir(cacheID)
+func GetCacheSize(cacheID string, customPath string) (int64, error) {
+	cacheDir, err := GetCacheDir(cacheID, customPath)
 	if err != nil {
 		return 0, err
 	}

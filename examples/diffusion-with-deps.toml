@@ -1,0 +1,75 @@
+# Example diffusion.toml with dependency management
+
+[container_registry]
+  registry_server = "ghcr.io"
+  registry_provider = "Public"
+  molecule_container_name = "polar-team/diffusion-molecule-container"
+  molecule_container_tag = "latest-amd64"
+
+[vault]
+  enabled = false
+
+[yaml_lint]
+  extends = "default"
+  ignore = [".git/*", "molecule/**", "vars/*", "files/*", ".yamllint", ".ansible-lint"]
+  [yaml_lint.rules]
+    comments-indentation = false
+    [yaml_lint.rules.braces]
+      level = "warning"
+      max-spaces-inside = 1
+    [yaml_lint.rules.brackets]
+      level = "warning"
+      max-spaces-inside = 1
+    [yaml_lint.rules.new-lines]
+      type = "platform"
+    [yaml_lint.rules.comments]
+      min-spaces-from-content = 1
+    [yaml_lint.rules.octal-values]
+      forbid-implicit-octal = true
+
+[ansible_lint]
+  exclude_paths = ["molecule/default/tests/*.yml", "molecule/default/tests/*/*/*.yml", "tests/test.yml"]
+  warn_list = ["meta-no-info", "yaml[line-length]"]
+  skip_list = ["meta-incorrect", "role-name[path]"]
+
+[tests]
+  type = "local"
+
+[cache]
+  enabled = true
+  cache_id = "ea21e3aae7ea951a"
+
+# Dependency management configuration
+[dependencies]
+  # Tool versions (ansible, molecule, ansible-lint, yamllint)
+  ansible = ">=10.0.0"
+  ansible_lint = ">=24.0.0"
+  molecule = ">=24.0.0"
+  yamllint = ">=1.35.0"
+
+  # Python version configuration
+  [dependencies.python]
+    min = "3.9"           # Minimum Python version
+    max = "3.13"          # Maximum Python version
+    default = "3.13.0"    # Default Python version (pre-built in container)
+    additional = []       # Additional Python versions to install (optional)
+    # Example: additional = ["3.11.0", "3.12.0"]
+
+  # Collection dependencies with versions
+  # These are merged with collections from meta/main.yml and requirements.yml
+  [[dependencies.collections]]
+    name = "community.general"
+    version = ">=7.4.0"
+
+  [[dependencies.collections]]
+    name = "community.docker"
+    version = ">=3.4.0"
+
+  [[dependencies.collections]]
+    name = "community.postgresql"
+    version = ">=3.0.0"
+
+  # Add more collections as needed
+  # [[dependencies.collections]]
+  #   name = "kubernetes.core"
+  #   version = ">=2.4.0"

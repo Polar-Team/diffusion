@@ -76,6 +76,7 @@ type Config struct {
 	AnsibleLintConfig *AnsibleLint       `toml:"ansible_lint"`
 	TestsConfig       *TestsSettings     `toml:"tests"`
 	CacheConfig       *CacheSettings     `toml:"cache,omitempty"`
+	DependencyConfig  *DependencyConfig  `toml:"dependencies,omitempty"`
 }
 
 // LoadConfig reads configuration from a TOML file in the project directory

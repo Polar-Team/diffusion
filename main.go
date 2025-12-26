@@ -15,6 +15,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"runtime"
 
 	"context"
@@ -534,7 +535,7 @@ func main() {
 			}
 
 			// Create cache directory
-			cacheDir, err := EnsureCacheDir(cacheID)
+			cacheDir, err := EnsureCacheDir(cacheID, config.CacheConfig.CachePath)
 			if err != nil {
 				return fmt.Errorf("failed to create cache directory: %w", err)
 			}
@@ -600,7 +601,7 @@ func main() {
 			cacheID := config.CacheConfig.CacheID
 
 			// Get cache size before cleaning
-			size, _ := GetCacheSize(cacheID)
+			size, _ := GetCacheSize(cacheID, config.CacheConfig.CachePath)
 
 			// Check if molecule container is running
 			containerName := fmt.Sprintf("molecule-%s", RoleFlag)
@@ -614,7 +615,7 @@ func main() {
 				fmt.Printf("\033[32mCache cleaned inside container\033[0m\n")
 			} else {
 				// Container doesn't exist - clean cache on host
-				if err := CleanupCache(cacheID); err != nil {
+				if err := CleanupCache(cacheID, config.CacheConfig.CachePath); err != nil {
 					return fmt.Errorf("failed to clean cache: %w", err)
 				}
 				fmt.Printf("\033[32mCache cleaned on host\033[0m\n")
@@ -646,10 +647,10 @@ func main() {
 			fmt.Printf("  Cache ID:    \033[38;2;127;255;212m%s\033[0m\n", config.CacheConfig.CacheID)
 
 			if config.CacheConfig.CacheID != "" {
-				cacheDir, _ := GetCacheDir(config.CacheConfig.CacheID)
+				cacheDir, _ := GetCacheDir(config.CacheConfig.CacheID, config.CacheConfig.CachePath)
 				fmt.Printf("  Cache Path:  \033[38;2;127;255;212m%s\033[0m\n", cacheDir)
 
-				size, err := GetCacheSize(config.CacheConfig.CacheID)
+				size, err := GetCacheSize(config.CacheConfig.CacheID, config.CacheConfig.CachePath)
 				if err == nil && size > 0 {
 					fmt.Printf("  Cache Size:  \033[38;2;127;255;212m%.2f MB\033[0m\n", float64(size)/(1024*1024))
 				} else {
@@ -665,6 +666,10 @@ func main() {
 		Use:   "list",
 		Short: "List all cache directories",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to download config: %w", err)
+			}
 			caches, err := ListCaches()
 			if err != nil {
 				return fmt.Errorf("failed to list caches: %w", err)
@@ -679,7 +684,7 @@ func main() {
 			for _, cache := range caches {
 				// Extract cache ID from directory name (role_<id>)
 				cacheID := cache[5:] // Remove "role_" prefix
-				size, _ := GetCacheSize(cacheID)
+				size, _ := GetCacheSize(cacheID, config.CacheConfig.CachePath)
 				fmt.Printf("  \033[32m✓\033[0m %s - \033[38;2;127;255;212m%.2f MB\033[0m\n", cache, float64(size)/(1024*1024))
 			}
 
@@ -936,6 +941,173 @@ func main() {
 		},
 	}
 	rootCmd.AddCommand(showCmd)
+
+	// deps command for dependency management
+	depsCmd := &cobra.Command{
+		Use:   "deps",
+		Short: "Manage dependencies (collections, roles, Python packages)",
+		Long: `Manage project dependencies including Ansible collections, roles, and Python packages.
+Generates diffusion.lock file and updates pyproject.toml for the molecule container.`,
+	}
+
+	// deps lock - generate/update lock file
+	depsLockCmd := &cobra.Command{
+		Use:   "lock",
+		Short: "Generate or update diffusion.lock file",
+		Long: `Generate or update the diffusion.lock file based on current dependencies
+from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println("Generating lock file...")
+			if err := UpdateLockFile(); err != nil {
+				return fmt.Errorf("failed to update lock file: %w", err)
+			}
+			fmt.Printf("\033[32m%s\033[0m\n", MsgLockFileGenerated)
+			return nil
+		},
+	}
+
+	// deps check - check if lock file is up-to-date
+	depsCheckCmd := &cobra.Command{
+		Use:   "check",
+		Short: "Check if lock file is up-to-date",
+		Long:  `Check if the diffusion.lock file is up-to-date with current dependencies.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			upToDate, err := CheckLockFileStatus()
+			if err != nil {
+				return fmt.Errorf("failed to check lock file: %w", err)
+			}
+			if upToDate {
+				fmt.Printf("\033[32m%s\033[0m\n", MsgLockFileUpToDate)
+			} else {
+				fmt.Printf("\033[33mLock file is out of date. Run 'diffusion deps lock' to update.\033[0m\n")
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+
+	// deps resolve - resolve and display dependencies with actual versions from lock file
+	depsResolveCmd := &cobra.Command{
+		Use:   "resolve",
+		Short: "Resolve and display all dependencies with actual versions",
+		Long:  `Resolve all dependencies from diffusion.lock and display them with actual resolved versions.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load lock file
+			lockFile, err := LoadLockFile()
+			if err != nil {
+				return fmt.Errorf("failed to load lock file: %w", err)
+			}
+			if lockFile == nil {
+				return fmt.Errorf("lock file not found. Run 'diffusion deps lock' first")
+			}
+
+			// Display resolved dependencies
+			fmt.Println("\033[1m=== Resolved Dependencies ===\033[0m")
+			fmt.Println()
+			fmt.Println("\033[1mPython:\033[0m")
+			if lockFile.Python != nil {
+				fmt.Printf("  Pinned: \033[38;2;127;255;212m%s\033[0m\n", lockFile.Python.Pinned)
+				fmt.Printf("  Min: \033[38;2;127;255;212m%s\033[0m (major.minor)\n", lockFile.Python.Min)
+				fmt.Printf("  Max: \033[38;2;127;255;212m%s\033[0m (major.minor)\n", lockFile.Python.Max)
+				// Additional versions are not used for container
+			}
+			fmt.Println()
+
+			fmt.Println("\033[1mTools:\033[0m")
+			for _, tool := range lockFile.Tools {
+				constraint := tool.Version
+				resolved := tool.ResolvedVersion
+				if resolved != "" && resolved != constraint {
+					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m (constraint: %s)\n", tool.Name, resolved, constraint)
+				} else if resolved != "" {
+					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", tool.Name, resolved)
+				} else {
+					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", tool.Name, constraint)
+				}
+			}
+			fmt.Println()
+
+			fmt.Println("\033[1mCollections:\033[0m")
+			for _, col := range lockFile.Collections {
+				constraint := col.Version
+				resolved := col.ResolvedVersion
+				if resolved != "" && resolved != constraint {
+					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m (constraint: %s)\n", col.Name, resolved, constraint)
+				} else if resolved != "" {
+					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", col.Name, resolved)
+				} else {
+					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", col.Name, constraint)
+				}
+			}
+			fmt.Println()
+
+			if len(lockFile.Roles) > 0 {
+				fmt.Println("\033[1mRoles:\033[0m")
+				for _, role := range lockFile.Roles {
+					constraint := role.Version
+					resolved := role.ResolvedVersion
+					if resolved != "" && resolved != constraint {
+						fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m (constraint: %s)\n", role.Name, resolved, constraint)
+					} else if resolved != "" {
+						fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", role.Name, resolved)
+					} else {
+						fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", role.Name, constraint)
+					}
+				}
+				fmt.Println()
+			}
+
+			fmt.Printf("\033[32m%s\033[0m\n", MsgDependenciesResolved)
+			return nil
+		},
+	}
+
+	// deps init - initialize dependency configuration
+	depsInitCmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize dependency configuration in diffusion.toml",
+		Long:  `Initialize dependency configuration section in diffusion.toml with default values.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load or create config
+			config, err := LoadConfig()
+			if err != nil {
+				config = &Config{}
+			}
+
+			// Check if dependency config already exists
+			if config.DependencyConfig != nil {
+				fmt.Println("\033[33mDependency configuration already exists in diffusion.toml\033[0m")
+				return nil
+			}
+
+			// Create default dependency config
+			config.DependencyConfig = &DependencyConfig{
+				Python: &PythonVersion{
+					Min:    DefaultMinPythonVersion,
+					Max:    DefaultMaxPythonVersion,
+					Pinned: PinnedPythonVersion,
+				},
+				Ansible:     DefaultAnsibleVersion,
+				AnsibleLint: DefaultAnsibleLintVersion,
+				Molecule:    DefaultMoleculeVersion,
+				YamlLint:    DefaultYamlLintVersion,
+			}
+
+			// Save config
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			fmt.Println("\033[32mDependency configuration initialized in diffusion.toml\033[0m")
+			return nil
+		},
+	}
+
+	depsCmd.AddCommand(depsLockCmd)
+	depsCmd.AddCommand(depsCheckCmd)
+	depsCmd.AddCommand(depsResolveCmd)
+	depsCmd.AddCommand(depsInitCmd)
+	rootCmd.AddCommand(depsCmd)
 
 	// version command
 	versionCmd := &cobra.Command{
@@ -1786,6 +1958,29 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 			"-e", "VAULT_ADDR="+os.Getenv("VAULT_ADDR"),
 		)
 
+		// Get Python version from lock file if it exists, otherwise use default
+		pythonVersion := PinnedPythonVersion
+		lockFile, err := LoadLockFile()
+		if err == nil && lockFile != nil && lockFile.Python != nil && lockFile.Python.Pinned != "" {
+			pythonVersion = lockFile.Python.Pinned
+			log.Printf("\033[32mUsing Python version from lock file: %s\033[0m", pythonVersion)
+		} else {
+			log.Printf("\033[33mNo lock file found, using default Python version: %s\033[0m", pythonVersion)
+		}
+		args = append(args, "-e", fmt.Sprintf("PYTHON_PINNED_VERSION=%s", pythonVersion))
+
+		// Generate and pass pyproject.toml configuration
+		pyprojectContent, err := GeneratePyProjectFromCurrentConfig()
+		if err != nil {
+			log.Printf("\033[33mwarning: failed to generate pyproject.toml config: %v\033[0m", err)
+			log.Printf("\033[33mContainer will use default dependencies\033[0m")
+		} else {
+			// Pass pyproject.toml content as environment variable (base64 encoded to handle special characters)
+			pyprojectEncoded := base64.StdEncoding.EncodeToString([]byte(pyprojectContent))
+			args = append(args, "-e", "PYPROJECT_TOML_CONTENT="+pyprojectEncoded)
+			log.Printf("\033[32mPassing pyproject.toml configuration to container\033[0m")
+		}
+
 		// CI Mode: Pass git remote and commit SHA for cloning inside container
 		if CIMode {
 			// Get git remote URL from current repository
@@ -1823,7 +2018,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 
 		// Add cache volume mounts if enabled (roles and collections only)
 		if config.CacheConfig != nil && config.CacheConfig.Enabled && config.CacheConfig.CacheID != "" {
-			cacheDir, err := EnsureCacheDir(config.CacheConfig.CacheID)
+			cacheDir, err := EnsureCacheDir(config.CacheConfig.CacheID, config.CacheConfig.CachePath)
 			if err != nil {
 				log.Printf("\033[33mwarning: failed to create cache directory: %v\033[0m", err)
 			} else {
@@ -1989,8 +2184,14 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", RoleFlag)).Run()
 	if err == nil {
 		// container exists
+		_ = dockerExecInteractiveHide(RoleFlag, "uv-sync")
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	} else {
+		// Sync UV dependencies with pyproject.toml from diffusion
+		if err := dockerExecInteractive(RoleFlag, "uv-sync"); err != nil {
+			log.Printf("\033[33mWarning: uv-sync failed: %v\033[0m", err)
+			log.Printf("\033[33mContinuing with existing dependencies...\033[0m")
+		}
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
 		_ = dockerExecInteractive(RoleFlag, "/bin/sh", "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	}
