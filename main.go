@@ -2037,7 +2037,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				// Use appropriate home path based on OS (root for Windows, ansible user for Unix)
 				containerHome := GetContainerHomePath()
 				args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/roles", rolesDir, containerHome))
-				args = append(args, "-v", fmt.Sprintf("%s:%s/collections", collectionsDir, containerHome))
+				args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/collections", collectionsDir, containerHome))
 				log.Printf("\033[32mCache enabled: mounting roles and collections from %s\033[0m", cacheDir)
 			}
 		}

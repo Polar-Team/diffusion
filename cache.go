@@ -12,14 +12,22 @@ import (
 func GetCacheDir(cacheID string, customPath string) (string, error) {
 
 	cacheDir := ""
-	if _, err := os.Stat(customPath); err == nil {
-		cacheDir = filepath.Join(customPath, "cache", fmt.Sprintf("role_%s", cacheID))
+	if customPath != "" {
+		if _, err := os.Stat(customPath); err == nil {
+			cacheDir = filepath.Join(customPath, "cache", fmt.Sprintf("role_%s", cacheID))
+		} else {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("failed to get home directory: %w", err)
+			}
+
+			cacheDir = filepath.Join(homeDir, ".diffusion", "cache", fmt.Sprintf("role_%s", cacheID))
+		}
 	} else {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("failed to get home directory: %w", err)
 		}
-
 		cacheDir = filepath.Join(homeDir, ".diffusion", "cache", fmt.Sprintf("role_%s", cacheID))
 	}
 	return cacheDir, nil
