@@ -188,7 +188,99 @@ func (g *GalaxyAPI) ResolveCollectionVersion(collectionName, versionConstraint s
 	if strings.ContainsAny(versionConstraint, ">=<") {
 		// For now, just fetch latest version
 		// TODO: Implement proper version constraint resolution
-		return g.GetCollectionLatestVersion(namespace, name)
+		var operand string
+		var constraintVersion string
+
+		for _, op := range []string{">=", "<=", "==", ">", "<", "="} {
+			if idx := strings.Index(versionConstraint, op); idx != -1 {
+				operand = op
+				constraintVersion = strings.TrimSpace(versionConstraint[idx+len(op):])
+			}
+		}
+
+		url := fmt.Sprintf("https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/%s/%s/versions", namespace, name)
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Get(url)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch collection info: %w", err)
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("galaxy return status %d for collection %s", resp.StatusCode, name)
+		}
+
+		var result struct {
+			Data map[string][]struct {
+				Version         string `json:"version"`
+				RequiresAnsible string `json:"requires_ansible"`
+			}
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return "", fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		// Get all versions strings from release data map keys
+		versions := make([]string, 0, len(result.Data))
+		for _, version := range result.Data[Version] {
+			versions = append(versions, version.Version)
+		}
+
+		if len(versions) == 0 {
+			return "", fmt.Errorf("no releases found for collection %s", name)
+		}
+		// Sort versions in descending order (highest first)
+		sort.Slice(versions, func(i, j int) bool {
+			return CompareVersions(versions[i], versions[j]) > 0
+		})
+
+		// If no constraint, return latest version
+		if operand == "" {
+			return versions[0], nil
+		}
+
+		// Validate that latest version satisfies the constraint
+		latestVersion := versions[0]
+		cmp := CompareVersions(latestVersion, collectionName)
+
+		switch operand {
+		case ">=":
+			if cmp >= 0 {
+				return latestVersion, nil
+			}
+			return constraintVersion, nil
+		case "<=":
+			// Find the highest version that is <= constraint
+			for _, v := range versions {
+				if CompareVersions(v, constraintVersion) <= 0 {
+					return v, nil
+				}
+			}
+			return "", fmt.Errorf("no version found <= %s for package %s", constraintVersion, name)
+		case "==", "=":
+			if cmp == 0 {
+				return constraintVersion, nil
+			}
+			return "", fmt.Errorf("exact version %s not found for package %s", constraintVersion, name)
+		case ">":
+			if cmp > 0 {
+				return latestVersion, nil
+			}
+			return "", fmt.Errorf("no version found > %s for package %s", constraintVersion, name)
+		case "<":
+			// Find the highest version that is < constraint
+			for _, v := range versions {
+				if CompareVersions(v, constraintVersion) < 0 {
+					return v, nil
+				}
+			}
+			return "", fmt.Errorf("no version found < %s for package %s", constraintVersion, name)
+		}
+
+		return latestVersion, nil
 	}
 
 	// If it's a specific version, return as-is

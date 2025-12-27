@@ -125,8 +125,7 @@ func formatPythonRequirement(pythonVersion *PythonVersion) string {
 		return ">=3.10"
 	}
 
-	// Use the pinned Python version to determine the minimum requirement
-	// This ensures compatibility with the tools being installed
+	// Use the pinned Python version (major.minor format)
 	pinnedVer := pythonVersion.Pinned
 
 	// If no pinned version specified, use min
@@ -138,20 +137,8 @@ func formatPythonRequirement(pythonVersion *PythonVersion) string {
 		return fmt.Sprintf(">=%s", min)
 	}
 
-	// Extract major.minor from pinned version (e.g., "3.13.11" -> "3.13")
-	parts := strings.Split(pinnedVer, ".")
-	if len(parts) >= 2 {
-		majorMinor := parts[0] + "." + parts[1]
-		return fmt.Sprintf(">=%s", majorMinor)
-	}
-
-	// Fallback to min if pinned is not parseable
-	min := pythonVersion.Min
-	if min == "" {
-		min = "3.10"
-	}
-
-	return fmt.Sprintf(">=%s", min)
+	// Pinned version is already in major.minor format (e.g., "3.13")
+	return fmt.Sprintf(">=%s", pinnedVer)
 }
 
 // formatDependency formats a dependency string

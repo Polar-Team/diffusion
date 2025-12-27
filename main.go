@@ -202,7 +202,7 @@ func main() {
 				return fmt.Errorf("failed to load requirements file: %w", err)
 			}
 
-			req.Collections = append(req.Collections, collectionName)
+			req.Collections = append(req.Collections, RequirementCollection{Name: collectionName})
 
 			// Save the updated requirements file
 			if err := SaveRequirementFile(req, RoleScenario); err != nil {
@@ -210,7 +210,7 @@ func main() {
 			}
 			fmt.Printf("\033[32mRole '%s' added successfully to requirements.yml\n\033[0m", collectionName)
 
-			meta.Collections = append(meta.Collections, collectionName)
+			meta.Collections = append(meta.Collections, RequirementCollection{Name: collectionName})
 
 			// Save the updated meta file
 			if err := SaveMetaFile(meta); err != nil {
@@ -236,7 +236,7 @@ func main() {
 
 			found := false
 			for i, coll := range req.Collections {
-				if coll == collectionName {
+				if coll.Name == collectionName {
 					// Remove the collection from the slice
 					req.Collections = append(req.Collections[:i], req.Collections[i+1:]...)
 					found = true
@@ -250,7 +250,7 @@ func main() {
 
 			found = false
 			for i, coll := range meta.Collections {
-				if coll == collectionName {
+				if coll.Name == collectionName {
 					// Remove the collection from the slice
 					meta.Collections = append(meta.Collections[:i], meta.Collections[i+1:]...)
 					found = true
@@ -1346,12 +1346,12 @@ func MetaConfigSetup(roleName string) *Meta {
 	fmt.Print("Collections required (comma-separated) (optional): ")
 	collectionsInput, _ := reader.ReadString('\n')
 	collectionsInput = strings.TrimSpace(collectionsInput)
-	collectionsList := []string{}
+	collectionsList := []RequirementCollection{}
 	if collectionsInput != "" {
 		for c := range strings.SplitSeq(collectionsInput, ",") {
 			c = strings.TrimSpace(c)
 			if c != "" {
-				collectionsList = append(collectionsList, c)
+				collectionsList = append(collectionsList, RequirementCollection{Name: c})
 			}
 		}
 	}
@@ -1374,9 +1374,9 @@ func MetaConfigSetup(roleName string) *Meta {
 	return roleSettings
 
 }
-func RequirementConfigSetup(collections []string) *Requirement {
+func RequirementConfigSetup(collections []RequirementCollection) *Requirement {
 	if collections == nil {
-		collections = []string{}
+		collections = []RequirementCollection{}
 	}
 	reader := bufio.NewReader(os.Stdin)
 	collectionsList := collections
@@ -2037,7 +2037,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				// Use appropriate home path based on OS (root for Windows, ansible user for Unix)
 				containerHome := GetContainerHomePath()
 				args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/roles", rolesDir, containerHome))
-				args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/collections", collectionsDir, containerHome))
+				args = append(args, "-v", fmt.Sprintf("%s:%s/collections", collectionsDir, containerHome))
 				log.Printf("\033[32mCache enabled: mounting roles and collections from %s\033[0m", cacheDir)
 			}
 		}

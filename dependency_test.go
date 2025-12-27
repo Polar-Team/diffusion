@@ -34,16 +34,16 @@ func TestParseCollectionString(t *testing.T) {
 
 func TestResolveCollectionDependencies(t *testing.T) {
 	meta := &Meta{
-		Collections: []string{
-			"community.general>=7.4.0",
-			"community.docker",
+		Collections: []RequirementCollection{
+			{Name: "community.general", Version: ">=7.4.0"},
+			{Name: "community.docker"},
 		},
 	}
 
 	req := &Requirement{
-		Collections: []string{
-			"community.postgresql>=3.0.0",
-			"community.docker>=3.4.0", // Should override meta version
+		Collections: []RequirementCollection{
+			{Name: "community.postgresql", Version: ">=3.0.0"},
+			{Name: "community.docker", Version: ">=3.4.0"}, // Should override meta version
 		},
 	}
 
@@ -84,9 +84,9 @@ func TestResolveCollectionDependencies(t *testing.T) {
 func TestResolvePythonVersion(t *testing.T) {
 	config := &DependencyConfig{
 		Python: &PythonVersion{
-			Min:    "3.11",    // Major.minor only
-			Max:    "3.13",    // Major.minor only
-			Pinned: "3.13.11", // Full version
+			Min:    "3.11", // Major.minor only
+			Max:    "3.13", // Major.minor only
+			Pinned: "3.13", // Major.minor only
 		},
 	}
 
@@ -99,8 +99,8 @@ func TestResolvePythonVersion(t *testing.T) {
 	if pythonVersion.Max != "3.13" {
 		t.Errorf("Python Max = %q, want %q", pythonVersion.Max, "3.13")
 	}
-	if pythonVersion.Pinned != "3.13.11" {
-		t.Errorf("Python Pinned = %q, want %q", pythonVersion.Pinned, "3.13.11")
+	if pythonVersion.Pinned != "3.13" {
+		t.Errorf("Python Pinned = %q, want %q", pythonVersion.Pinned, "3.13")
 	}
 	// Additional versions should not be used
 	if len(pythonVersion.Additional) != 0 {
@@ -113,7 +113,7 @@ func TestResolveToolVersions(t *testing.T) {
 		Python: &PythonVersion{
 			Min:    "3.10",
 			Max:    "3.13",
-			Pinned: "3.13.0",
+			Pinned: "3.13",
 		},
 		Ansible:     ">=10.0.0",
 		AnsibleLint: ">=24.0.0",
@@ -160,7 +160,7 @@ func TestComputeDependencyHash(t *testing.T) {
 	pythonVersion := &PythonVersion{
 		Min:    "3.9",
 		Max:    "3.13",
-		Pinned: "3.13.0",
+		Pinned: "3.13",
 	}
 
 	hash1 := ComputeDependencyHash(collections, roles, toolVersions, pythonVersion)
@@ -196,7 +196,7 @@ func TestGenerateLockFile(t *testing.T) {
 	pythonVersion := &PythonVersion{
 		Min:    "3.9",
 		Max:    "3.13",
-		Pinned: "3.13.11",
+		Pinned: "3.13",
 	}
 
 	lockFile, err := GenerateLockFile(collections, roles, toolVersions, pythonVersion)
@@ -239,26 +239,26 @@ func TestFormatPythonRequirement(t *testing.T) {
 		{
 			name: "uses pinned version for requirement",
 			version: &PythonVersion{
-				Min:    "3.11.9",
-				Pinned: "3.13.11",
+				Min:    "3.11",
+				Pinned: "3.13",
 			},
 			want: ">=3.13",
 		},
 		{
 			name: "extracts major.minor from pinned",
 			version: &PythonVersion{
-				Min:    "3.11.9",
-				Pinned: "3.12.10",
+				Min:    "3.11",
+				Pinned: "3.12",
 			},
 			want: ">=3.12",
 		},
 		{
 			name: "falls back to min if pinned is empty",
 			version: &PythonVersion{
-				Min:    "3.11.9",
+				Min:    "3.11",
 				Pinned: "",
 			},
-			want: ">=3.11.9",
+			want: ">=3.11",
 		},
 	}
 
@@ -329,9 +329,9 @@ func TestSaveLockFile(t *testing.T) {
 		Version: LockFileVersion,
 		Hash:    "test-hash",
 		Python: &PythonVersion{
-			Min:    "3.11.9",
+			Min:    "3.11",
 			Max:    "3.13",
-			Pinned: "3.13.10",
+			Pinned: "3.13",
 		},
 		Collections: []LockFileEntry{
 			{Name: "community.general", Version: ">=7.4.0", Type: "collection"},
@@ -381,7 +381,7 @@ func TestGeneratePyProjectTOML(t *testing.T) {
 	pythonVersion := &PythonVersion{
 		Min:    "3.9",
 		Max:    "3.13",
-		Pinned: "3.13.10",
+		Pinned: "3.13",
 	}
 
 	err := GeneratePyProjectTOML(collections, toolVersions, pythonVersion, outputPath)

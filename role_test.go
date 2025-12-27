@@ -168,7 +168,7 @@ func TestSaveMetaFile(t *testing.T) {
 			},
 			GalaxyTags: []string{"test", "example"},
 		},
-		Collections: []string{"community.general"},
+		Collections: []RequirementCollection{{Name: "community.general"}},
 	}
 
 	// Save meta file
@@ -215,7 +215,10 @@ func TestSaveRequirementFile(t *testing.T) {
 
 	// Create test requirement
 	req := &Requirement{
-		Collections: []string{"community.general", "ansible.posix"},
+		Collections: []RequirementCollection{
+			{Name: "community.general"},
+			{Name: "ansible.posix"},
+		},
 		Roles: []RequirementRole{
 			{
 				Name:    "test.role",

@@ -31,7 +31,7 @@ const (
 	DefaultRegistryProvider      = "Public"
 	DefaultMoleculeContainerName = "polar-team/diffusion-molecule-container"
 	// Dependency management defaults
-	PinnedPythonVersion       = "3.13.11"
+	PinnedPythonVersion       = "3.13"
 	DefaultMinPythonVersion   = "3.11"     // Major.minor only
 	DefaultMaxPythonVersion   = "3.13"     // Major.minor only
 	DefaultAnsibleVersion     = ">=10.0.0" // Requires Python 3.10+
@@ -138,50 +138,39 @@ const (
 	WarnCopyRoleDataFailed   = "copy role data warning: %v"
 )
 
-// PinnedPythonVersions maps major.minor versions to their pinned patch versions
-var PinnedPythonVersions = map[string]string{
-	"3.13": "3.13.11",
-	"3.12": "3.12.10",
-	"3.11": "3.11.9",
-}
+// AllowedPythonVersions contains the only allowed Python versions (major.minor)
+var AllowedPythonVersions = []string{"3.13", "3.12", "3.11"}
 
-// AllowedPythonVersions contains the only allowed full Python versions
-var AllowedPythonVersions = []string{"3.13.11", "3.12.10", "3.11.9"}
-
-// GetPinnedPythonVersion returns the pinned version for a given major.minor version
-func GetPinnedPythonVersion(majorMinor string) string {
-	if pinned, ok := PinnedPythonVersions[majorMinor]; ok {
-		return pinned
-	}
-	// Default to the latest if not found
-	return PinnedPythonVersion
-}
-
-// ValidatePythonVersion validates and normalizes a Python version
-// Returns the pinned version if valid, error if not allowed
+// ValidatePythonVersion validates a Python version (major.minor format only)
+// Returns the version if valid, error if not allowed
 func ValidatePythonVersion(version string) (string, error) {
-	// Check if it's already a full allowed version
+	// Normalize to major.minor if patch version provided
+	normalized := ExtractMajorMinor(version)
+
+	// Check if it's an allowed version
 	for _, allowed := range AllowedPythonVersions {
-		if version == allowed {
-			return allowed, nil
+		if normalized == allowed {
+			return normalized, nil
 		}
 	}
 
-	// Check if it's a major.minor version
-	if pinned, ok := PinnedPythonVersions[version]; ok {
-		return pinned, nil
-	}
-
 	// Not allowed
-	return "", fmt.Errorf("Python version %s is not allowed. Allowed versions: 3.13.11, 3.12.10, 3.11.9 (or 3.13, 3.12, 3.11)", version)
+	return "", fmt.Errorf("Python version %s is not allowed. Allowed versions: 3.13, 3.12, 3.11", version)
 }
 
-// ExtractMajorMinor extracts major.minor from a full version string
-// e.g., "3.13.11" -> "3.13"
+// ExtractMajorMinor extracts major.minor from a version string
+// e.g., "3.13.11" -> "3.13", "3.13" -> "3.13"
 func ExtractMajorMinor(version string) string {
-	parts := strings.Split(version, ".")
+	// Remove any version operators first
+	cleaned := version
+	for _, op := range []string{">=", "<=", "==", ">", "<", "="} {
+		cleaned = strings.TrimPrefix(cleaned, op)
+	}
+	cleaned = strings.TrimSpace(cleaned)
+
+	parts := strings.Split(cleaned, ".")
 	if len(parts) >= 2 {
 		return parts[0] + "." + parts[1]
 	}
-	return version
+	return cleaned
 }

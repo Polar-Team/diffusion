@@ -6,7 +6,7 @@ All notable changes to the Diffusion project will be documented in this file.
 
 ### Added
 - **Dependency Management System**: Comprehensive dependency management for Python, Ansible tools, and collections
-  - **Python Version Constraints**: Only allows tested versions (3.13.11, 3.12.10, 3.11.9)
+  - **Python Version Constraints**: Only allows tested versions (3.13, 3.12, 3.11)
   - **Automatic Version Resolution**: Queries PyPI and Galaxy to resolve actual versions from constraints
   - **Lock File System**: Generates `diffusion.lock` with reproducible dependency snapshots
   - **Dynamic pyproject.toml**: Generates and passes pyproject.toml to container via environment variable
@@ -16,7 +16,7 @@ All notable changes to the Diffusion project will be documented in this file.
   - See [Dependency Management Documentation](DEPENDENCY_MANAGEMENT.md) for complete guide
 
 ### Changed
-- **Python Version Format**: Min/Max now show major.minor only (e.g., `3.11`, `3.13`), Pinned shows full version (e.g., `3.13.11`)
+- **Python Version Format**: All versions now use major.minor format only (e.g., `3.11`, `3.13`)
 - **Python Version Source**: Container now uses Python version from `diffusion.lock` instead of hardcoded constant
 - **Molecule Installation**: Now installs from PyPI instead of GitHub for faster and more reliable installation
 - **Version Resolution**: Fixed `ResolvePythonDependencies` to properly handle version constraints

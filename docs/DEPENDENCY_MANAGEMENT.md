@@ -16,7 +16,7 @@ Complete guide to Diffusion's dependency management system for Python, Ansible t
 ## Overview
 
 Diffusion provides a comprehensive dependency management system that:
-- **Validates Python versions** - Only allows tested versions (3.13.11, 3.12.10, 3.11.9)
+- **Validates Python versions** - Only allows tested versions (3.13, 3.12, 3.11)
 - **Resolves tool versions** - Fetches actual versions from PyPI based on constraints
 - **Manages collections** - Resolves Ansible Galaxy collection versions
 - **Generates lock files** - Creates reproducible dependency snapshots
@@ -39,7 +39,7 @@ molecule = ">=24.0.0"
 ansible_lint = ">=24.0.0"
 
 [dependencies.python]
-pinned = "3.13"  # Will expand to 3.13.11
+pinned = "3.13"  # Pinned version for container
 min = "3.11"
 max = "3.13"
 ```
@@ -65,7 +65,7 @@ Output:
 === Resolved Dependencies ===
 
 Python:
-  Pinned: 3.13.11
+  Pinned: 3.13
   Min: 3.11 (major.minor)
   Max: 3.13 (major.minor)
 
@@ -88,25 +88,19 @@ diffusion molecule --role myrole --org myorg
 
 ### Allowed Versions
 Only three Python versions are supported:
-- **3.13.11** (latest)
-- **3.12.10**
-- **3.11.9**
+- **3.13** (latest)
+- **3.12**
+- **3.11**
 
 ### Version Format Rules
 
-#### Pinned Version (Full)
-The `pinned` field must be a full version:
-```toml
-[dependencies.python]
-pinned = "3.13.11"  # Full: major.minor.patch
-```
+All Python versions use **major.minor** format only (e.g., `3.13`, `3.12`, `3.11`).
 
-#### Min/Max Versions (Major.Minor)
-The `min` and `max` fields show only major.minor:
 ```toml
 [dependencies.python]
-min = "3.11"  # Major.minor only
-max = "3.13"  # Major.minor only
+pinned = "3.13"  # major.minor format
+min = "3.11"     # major.minor format
+max = "3.13"     # major.minor format
 ```
 
 #### Additional Versions (Not Used)
@@ -114,13 +108,14 @@ The `additional` field is automatically cleared and not passed to container.
 
 ### Automatic Normalization
 
-The system automatically normalizes versions:
+The system automatically normalizes versions to major.minor format:
 
 | Input | Normalized To |
 |-------|---------------|
-| `pinned = "3.13"` | `pinned = "3.13.11"` |
-| `pinned = "3.12"` | `pinned = "3.12.10"` |
-| `pinned = "3.11"` | `pinned = "3.11.9"` |
+| `pinned = "3.13"` | `pinned = "3.13"` |
+| `pinned = "3.12"` | `pinned = "3.12"` |
+| `pinned = "3.11"` | `pinned = "3.11"` |
+| `pinned = "3.13.11"` | `pinned = "3.13"` |
 | `min = "3.11.9"` | `min = "3.11"` |
 | `max = "3.13.11"` | `max = "3.13"` |
 
@@ -134,20 +129,20 @@ Python versions are validated when:
 **Invalid version example:**
 ```toml
 [dependencies.python]
-pinned = "3.10.5"  # ERROR
+pinned = "3.10"  # ERROR - not an allowed version
 ```
 
 Error message:
 ```
-invalid pinned Python version: Python version 3.10.5 is not allowed. 
-Allowed versions: 3.13.11, 3.12.10, 3.11.9 (or 3.13, 3.12, 3.11)
+invalid pinned Python version: Python version 3.10 is not allowed. 
+Allowed versions: 3.13, 3.12, 3.11
 ```
 
 ### Container Environment
 
 Only the **pinned version** is passed to container:
 ```bash
-docker run -e PYTHON_PINNED_VERSION=3.13.11 ...
+docker run -e PYTHON_PINNED_VERSION=3.13 ...
 ```
 
 The container uses this to:
@@ -240,7 +235,7 @@ yamllint = ">=1.35.0"
 [dependencies.python]
 min = "3.11"
 max = "3.13"
-pinned = "3.13.11"
+pinned = "3.13"
 ```
 
 ### `diffusion deps lock`
@@ -290,7 +285,7 @@ hash: "abc123..."
 python:
   min: "3.11"
   max: "3.13"
-  pinned: "3.13.11"
+  pinned: "3.13"
 
 tools:
   - name: ansible
@@ -402,7 +397,7 @@ yamllint = ">=1.35.0"
 [dependencies.python]
 min = "3.11"
 max = "3.13"
-pinned = "3.13.11"
+pinned = "3.13"
 
 # Collections can also be specified here
 [[dependencies.collections]]
@@ -459,13 +454,13 @@ diffusion deps lock
 
 ### Invalid Python version
 ```
-Error: invalid pinned Python version: Python version 3.10.5 is not allowed
+Error: invalid pinned Python version: Python version 3.10 is not allowed
 ```
 
-**Solution:** Use one of the allowed versions (3.13.11, 3.12.10, 3.11.9):
+**Solution:** Use one of the allowed versions (3.13, 3.12, 3.11):
 ```toml
 [dependencies.python]
-pinned = "3.13"  # Will expand to 3.13.11
+pinned = "3.13"  # Valid version
 ```
 
 ### Tool version incompatible with Python

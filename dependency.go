@@ -16,9 +16,9 @@ type CollectionRequirement struct {
 
 // PythonVersion represents Python version requirements
 type PythonVersion struct {
-	Min        string   `yaml:"min"`                  // Minimum Python version (e.g., "3.11.9")
-	Max        string   `yaml:"max"`                  // Maximum Python version (e.g., "3.13.11")
-	Pinned     string   `yaml:"pinned"`               // Pinned Python version (e.g., "3.13.11")
+	Min        string   `yaml:"min"`                  // Minimum Python version (e.g., "3.11")
+	Max        string   `yaml:"max"`                  // Maximum Python version (e.g., "3.13")
+	Pinned     string   `yaml:"pinned"`               // Pinned Python version (e.g., "3.13")
 	Additional []string `yaml:"additional,omitempty"` // Additional Python versions to install
 }
 
@@ -55,23 +55,27 @@ func (dr *DependencyResolver) ResolveCollectionDependencies() ([]CollectionRequi
 	// Add collections from meta/main.yml
 	if dr.meta != nil && dr.meta.Collections != nil {
 		for _, col := range dr.meta.Collections {
-			// Parse collection name and version
-			name, version := parseCollectionString(col)
-			collectionMap[name] = version
+			// Collection is already structured with Name and Version
+			version := col.Version
+			if version == "" {
+				version = "latest"
+			}
+			collectionMap[col.Name] = version
 		}
 	}
 
 	// Add collections from requirements.yml
 	if dr.requirement != nil && dr.requirement.Collections != nil {
 		for _, col := range dr.requirement.Collections {
-			name, version := parseCollectionString(col)
+			// Collection is already structured with Name and Version
+			version := col.Version
 			// If version is not specified in requirements, check if it exists in meta
 			if version == "" || version == "latest" {
-				if existingVersion, exists := collectionMap[name]; exists && existingVersion != "" && existingVersion != "latest" {
+				if existingVersion, exists := collectionMap[col.Name]; exists && existingVersion != "" && existingVersion != "latest" {
 					version = existingVersion
 				}
 			}
-			collectionMap[name] = version
+			collectionMap[col.Name] = version
 		}
 	}
 
@@ -264,9 +268,9 @@ func LoadDependencyConfig() (*DependencyConfig, error) {
 			if err != nil {
 				return nil, fmt.Errorf("invalid min Python version: %w", err)
 			}
-			python.Min = ExtractMajorMinor(validated)
+			python.Min = validated
 		} else {
-			python.Min = ExtractMajorMinor(DefaultMinPythonVersion)
+			python.Min = DefaultMinPythonVersion
 		}
 
 		// Validate and normalize Max version
@@ -275,9 +279,9 @@ func LoadDependencyConfig() (*DependencyConfig, error) {
 			if err != nil {
 				return nil, fmt.Errorf("invalid max Python version: %w", err)
 			}
-			python.Max = ExtractMajorMinor(validated)
+			python.Max = validated
 		} else {
-			python.Max = ExtractMajorMinor(DefaultMaxPythonVersion)
+			python.Max = DefaultMaxPythonVersion
 		}
 
 		// Clear Additional versions - not supported for container
