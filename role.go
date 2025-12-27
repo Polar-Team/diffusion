@@ -2,8 +2,9 @@ package main
 
 import (
 	// "fmt"
-	"gopkg.in/yaml.v3"
 	"os"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Platform struct {
@@ -24,8 +25,8 @@ type GalaxyInfo struct {
 }
 
 type Meta struct {
-	GalaxyInfo  *GalaxyInfo `yaml:"galaxy_info"`
-	Collections []string    `yaml:"collections,omitempty"`
+	GalaxyInfo  *GalaxyInfo             `yaml:"galaxy_info"`
+	Collections []RequirementCollection `yaml:"collections,omitempty"`
 }
 
 type RequirementRole struct {
@@ -35,9 +36,38 @@ type RequirementRole struct {
 	Scm     string `yaml:"scm,omitempty"`
 }
 
+type RequirementCollection struct {
+	Name    string `yaml:"name"`
+	Type    string `yaml:"type,omitempty"`
+	Source  string `yaml:"source,omitempty"`
+	Version string `yaml:"version,omitempty"`
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling to support both string and structured formats
+func (rc *RequirementCollection) UnmarshalYAML(value *yaml.Node) error {
+	// Try to unmarshal as a string first (backward compatibility)
+	if value.Kind == yaml.ScalarNode {
+		// It's a simple string like "community.general" or "community.general>=7.4.0"
+		collectionStr := value.Value
+		name, version := parseCollectionString(collectionStr)
+		rc.Name = name
+		rc.Version = version
+		return nil
+	}
+
+	// Otherwise, unmarshal as a structured object
+	type rawCollection RequirementCollection
+	var raw rawCollection
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	*rc = RequirementCollection(raw)
+	return nil
+}
+
 type Requirement struct {
-	Collections []string          `yaml:"collections"`
-	Roles       []RequirementRole `yaml:"roles"`
+	Collections []RequirementCollection `yaml:"collections"`
+	Roles       []RequirementRole       `yaml:"roles"`
 }
 
 func ParseMetaFile() (*Meta, error) {

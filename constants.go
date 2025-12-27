@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Color constants for terminal output
 const (
 	ColorReset      = "\033[0m"
@@ -25,6 +30,14 @@ const (
 	DefaultRegistryServer        = "ghcr.io"
 	DefaultRegistryProvider      = "Public"
 	DefaultMoleculeContainerName = "polar-team/diffusion-molecule-container"
+	// Dependency management defaults
+	PinnedPythonVersion       = "3.13"
+	DefaultMinPythonVersion   = "3.11"     // Major.minor only
+	DefaultMaxPythonVersion   = "3.13"     // Major.minor only
+	DefaultAnsibleVersion     = ">=10.0.0" // Requires Python 3.10+
+	DefaultAnsibleLintVersion = ">=24.0.0" // Requires Python 3.10+
+	DefaultMoleculeVersion    = ">=24.0.0" // Requires Python 3.10+
+	DefaultYamlLintVersion    = ">=1.35.0"
 )
 
 // File paths
@@ -39,6 +52,8 @@ const (
 	ScenariosDir           = "scenarios"
 	TestsDir               = "tests"
 	DiffusionTestsRoleName = "diffusion_tests"
+	LockFileName           = "diffusion.lock"
+	PyProjectFileName      = "pyproject.toml"
 )
 
 // Registry providers
@@ -102,6 +117,10 @@ const (
 	MsgLintDone             = "Lint Done Successfully!"
 	MsgVerifyDone           = "Verify Done Successfully!"
 	MsgIdempotenceDone      = "Idempotence Done Successfully!"
+	MsgLockFileGenerated    = "Lock file generated successfully"
+	MsgLockFileUpToDate     = "Lock file is up-to-date"
+	MsgPyProjectGenerated   = "pyproject.toml generated successfully"
+	MsgDependenciesResolved = "Dependencies resolved successfully"
 )
 
 // Warning messages
@@ -118,3 +137,40 @@ const (
 	WarnCleanRoleDirFailed   = "clean role dir warning: %v"
 	WarnCopyRoleDataFailed   = "copy role data warning: %v"
 )
+
+// AllowedPythonVersions contains the only allowed Python versions (major.minor)
+var AllowedPythonVersions = []string{"3.13", "3.12", "3.11"}
+
+// ValidatePythonVersion validates a Python version (major.minor format only)
+// Returns the version if valid, error if not allowed
+func ValidatePythonVersion(version string) (string, error) {
+	// Normalize to major.minor if patch version provided
+	normalized := ExtractMajorMinor(version)
+
+	// Check if it's an allowed version
+	for _, allowed := range AllowedPythonVersions {
+		if normalized == allowed {
+			return normalized, nil
+		}
+	}
+
+	// Not allowed
+	return "", fmt.Errorf("Python version %s is not allowed. Allowed versions: 3.13, 3.12, 3.11", version)
+}
+
+// ExtractMajorMinor extracts major.minor from a version string
+// e.g., "3.13.11" -> "3.13", "3.13" -> "3.13"
+func ExtractMajorMinor(version string) string {
+	// Remove any version operators first
+	cleaned := version
+	for _, op := range []string{">=", "<=", "==", ">", "<", "="} {
+		cleaned = strings.TrimPrefix(cleaned, op)
+	}
+	cleaned = strings.TrimSpace(cleaned)
+
+	parts := strings.Split(cleaned, ".")
+	if len(parts) >= 2 {
+		return parts[0] + "." + parts[1]
+	}
+	return cleaned
+}

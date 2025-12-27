@@ -623,13 +623,14 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📚 Documentation
 
+- **[Dependency Management](dev-new-features/docs/DEPENDENCY_MANAGEMENT.md)** - Complete guide to Python, tool, and collection dependency management
 - **[Building from Source](docs/building.md)** - Complete build guide with cross-compilation
 - **[Verification Guide](docs/verification.md)** - Verify binary signatures and SLSA provenance
 - **[Cache Feature](docs/cache-feature.md)** - Ansible role and collection caching for faster builds
 - **[Artifact Management](docs/artifact-management.md)** - Managing private repository credentials
 - **[Unix Permissions](docs/unix-permissions.md)** - How Diffusion handles permissions on Unix systems
 - **[Migration Guide](docs/migration-guide.md)** - Upgrading from older versions
-- **[Changelog](docs/changelog.md)** - Version history and changes
+- **[Changelog](dev-new-features/docs/CHANGELOG.md)** - Version history and changes
 - **[E2E Testing](tests/e2e/README.md)** - End-to-end testing with Vagrant
 
 ### Technical Archives

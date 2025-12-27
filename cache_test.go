@@ -29,7 +29,8 @@ func TestGenerateCacheID(t *testing.T) {
 
 func TestGetCacheDir(t *testing.T) {
 	cacheID := "test123"
-	cacheDir, err := GetCacheDir(cacheID)
+	customPath := ""
+	cacheDir, err := GetCacheDir(cacheID, customPath)
 	if err != nil {
 		t.Fatalf("GetCacheDir failed: %v", err)
 	}
@@ -54,7 +55,8 @@ func TestGetCacheDir(t *testing.T) {
 
 func TestEnsureCacheDir(t *testing.T) {
 	cacheID := "testcache"
-	cacheDir, err := EnsureCacheDir(cacheID)
+	customPath := ""
+	cacheDir, err := EnsureCacheDir(cacheID, customPath)
 	if err != nil {
 		t.Fatalf("EnsureCacheDir failed: %v", err)
 	}
@@ -77,9 +79,10 @@ func TestEnsureCacheDir(t *testing.T) {
 
 func TestCleanupCache(t *testing.T) {
 	cacheID := "testcleanup"
+	customPath := ""
 
 	// Create cache directory
-	cacheDir, err := EnsureCacheDir(cacheID)
+	cacheDir, err := EnsureCacheDir(cacheID, customPath)
 	if err != nil {
 		t.Fatalf("EnsureCacheDir failed: %v", err)
 	}
@@ -91,7 +94,7 @@ func TestCleanupCache(t *testing.T) {
 	}
 
 	// Cleanup cache
-	if err := CleanupCache(cacheID); err != nil {
+	if err := CleanupCache(cacheID, customPath); err != nil {
 		t.Fatalf("CleanupCache failed: %v", err)
 	}
 
@@ -103,16 +106,17 @@ func TestCleanupCache(t *testing.T) {
 
 func TestGetCacheSize(t *testing.T) {
 	cacheID := "testsize"
+	customPath := ""
 
 	// Create cache directory
-	cacheDir, err := EnsureCacheDir(cacheID)
+	cacheDir, err := EnsureCacheDir(cacheID, customPath)
 	if err != nil {
 		t.Fatalf("EnsureCacheDir failed: %v", err)
 	}
-	defer CleanupCache(cacheID)
+	defer CleanupCache(cacheID, customPath)
 
 	// Initially should be 0 or very small
-	size, err := GetCacheSize(cacheID)
+	size, err := GetCacheSize(cacheID, customPath)
 	if err != nil {
 		t.Fatalf("GetCacheSize failed: %v", err)
 	}
@@ -129,7 +133,7 @@ func TestGetCacheSize(t *testing.T) {
 	}
 
 	// Get size again
-	size, err = GetCacheSize(cacheID)
+	size, err = GetCacheSize(cacheID, customPath)
 	if err != nil {
 		t.Fatalf("GetCacheSize failed: %v", err)
 	}
