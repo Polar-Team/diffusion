@@ -1,0 +1,29 @@
+---
+# Example: Using a Specific Diffusion Version
+# Pin to a specific version for reproducible builds
+
+name: Version Pinned Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Molecule Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Diffusion Tests
+        uses: Polar-Team/diffusion/diffusion-test@main
+        with:
+          diffusion-version: 'v0.3.13'  # Pin to specific version
+          run-lint: 'true'
+          run-verify: 'true'
+          run-idempotence: 'true'

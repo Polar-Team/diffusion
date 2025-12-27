@@ -1,0 +1,109 @@
+---
+name: 'Diffusion Molecule Test'
+description: 'Run Molecule tests for Ansible roles using Diffusion'
+author: 'Polar-Team'
+
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  diffusion-version:
+    description: 'Diffusion version to use (e.g., latest, v0.3.13)'
+    required: false
+    default: 'latest'
+  run-lint:
+    description: 'Run lint tests'
+    required: false
+    default: 'true'
+  run-verify:
+    description: 'Run verify tests'
+    required: false
+    default: 'true'
+  run-idempotence:
+    description: 'Run idempotence tests'
+    required: false
+    default: 'true'
+  run-converge:
+    description: 'Run converge (always runs before other tests)'
+    required: false
+    default: 'true'
+  working-directory:
+    description: 'Working directory for the role'
+    required: false
+    default: '.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Diffusion
+      shell: bash
+      run: |
+        if [ "${{ inputs.diffusion-version }}" = "latest" ]; then
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/Polar-Team/diffusion/releases/latest | jq -r .tag_name)
+        else
+          LATEST_RELEASE="${{ inputs.diffusion-version }}"
+        fi
+        
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "x86_64" ]; then
+          DOWNLOAD_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}/diffusion-linux-amd64"
+        elif [ "$ARCH" = "aarch64" ]; then
+          DOWNLOAD_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}/diffusion-linux-arm64"
+        else
+          echo "Unsupported architecture: $ARCH"
+          exit 1
+        fi
+        
+        echo "Downloading Diffusion ${LATEST_RELEASE} for ${ARCH}..."
+        wget -O /tmp/diffusion "$DOWNLOAD_URL"
+        chmod +x /tmp/diffusion
+        sudo mv /tmp/diffusion /usr/local/bin/diffusion
+        
+        echo "Verifying installation..."
+        diffusion version
+
+    - name: Run converge
+      if: inputs.run-converge == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule converge"
+        diffusion molecule --ci
+        echo "::endgroup::"
+
+    - name: Run lint
+      if: inputs.run-lint == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule lint"
+        diffusion molecule --ci --lint
+        echo "::endgroup::"
+
+    - name: Run verify
+      if: inputs.run-verify == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule verify"
+        diffusion molecule --ci --verify
+        echo "::endgroup::"
+
+    - name: Run idempotence
+      if: inputs.run-idempotence == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule idempotence"
+        diffusion molecule --ci --idempotence
+        echo "::endgroup::"
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Cleaning up"
+        diffusion molecule --wipe || true
+        echo "::endgroup::"

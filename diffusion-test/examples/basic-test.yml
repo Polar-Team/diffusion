@@ -15,7 +15,7 @@ on:
 jobs:
   test:
     name: Diffusion Molecule Tests
-    uses: Polar-Team/diffusion/actions/diffusion-test.yml@v0.4.1
+    uses: Polar-Team/diffusion/actions/diffusion-test@dev-ci-github-action-template
     with:
       diffusion-version: 'latest'
       run-lint: true
