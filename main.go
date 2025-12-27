@@ -664,7 +664,7 @@ func main() {
 
 	cacheListCmd := &cobra.Command{
 		Use:   "list",
-		Short: "List all cache directories",
+		Short: "List all cache directories in home directory.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			config, err := LoadConfig()
 			if err != nil {
