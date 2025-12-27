@@ -1,0 +1,36 @@
+---
+# Example: Custom Diffusion Testing Workflow
+# This example shows how to customize which tests run
+
+name: Custom Test
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # Run only lint and verify (skip idempotence)
+  quick-test:
+    name: Quick Tests
+    uses: Polar-Team/diffusion/actions/diffusion-test.yml@main
+    with:
+      diffusion-version: 'latest'
+      run-lint: true
+      run-verify: true
+      run-idempotence: false
+
+  # Run full test suite on main branch only
+  full-test:
+    name: Full Test Suite
+    if: github.ref == 'refs/heads/main'
+    uses: Polar-Team/diffusion/actions/diffusion-test.yml@main
+    with:
+      diffusion-version: 'latest'
+      run-lint: true
+      run-verify: true
+      run-idempotence: true
