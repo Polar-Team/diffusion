@@ -105,5 +105,5 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::Cleaning up"
-        diffusion molecule --wipe || true
+        diffusion molecule --ci --wipe || true
         echo "::endgroup::"
