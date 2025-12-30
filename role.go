@@ -24,11 +24,6 @@ type GalaxyInfo struct {
 	GalaxyTags        []string   `yaml:"galaxy_tags"`
 }
 
-type Meta struct {
-	GalaxyInfo  *GalaxyInfo             `yaml:"galaxy_info"`
-	Collections []RequirementCollection `yaml:"collections,omitempty"`
-}
-
 type RequirementRole struct {
 	Name    string `yaml:"name"`
 	Src     string `yaml:"src,omitempty"`
@@ -63,6 +58,11 @@ func (rc *RequirementCollection) UnmarshalYAML(value *yaml.Node) error {
 	}
 	*rc = RequirementCollection(raw)
 	return nil
+}
+
+type Meta struct {
+	GalaxyInfo  *GalaxyInfo `yaml:"galaxy_info"`
+	Collections []string    `yaml:"collections,omitempty"`
 }
 
 type Requirement struct {

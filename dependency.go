@@ -10,26 +10,37 @@ import (
 
 // CollectionRequirement represents a collection with version constraints
 type CollectionRequirement struct {
-	Name    string `yaml:"name"`
-	Version string `yaml:"version,omitempty"` // e.g., ">=1.0.0", "1.2.3", "latest"
+	Name      string `toml:"Name" yaml:"name"`
+	Version   string `toml:"Version,omitempty" yaml:"version,omitempty"`      // e.g., ">=1.0.0", "1.2.3", "latest"
+	Source    string `toml:"Source,omitempty" yaml:"source,omitempty"`        // Optional type of source (e.g., "galaxy", "git") default is galaxy
+	SourceURL string `toml:"SourceURL,omitempty" yaml:"source_url,omitempty"` // Optional URL of the source (e.g., git repo URL)
 }
 
 // PythonVersion represents Python version requirements
 type PythonVersion struct {
-	Min        string   `yaml:"min"`                  // Minimum Python version (e.g., "3.11")
-	Max        string   `yaml:"max"`                  // Maximum Python version (e.g., "3.13")
-	Pinned     string   `yaml:"pinned"`               // Pinned Python version (e.g., "3.13")
-	Additional []string `yaml:"additional,omitempty"` // Additional Python versions to install
+	Min        string   `toml:"Min" yaml:"min"`                                   // Minimum Python version (e.g., "3.11")
+	Max        string   `toml:"Max" yaml:"max"`                                   // Maximum Python version (e.g., "3.13")
+	Pinned     string   `toml:"Pinned,omitempty" yaml:"pinned,omitempty"`         // Pinned Python version (e.g., "3.13")
+	Additional []string `toml:"Additional,omitempty" yaml:"additional,omitempty"` // Additional Python versions to install
 }
 
 // DependencyConfig represents the dependency configuration in diffusion.toml
 type DependencyConfig struct {
 	Python      *PythonVersion          `toml:"python"`
-	Ansible     string                  `toml:"ansible"`      // e.g., ">=10.0.0"
-	AnsibleLint string                  `toml:"ansible_lint"` // e.g., ">=24.0.0"
-	Molecule    string                  `toml:"molecule"`     // e.g., ">=24.0.0"
-	YamlLint    string                  `toml:"yamllint"`     // e.g., ">=1.35.0"
+	Ansible     string                  `toml:"ansible,omitempty"`      // e.g., ">=10.0.0"
+	AnsibleLint string                  `toml:"ansible_lint,omitempty"` // e.g., ">=24.0.0"
+	Molecule    string                  `toml:"molecule,omitempty"`     // e.g., ">=24.0.0"
+	YamlLint    string                  `toml:"yamllint,omitempty"`     // e.g., ">=1.35.0"
 	Collections []CollectionRequirement `toml:"collections,omitempty"`
+	Roles       []RoleRequirement       `toml:"roles,omitempty"` // Roles per scenario: scenario.role_name
+}
+
+// RoleRequirement represents a role with version constraints
+type RoleRequirement struct {
+	Name    string `toml:"Name" yaml:"name"`
+	Src     string `toml:"Src,omitempty" yaml:"src,omitempty"`
+	Scm     string `toml:"Scm,omitempty" yaml:"scm,omitempty"`
+	Version string `toml:"Version,omitempty" yaml:"version,omitempty"` // e.g., ">=1.0.0", "1.2.3", "main"
 }
 
 // DependencyResolver resolves dependencies from requirements and meta files
@@ -49,55 +60,61 @@ func NewDependencyResolver(meta *Meta, req *Requirement, config *DependencyConfi
 }
 
 // ResolveCollectionDependencies resolves all collection dependencies
+// diffusion.toml provides version constraints, meta/requirements provide collection names
 func (dr *DependencyResolver) ResolveCollectionDependencies() ([]CollectionRequirement, error) {
-	collectionMap := make(map[string]string)
+	collectionMap := make(map[string]CollectionRequirement)
 
-	// Add collections from meta/main.yml
+	// Add collections from meta/main.yml (simple string format)
 	if dr.meta != nil && dr.meta.Collections != nil {
 		for _, col := range dr.meta.Collections {
-			// Collection is already structured with Name and Version
-			version := col.Version
-			if version == "" {
-				version = "latest"
+			// Parse collection string like "community.general>=7.4.0"
+			name, version := parseCollectionString(col)
+			collectionMap[name] = CollectionRequirement{
+				Name:    name,
+				Version: version,
 			}
-			collectionMap[col.Name] = version
 		}
 	}
 
-	// Add collections from requirements.yml
+	// Add collections from requirements.yml (structured format)
 	if dr.requirement != nil && dr.requirement.Collections != nil {
 		for _, col := range dr.requirement.Collections {
-			// Collection is already structured with Name and Version
-			version := col.Version
-			// If version is not specified in requirements, check if it exists in meta
-			if version == "" || version == "latest" {
-				if existingVersion, exists := collectionMap[col.Name]; exists && existingVersion != "" && existingVersion != "latest" {
-					version = existingVersion
+			// If collection already exists, keep existing unless this has a constraint
+			if existing, exists := collectionMap[col.Name]; exists {
+				// If existing has no constraint or is "latest", use this one
+				if existing.Version == "" || existing.Version == "latest" {
+					collectionMap[col.Name] = CollectionRequirement{
+						Name:    col.Name,
+						Version: col.Version,
+					}
+				}
+			} else {
+				collectionMap[col.Name] = CollectionRequirement{
+					Name:    col.Name,
+					Version: col.Version,
 				}
 			}
-			collectionMap[col.Name] = version
 		}
 	}
 
-	// Add collections from diffusion.toml config
+	// Override with collections from diffusion.toml config (highest priority)
+	// diffusion.toml is the source of truth for version constraints
 	if dr.config != nil && dr.config.Collections != nil {
 		for _, col := range dr.config.Collections {
-			if existingVersion, exists := collectionMap[col.Name]; !exists || existingVersion == "" || existingVersion == "latest" {
-				collectionMap[col.Name] = col.Version
+			collectionMap[col.Name] = CollectionRequirement{
+				Name:    col.Name,
+				Version: col.Version, // This is the constraint from diffusion.toml
 			}
 		}
 	}
 
 	// Convert map to sorted slice
 	var collections []CollectionRequirement
-	for name, version := range collectionMap {
-		if version == "" {
-			version = "latest"
+	for _, col := range collectionMap {
+		if col.Version == "" {
+			col.Version = "latest"
 		}
-		collections = append(collections, CollectionRequirement{
-			Name:    name,
-			Version: version,
-		})
+		collections = append(collections, col)
 	}
 
 	// Sort by name for consistency
@@ -106,6 +123,71 @@ func (dr *DependencyResolver) ResolveCollectionDependencies() ([]CollectionRequi
 	})
 
 	return collections, nil
+}
+
+// ResolveRoleDependencies resolves all role dependencies
+// For lock file generation, only roles in diffusion.toml are included
+func (dr *DependencyResolver) ResolveRoleDependencies() ([]RoleRequirement, error) {
+	roleMap := make(map[string]RoleRequirement)
+
+	// Build a map of roles from requirements.yml for reference (src, scm info)
+	requirementRoles := make(map[string]RequirementRole)
+	if dr.requirement != nil && dr.requirement.Roles != nil {
+		for _, role := range dr.requirement.Roles {
+			requirementRoles[role.Name] = role
+		}
+	}
+
+	// Only include roles from diffusion.toml config (source of truth for lock file)
+	if dr.config != nil && dr.config.Roles != nil {
+		for _, role := range dr.config.Roles {
+			// Role names in config are prefixed with scenario (e.g., "default.rolename")
+			// Extract the actual role name
+			parts := strings.SplitN(role.Name, ".", 2)
+			var roleName string
+			if len(parts) == 2 {
+				roleName = parts[1]
+			} else {
+				roleName = role.Name
+			}
+
+			// Get src and scm from requirements.yml if not in config
+			src := role.Src
+			scm := role.Scm
+			if reqRole, exists := requirementRoles[roleName]; exists {
+				if src == "" {
+					src = reqRole.Src
+				}
+				if scm == "" {
+					scm = reqRole.Scm
+				}
+			}
+
+			// Add role with constraint from config
+			roleMap[roleName] = RoleRequirement{
+				Name:    roleName,
+				Src:     src,
+				Scm:     scm,
+				Version: role.Version,
+			}
+		}
+	}
+
+	// Convert map to sorted slice
+	var roles []RoleRequirement
+	for _, role := range roleMap {
+		if role.Version == "" {
+			role.Version = "main"
+		}
+		roles = append(roles, role)
+	}
+
+	// Sort by name for consistency
+	sort.Slice(roles, func(i, j int) bool {
+		return roles[i].Name < roles[j].Name
+	})
+
+	return roles, nil
 }
 
 // parseCollectionString parses a collection string like "community.general>=7.4.0" or "community.docker"
@@ -188,7 +270,7 @@ func (dr *DependencyResolver) ResolveToolVersions() map[string]string {
 }
 
 // ComputeDependencyHash computes a hash of all dependencies for lock file
-func ComputeDependencyHash(collections []CollectionRequirement, roles []RequirementRole, toolVersions map[string]string, pythonVersion *PythonVersion) string {
+func ComputeDependencyHash(collections []CollectionRequirement, roles []RoleRequirement, toolVersions map[string]string, pythonVersion *PythonVersion) string {
 	h := sha256.New()
 
 	// Sort and hash collections

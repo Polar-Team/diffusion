@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,7 +46,12 @@ func (g *GalaxyAPI) GetCollectionLatestVersion(namespace, name string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch collection info: %w", err)
 	}
-	defer resp.Body.Close()
+
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("failed to close response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -79,41 +86,11 @@ func CompareVersions(v1, v2 string) int {
 	parts1 := strings.Split(v1, ".")
 	parts2 := strings.Split(v2, ".")
 
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
+	maxLen := max(len(parts1), len(parts2))
 
-	for i := 0; i < maxLen; i++ {
-		var n1, n2 int
-
-		if i < len(parts1) {
-			// Parse number, ignoring any non-numeric suffix (like -alpha, -beta)
-			numStr := parts1[i]
-			for j, c := range numStr {
-				if c < '0' || c > '9' {
-					numStr = numStr[:j]
-					break
-				}
-			}
-			if numStr != "" {
-				n1, _ = strconv.Atoi(numStr)
-			}
-		}
-
-		if i < len(parts2) {
-			numStr := parts2[i]
-			for j, c := range numStr {
-				if c < '0' || c > '9' {
-					numStr = numStr[:j]
-					break
-				}
-			}
-			if numStr != "" {
-				n2, _ = strconv.Atoi(numStr)
-			}
-		}
-
+	for i := range maxLen {
+		n1 := CalcVersion(i, parts1)
+		n2 := CalcVersion(i, parts2)
 		if n1 > n2 {
 			return 1
 		} else if n1 < n2 {
@@ -127,7 +104,7 @@ func CompareVersions(v1, v2 string) int {
 // GetRoleLatestVersion fetches the latest version of a role
 func (g *GalaxyAPI) GetRoleLatestVersion(namespace, name string) (string, error) {
 	// Galaxy v1 API for roles
-	url := fmt.Sprintf("https://galaxy.ansible.com/api/v1/roles/?owner__username=%s&name=%s",
+	url := fmt.Sprintf("https://galaxy.ansible.com/api/v3/roles/?owner__username=%s&name=%s",
 		namespace, name)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -141,7 +118,12 @@ func (g *GalaxyAPI) GetRoleLatestVersion(namespace, name string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch role info: %w", err)
 	}
-	defer resp.Body.Close()
+
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("failed to close response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("API returned status %d", resp.StatusCode)
@@ -170,11 +152,11 @@ func (g *GalaxyAPI) GetRoleLatestVersion(namespace, name string) (string, error)
 }
 
 // ResolveCollectionVersion resolves a collection version constraint to an actual version
-func (g *GalaxyAPI) ResolveCollectionVersion(collectionName, versionConstraint string) (string, error) {
+func (g *GalaxyAPI) ResolveVersion(objectName, objectType, versionConstraint string) (string, error) {
 	// Parse collection name (namespace.name)
-	parts := strings.Split(collectionName, ".")
+	parts := strings.Split(objectName, ".")
 	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid collection name format: %s (expected namespace.name)", collectionName)
+		return "", fmt.Errorf("invalid collection name format: %s (expected namespace.name)", objectName)
 	}
 
 	namespace, name := parts[0], parts[1]
@@ -186,8 +168,6 @@ func (g *GalaxyAPI) ResolveCollectionVersion(collectionName, versionConstraint s
 
 	// If version has operators (>=, <=, etc.), fetch latest and validate
 	if strings.ContainsAny(versionConstraint, ">=<") {
-		// For now, just fetch latest version
-		// TODO: Implement proper version constraint resolution
 		var operand string
 		var constraintVersion string
 
@@ -195,10 +175,23 @@ func (g *GalaxyAPI) ResolveCollectionVersion(collectionName, versionConstraint s
 			if idx := strings.Index(versionConstraint, op); idx != -1 {
 				operand = op
 				constraintVersion = strings.TrimSpace(versionConstraint[idx+len(op):])
+				break
 			}
 		}
 
-		url := fmt.Sprintf("https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/%s/%s/versions", namespace, name)
+		if constraintVersion == "" {
+			return "", fmt.Errorf("invalid version constraint: %s", versionConstraint)
+		}
+
+		url := ""
+		switch objectType {
+		case "collection":
+			url = fmt.Sprintf("https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/%s/%s/versions/", namespace, name)
+		case "role":
+			url = fmt.Sprintf("https://galaxy.ansible.com/api/v1/roles/?owner__username=%s&name=%s", namespace, name)
+		default:
+			return "", fmt.Errorf("unknown object type: %s", objectType)
+		}
 
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Get(url)
@@ -206,27 +199,31 @@ func (g *GalaxyAPI) ResolveCollectionVersion(collectionName, versionConstraint s
 			return "", fmt.Errorf("failed to fetch collection info: %w", err)
 		}
 
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				fmt.Printf("failed to close response body: %v\n", err)
+			}
+		}()
 
 		if resp.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("galaxy return status %d for collection %s", resp.StatusCode, name)
 		}
 
 		var result struct {
-			Data map[string][]struct {
+			Data []struct {
 				Version         string `json:"version"`
 				RequiresAnsible string `json:"requires_ansible"`
-			}
+			} `json:"data"`
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			return "", fmt.Errorf("failed to decode response: %w", err)
 		}
 
-		// Get all versions strings from release data map keys
+		// Get all versions strings from data array
 		versions := make([]string, 0, len(result.Data))
-		for _, version := range result.Data[Version] {
-			versions = append(versions, version.Version)
+		for _, versionData := range result.Data {
+			versions = append(versions, versionData.Version)
 		}
 
 		if len(versions) == 0 {
@@ -244,7 +241,7 @@ func (g *GalaxyAPI) ResolveCollectionVersion(collectionName, versionConstraint s
 
 		// Validate that latest version satisfies the constraint
 		latestVersion := versions[0]
-		cmp := CompareVersions(latestVersion, collectionName)
+		cmp := CompareVersions(latestVersion, objectName)
 
 		switch operand {
 		case ">=":
@@ -290,12 +287,267 @@ func (g *GalaxyAPI) ResolveCollectionVersion(collectionName, versionConstraint s
 // ResolveRoleVersion resolves a role version constraint to an actual version
 func (g *GalaxyAPI) ResolveRoleVersion(namespace, name, versionConstraint string) (string, error) {
 	// If version is "latest", "main", or empty, fetch latest
-	if versionConstraint == "" || versionConstraint == "latest" || versionConstraint == "main" {
+	if versionConstraint == "" || versionConstraint == "latest" || versionConstraint == "main" || versionConstraint == "master" {
 		return g.GetRoleLatestVersion(namespace, name)
 	}
 
 	// If it's a specific version or branch, return as-is
 	return versionConstraint, nil
+}
+
+// ResolveVersionFromGit resolves a role version from a git repository
+// It fetches tags from the git repo and returns the latest version or resolves a constraint
+func ResolveVersionFromGit(gitURL, versionConstraint string) (string, error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// If version is "latest", "main", or empty, fetch latest tag
+	if versionConstraint == "" || versionConstraint == "latest" || versionConstraint == "main" || versionConstraint == "master" {
+
+		attempts := 0
+		maxAttempts := 3
+		var tag string
+		var err error
+
+		for attempts < maxAttempts {
+			tag, err = GetLatestGitTag(gitURL)
+			fmt.Printf("Fetched latest git tag: %s\n", tag)
+
+			if err != nil {
+				// Error occurred, retry
+				attempts++
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			// Success - check if we got a valid tag
+			if tag != "main" && tag != "master" && tag != "" {
+				return NormalizeVersion(tag), nil
+			}
+
+			fmt.Println("No valid tags found, retrying...")
+			attempts++
+			time.Sleep(2 * time.Second)
+		}
+
+		fmt.Println("No tags found after all attempts, defaulting to 'not-defined'")
+	} else {
+		// If version has operators (>=, <=, etc.), resolve from git tags
+		if strings.ContainsAny(versionConstraint, ">=<") {
+			var operand string
+			var constraintVersion string
+
+			for _, op := range []string{">=", "<=", "==", ">", "<", "="} {
+				if idx := strings.Index(versionConstraint, op); idx != -1 {
+					operand = op
+					constraintVersion = strings.TrimSpace(versionConstraint[idx+len(op):])
+					break
+				}
+			}
+
+			if constraintVersion == "" {
+				return "", fmt.Errorf("invalid version constraint: %s", versionConstraint)
+			}
+
+			// Fetch all tags from git
+			cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--sort=-v:refname", gitURL)
+			output, err := cmd.Output()
+
+			if err != nil {
+				return "", fmt.Errorf("failed to fetch tags from git: %w", err)
+			}
+
+			// Parse all tags and find the latest that satisfies the constraint
+			lines := strings.Split(string(output), "\n")
+			var latestMatchingTag string
+
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				// Format: <hash>\trefs/tags/<tag>
+				parts := strings.Split(line, "\t")
+				if len(parts) != 2 {
+					continue
+				}
+				tagRef := parts[1]
+				// Extract tag name from refs/tags/<tag>
+				if strings.HasPrefix(tagRef, "refs/tags/") {
+					tag := strings.TrimPrefix(tagRef, "refs/tags/")
+					// Skip tags ending with ^{} (annotated tag references)
+					if strings.HasSuffix(tag, "^{}") {
+						continue
+					}
+
+					// Normalize tag for comparison (strip 'v' prefix)
+					normalizedTag := strings.TrimPrefix(tag, "v")
+
+					// Check if this tag satisfies the constraint
+					satisfies, err := CompareVersionConstraint(normalizedTag, operand, constraintVersion)
+					if err != nil {
+						continue // Skip invalid version tags
+					}
+
+					if satisfies {
+						// Return the first (latest) matching tag
+						return NormalizeVersion(tag), nil
+					}
+				}
+			}
+
+			// If no matching tag found, return error
+			if latestMatchingTag == "" {
+				return "", fmt.Errorf("no git tag found satisfying constraint %s", versionConstraint)
+			}
+
+			return NormalizeVersion(latestMatchingTag), nil
+		}
+	}
+
+	// If it's a specific version or branch, return as-is
+	return versionConstraint, nil
+}
+
+// GetLatestGitTag fetches the latest tag from a git repository
+func GetLatestGitTag(gitURL string) (string, error) {
+	// Use git ls-remote to fetch tags with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--sort=-v:refname", gitURL)
+	output, err := cmd.Output()
+	if err != nil {
+		return "main", nil // Fallback to main if git command fails
+	}
+
+	// Parse output to find the latest tag
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		// Format: <hash>\trefs/tags/<tag>
+		parts := strings.Split(line, "\t")
+		if len(parts) != 2 {
+			continue
+		}
+		tagRef := parts[1]
+		// Extract tag name from refs/tags/<tag>
+		if strings.HasPrefix(tagRef, "refs/tags/") {
+			tag := strings.TrimPrefix(tagRef, "refs/tags/")
+			// Skip tags ending with ^{} (annotated tag references)
+			if strings.HasSuffix(tag, "^{}") {
+				continue
+			}
+			// Return the tag (with or without 'v' prefix)
+			return tag, nil
+		}
+	}
+
+	return "main", nil // Fallback to main if no tags found
+}
+
+// NormalizeVersion removes or adds 'v' prefix as needed
+func NormalizeVersion(version string) string {
+	// If version starts with 'v' followed by a digit, keep it
+	if len(version) > 1 && version[0] == 'v' && version[1] >= '0' && version[1] <= '9' {
+		return version
+	}
+	// If version is a semantic version without 'v', add it
+	if len(version) > 0 && version[0] >= '0' && version[0] <= '9' {
+		// Check if it looks like a semantic version (x.y.z)
+		parts := strings.Split(version, ".")
+		if len(parts) >= 2 {
+			return "v" + version
+		}
+	}
+	return version
+}
+
+// CompareVersionConstraint compares a version against a constraint
+// Returns true if the version satisfies the constraint
+func CompareVersionConstraint(version, operator, constraintVersion string) (bool, error) {
+	// Parse versions into comparable format
+	v1, err := parseSemanticVersion(version)
+	if err != nil {
+		return false, err
+	}
+
+	v2, err := parseSemanticVersion(constraintVersion)
+	if err != nil {
+		return false, err
+	}
+
+	// Compare versions
+	cmp := compareVersions(v1, v2)
+
+	switch operator {
+	case ">=":
+		return cmp >= 0, nil
+	case "<=":
+		return cmp <= 0, nil
+	case "==", "=":
+		return cmp == 0, nil
+	case ">":
+		return cmp > 0, nil
+	case "<":
+		return cmp < 0, nil
+	default:
+		return false, fmt.Errorf("unknown operator: %s", operator)
+	}
+}
+
+// parseSemanticVersion parses a semantic version string into [major, minor, patch]
+func parseSemanticVersion(version string) ([]int, error) {
+	// Remove 'v' prefix if present
+	version = strings.TrimPrefix(version, "v")
+
+	// Split by '.'
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid version format: %s", version)
+	}
+
+	// Parse up to 3 parts (major, minor, patch)
+	result := make([]int, 3)
+	for i := 0; i < 3 && i < len(parts); i++ {
+		// Remove any non-numeric suffix (e.g., "1.2.3-beta" -> "1.2.3")
+		numStr := parts[i]
+		for j, c := range numStr {
+			if c < '0' || c > '9' {
+				numStr = numStr[:j]
+				break
+			}
+		}
+
+		if numStr == "" {
+			result[i] = 0
+			continue
+		}
+
+		num, err := strconv.Atoi(numStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid version number: %s", parts[i])
+		}
+		result[i] = num
+	}
+
+	return result, nil
+}
+
+// compareVersions compares two version arrays
+// Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+func compareVersions(v1, v2 []int) int {
+	for i := 0; i < 3; i++ {
+		if v1[i] < v2[i] {
+			return -1
+		}
+		if v1[i] > v2[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 // GetPythonPackageVersion fetches the latest version of a Python package from PyPI
@@ -327,7 +579,12 @@ func GetPythonPackageVersion(packageName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch package info: %w", err)
 	}
-	defer resp.Body.Close()
+
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("failed to close response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("PyPI returned status %d for package %s", resp.StatusCode, pkgName)
@@ -441,4 +698,35 @@ func ResolvePythonDependencies(packages []string) (map[string]string, error) {
 	}
 
 	return resolved, nil
+}
+
+// GetCollectionVersion is a convenience function to resolve collection version
+func GetCollectionVersion(collectionName, versionConstraint string) (string, error) {
+	api := NewGalaxyAPI()
+	return api.ResolveVersion(collectionName, "collection", versionConstraint)
+}
+
+// CaclcVersion extracts the numeric part of a version string at a given index
+func CalcVersion(index int, parts []string) int {
+	n := 0
+	if index < len(parts) {
+		// Parse number, ignoring any non-numeric suffix (like -alpha, -beta)
+		numStr := parts[index]
+		for j, c := range numStr {
+			if c < '0' || c > '9' {
+				numStr = numStr[:j]
+				break
+			}
+		}
+		if numStr != "" {
+			n, _ = strconv.Atoi(numStr)
+		}
+	}
+	return n
+}
+
+// GetRoleVersion is a convenience function to resolve role version
+func GetRoleVersion(roleName, versionConstraint string) (string, error) {
+	api := NewGalaxyAPI()
+	return api.ResolveVersion(roleName, "role", versionConstraint)
 }

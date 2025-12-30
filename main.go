@@ -127,96 +127,228 @@ func main() {
 
 	roleAddRoleCmd := &cobra.Command{
 		Use:   "add-role [role-name]",
-		Short: "Add a role to requirements.yml",
+		Short: "Add a role and diffusion.toml",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			roleName := args[0]
 
-			_, req, err := LoadRoleConfig(RoleScenario)
+			// Resolve the actual version from Galaxy API or Git if no version provided
+			resolvedVersion := RoleVersionFlag
+			if resolvedVersion == "" || resolvedVersion == "latest" || resolvedVersion == "main" || resolvedVersion == "master" {
+				fmt.Printf("Resolving version for role %s...\n", roleName)
+
+				// If src is provided and it's a git URL, try to resolve from git
+				if RoleSrcFlag != "" && (strings.HasSuffix(RoleSrcFlag, ".git")) {
+					resolved, err := ResolveVersionFromGit(RoleSrcFlag, resolvedVersion)
+					if err != nil {
+						fmt.Printf("\033[33mWarning: Failed to resolve role version from git: %v\033[0m\n", err)
+						fmt.Printf("\033[33mTrying Galaxy API...\033[0m\n")
+						resolved, err = GetRoleVersion(roleName, resolvedVersion)
+						if err != nil {
+							fmt.Printf("\033[33mWarning: Failed to resolve role version from Galaxy: %v\033[0m\n", err)
+							fmt.Printf("\033[33mUsing 'main' as default version\033[0m\n")
+							// try to resolve version from git repository
+							resolved, err = ResolveVersionFromGit(RoleSrcFlag, resolvedVersion)
+							if err == nil {
+								resolvedVersion = resolved
+							} else {
+								resolvedVersion = "not-defined"
+							}
+						} else {
+							resolvedVersion = resolved
+							fmt.Printf("Resolved %s to version %s from Galaxy\n", roleName, resolvedVersion)
+						}
+					} else {
+						resolvedVersion = resolved
+						fmt.Printf("Resolved %s to version %s from git\n", roleName, resolvedVersion)
+					}
+				} else {
+					// Try Galaxy API
+					resolved, err := GetRoleVersion(roleName, resolvedVersion)
+					if err != nil {
+						fmt.Printf("\033[33mWarning: Failed to resolve role version: %v\033[0m\n", err)
+						fmt.Printf("\033[33mUsing 'main' as default version\033[0m\n")
+						resolvedVersion = "main"
+					} else {
+						resolvedVersion = resolved
+						fmt.Printf("Resolved %s to version %s\n", roleName, resolvedVersion)
+					}
+				}
+			}
+
+			// Normalize version (add 'v' prefix if needed for git tags)
+			if RoleSrcFlag != "" && (strings.HasSuffix(RoleSrcFlag, ".git")) {
+				resolvedVersion = NormalizeVersion(resolvedVersion)
+			}
+
+			// Add to diffusion.toml dependencies
+			config, err := LoadConfig()
 			if err != nil {
-				return fmt.Errorf("failed to load requirements file: %w", err)
+				// Create new config if it doesn't exist
+				config = &Config{}
 			}
 
-			// Add the new role to existing roles
-			newRole := RequirementRole{
-				Name:    roleName,
-				Src:     RoleSrcFlag,
-				Scm:     RoleScmFlag,
-				Version: RoleVersionFlag,
+			if config.DependencyConfig == nil {
+				config.DependencyConfig = &DependencyConfig{}
 			}
-			req.Roles = append(req.Roles, newRole)
 
-			// Save the updated requirements file
-			if err := SaveRequirementFile(req, RoleScenario); err != nil {
-				return fmt.Errorf("failed to save role: %w", err)
+			// Determine version constraint for diffusion.toml
+			// If no constraint was provided, use >=<resolved_version>
+			configVersionConstraint, err := GetRoleVersion(roleName, RoleVersionFlag)
+			if err != nil {
+				// If GetRoleVersion from galaxy failed trying git
+				log.Printf("Warning: Failed to get role version from Galaxy: %v\n", err)
+				configVersionConstraint, err = ResolveVersionFromGit(RoleSrcFlag, RoleVersionFlag)
+				if err != nil {
+					log.Printf("Warning: Failed to get role version from git: %v\n", err)
+					configVersionConstraint = "1.0.0"
+				}
 			}
-			fmt.Printf("\033[32mRole '%s' added successfully to requirements.yml\n\033[0m", roleName)
+			if RoleVersionFlag == "" || RoleVersionFlag == "latest" || RoleVersionFlag == "main" || RoleVersionFlag == "master" {
+				// Strip 'v' prefix for constraint if present
+				constraintVersion := strings.TrimPrefix(resolvedVersion, "v")
+				configVersionConstraint = ">=" + constraintVersion
+			}
+
+			// Check if role already exists in config
+			// Note: Roles are stored per scenario
+			roleKey := RoleScenario + "." + roleName
+			configRoleExists := false
+			for i, role := range config.DependencyConfig.Roles {
+				if role.Name == roleKey {
+					config.DependencyConfig.Roles[i] = RoleRequirement{
+						Name:    roleKey,
+						Src:     RoleSrcFlag,
+						Version: configVersionConstraint,
+						Scm:     RoleScmFlag,
+					}
+					configRoleExists = true
+					break
+				}
+			}
+			if !configRoleExists {
+				if config.DependencyConfig.Roles == nil {
+					config.DependencyConfig.Roles = []RoleRequirement{}
+				}
+				config.DependencyConfig.Roles = append(config.DependencyConfig.Roles, RoleRequirement{
+					Name:    roleKey,
+					Src:     RoleSrcFlag,
+					Version: configVersionConstraint,
+					Scm:     RoleScmFlag,
+				})
+			}
+
+			// Save diffusion.toml
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save diffusion.toml: %w", err)
+			}
+			fmt.Printf("\033[32mRole '%s' (version %s) added successfully to diffusion.toml\n\033[0m", roleKey, configVersionConstraint)
+
 			return nil
 		},
 	}
 
 	roleRemoveRoleCmd := &cobra.Command{
 		Use:   "remove-role [role-name]",
-		Short: "Remove a role to requirements.yml",
+		Short: "Remove a role from diffusion.toml (keeps it in requirements.yml)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			roleName := args[0]
 
-			_, req, err := LoadRoleConfig(RoleScenario)
+			config, err := LoadConfig()
 			if err != nil {
-				return fmt.Errorf("failed to load requirements file: %w", err)
+				return fmt.Errorf("failed to load config: %w", err)
 			}
 
+			if config.DependencyConfig == nil {
+				return fmt.Errorf("no dependencies configured in diffusion.toml")
+			}
+
+			// Find and remove the role from diffusion.toml
+			roleKey := RoleScenario + "." + roleName
 			found := false
-			for i, role := range req.Roles {
-				if role.Name == roleName {
-					// Remove the role from the slice using slices package
-					req.Roles = append(req.Roles[:i], req.Roles[i+1:]...)
+			for i, role := range config.DependencyConfig.Roles {
+				if role.Name == roleKey {
+					// Remove the role from the slice completely
+					config.DependencyConfig.Roles = append(config.DependencyConfig.Roles[:i], config.DependencyConfig.Roles[i+1:]...)
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				return fmt.Errorf("role '%s' not found in requirements.yml", roleName)
+				return fmt.Errorf("role '%s' not found in diffusion.toml", roleKey)
 			}
 
-			// Save the updated requirements file
-			if err := SaveRequirementFile(req, RoleScenario); err != nil {
-				return fmt.Errorf("failed to save role: %w", err)
+			// Save diffusion.toml
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
-			fmt.Printf("\033[32mRole '%s' removed successfully from requirements.yml\n\033[0m", roleName)
+
+			fmt.Printf("\033[32mRole '%s' removed successfully from diffusion.toml\n\033[0m", roleKey)
+			fmt.Printf("\033[33mNote: Role remains in requirements.yml (use 'deps sync' to update if needed)\n\033[0m")
 			return nil
 		},
 	}
 
 	roleAddCollectionCmd := &cobra.Command{
 		Use:   "add-collection [collection-name]",
-		Short: "Add a role to requirements.yml",
+		Short: "Add a collection to diffusion.toml (use 'deps sync' to update requirements.yml and meta.yml)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			collectionName := args[0]
 
-			meta, req, err := LoadRoleConfig(RoleScenario)
+			// Parse collection name and version constraint
+			name, versionConstraint := parseCollectionString(collectionName)
+
+			// Resolve the actual version from Galaxy API if no constraint provided
+			var resolvedVersion string
+			if versionConstraint == "" || versionConstraint == "latest" {
+				fmt.Printf("Resolving version for %s...\n", name)
+				var err error
+				resolvedVersion, err = GetCollectionVersion(name, versionConstraint)
+				if err != nil {
+					return fmt.Errorf("failed to resolve collection version: %w", err)
+				}
+				fmt.Printf("Resolved %s to version %s\n", name, resolvedVersion)
+			}
+
+			// Add to diffusion.toml dependencies
+			config, err := LoadConfig()
 			if err != nil {
-				return fmt.Errorf("failed to load requirements file: %w", err)
+				// Create new config if it doesn't exist
+				config = &Config{}
 			}
 
-			req.Collections = append(req.Collections, RequirementCollection{Name: collectionName})
-
-			// Save the updated requirements file
-			if err := SaveRequirementFile(req, RoleScenario); err != nil {
-				return fmt.Errorf("failed to save role: %w", err)
+			if config.DependencyConfig == nil {
+				config.DependencyConfig = &DependencyConfig{}
 			}
-			fmt.Printf("\033[32mRole '%s' added successfully to requirements.yml\n\033[0m", collectionName)
 
-			meta.Collections = append(meta.Collections, RequirementCollection{Name: collectionName})
-
-			// Save the updated meta file
-			if err := SaveMetaFile(meta); err != nil {
-				return fmt.Errorf("failed to save meta file: %w", err)
+			// Determine version constraint for diffusion.toml
+			// If no constraint was provided, use >=<resolved_version>
+			configVersionConstraint := versionConstraint
+			if configVersionConstraint == "" || configVersionConstraint == "latest" {
+				configVersionConstraint = ">=" + resolvedVersion
 			}
-			fmt.Printf("\033[32mCollection '%s' added successfully to meta/main.yml\n\033[0m", collectionName)
+
+			// Check if collection already exists in config
+			configCollExists := false
+			for i, coll := range config.DependencyConfig.Collections {
+				if coll.Name == name {
+					config.DependencyConfig.Collections[i] = CollectionRequirement{Name: name, Version: configVersionConstraint}
+					configCollExists = true
+					break
+				}
+			}
+			if !configCollExists {
+				config.DependencyConfig.Collections = append(config.DependencyConfig.Collections, CollectionRequirement{Name: name, Version: configVersionConstraint})
+			}
+
+			// Save diffusion.toml
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save diffusion.toml: %w", err)
+			}
+			fmt.Printf("\033[32mCollection '%s' (version %s) added successfully to diffusion.toml\n\033[0m", name, configVersionConstraint)
 
 			return nil
 		},
@@ -224,55 +356,44 @@ func main() {
 
 	roleRemoveCollectionCmd := &cobra.Command{
 		Use:   "remove-collection [collection-name]",
-		Short: "Add a role to requirements.yml",
+		Short: "Remove a collection from diffusion.toml (use 'deps sync' to update requirements.yml and meta.yml)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			collectionName := args[0]
 
-			meta, req, err := LoadRoleConfig(RoleScenario)
+			// Parse collection name (ignore version for removal)
+			name, _ := parseCollectionString(collectionName)
+
+			// Remove from diffusion.toml
+			config, err := LoadConfig()
 			if err != nil {
-				return fmt.Errorf("failed to load requirements file: %w", err)
+				return fmt.Errorf("failed to load diffusion.toml: %w", err)
+			}
+
+			if config.DependencyConfig == nil {
+				return fmt.Errorf("no dependencies found in diffusion.toml")
 			}
 
 			found := false
-			for i, coll := range req.Collections {
-				if coll.Name == collectionName {
-					// Remove the collection from the slice
-					req.Collections = append(req.Collections[:i], req.Collections[i+1:]...)
+			for i, coll := range config.DependencyConfig.Collections {
+				if coll.Name == name {
+					config.DependencyConfig.Collections = append(config.DependencyConfig.Collections[:i], config.DependencyConfig.Collections[i+1:]...)
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				return fmt.Errorf("collection '%s' not found in requirements.yml", collectionName)
+				return fmt.Errorf("collection '%s' not found in diffusion.toml", name)
 			}
 
-			found = false
-			for i, coll := range meta.Collections {
-				if coll.Name == collectionName {
-					// Remove the collection from the slice
-					meta.Collections = append(meta.Collections[:i], meta.Collections[i+1:]...)
-					found = true
-					break
-				}
+			// Save diffusion.toml
+			if err := SaveConfig(config); err != nil {
+				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
 
-			if !found {
-				return fmt.Errorf("collection '%s' not found in meta/main.yml", collectionName)
-			}
-
-			// Save the updated requirements file
-			if err := SaveRequirementFile(req, RoleScenario); err != nil {
-				return fmt.Errorf("failed to save role: %w", err)
-			}
-			fmt.Printf("\033[32mRole '%s' added successfully to requirements.yml\n\033[0m", collectionName)
-
-			// Save the updated meta file
-			if err := SaveMetaFile(meta); err != nil {
-				return fmt.Errorf("failed to save meta file: %w", err)
-			}
-			fmt.Printf("\033[32mCollection '%s' added successfully to meta/main.yml\n\033[0m", collectionName)
+			fmt.Printf("\033[32mCollection '%s' removed successfully from diffusion.toml\n\033[0m", name)
+			fmt.Printf("\033[33mRun 'diffusion deps sync' to update requirements.yml and meta/main.yml\n\033[0m")
 
 			return nil
 		},
@@ -1066,7 +1187,7 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 	depsInitCmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize dependency configuration in diffusion.toml",
-		Long:  `Initialize dependency configuration section in diffusion.toml with default values.`,
+		Long:  `Initialize dependency configuration section in diffusion.toml with default values and scan existing requirements.yml files.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Load or create config
 			config, err := LoadConfig()
@@ -1091,6 +1212,122 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 				AnsibleLint: DefaultAnsibleLintVersion,
 				Molecule:    DefaultMoleculeVersion,
 				YamlLint:    DefaultYamlLintVersion,
+				Collections: []CollectionRequirement{},
+				Roles:       []RoleRequirement{},
+			}
+
+			// Scan for existing requirements.yml files in scenario folders
+			fmt.Println("Scanning for existing requirements.yml files...")
+			scenariosDir := "scenarios"
+			if _, err := os.Stat(scenariosDir); err == nil {
+				// Read all scenario folders
+				entries, err := os.ReadDir(scenariosDir)
+				if err == nil {
+					for _, entry := range entries {
+						if entry.IsDir() {
+							scenarioName := entry.Name()
+							reqPath := filepath.Join(scenariosDir, scenarioName, "requirements.yml")
+
+							// Check if requirements.yml exists
+							if _, err := os.Stat(reqPath); err == nil {
+								fmt.Printf("  Found requirements.yml in scenario: %s\n", scenarioName)
+
+								// Parse requirements file
+								req, err := ParseRequirementFile(scenarioName)
+								if err != nil {
+									fmt.Printf("    \033[33mWarning: Failed to parse requirements.yml: %v\033[0m\n", err)
+									continue
+								}
+
+								// Add collections from this scenario
+								for _, col := range req.Collections {
+									// Check if collection already exists
+									exists := false
+									for _, existing := range config.DependencyConfig.Collections {
+										if existing.Name == col.Name {
+											exists = true
+											break
+										}
+									}
+									if !exists {
+										// Add version constraint (>= if specific version found)
+										version := col.Version
+										if version != "" && !strings.HasPrefix(version, ">=") && !strings.HasPrefix(version, "<=") && !strings.HasPrefix(version, "==") && !strings.HasPrefix(version, ">") && !strings.HasPrefix(version, "<") {
+											version = ">=" + version
+										}
+										config.DependencyConfig.Collections = append(config.DependencyConfig.Collections, CollectionRequirement{
+											Name:    col.Name,
+											Version: version,
+										})
+										fmt.Printf("    ✓ Added collection: %s %s\n", col.Name, version)
+									}
+								}
+
+								// Add roles from this scenario
+								for _, role := range req.Roles {
+									// Prefix role name with scenario name
+									roleNameWithScenario := scenarioName + "." + role.Name
+
+									// Check if role already exists
+									exists := false
+									for _, existing := range config.DependencyConfig.Roles {
+										if existing.Name == roleNameWithScenario {
+											exists = true
+											break
+										}
+									}
+									if !exists {
+										// Add version constraint (>= if specific version found)
+										version := role.Version
+										if version != "" && version != "main" && version != "master" && !strings.HasPrefix(version, ">=") && !strings.HasPrefix(version, "<=") && !strings.HasPrefix(version, "==") && !strings.HasPrefix(version, ">") && !strings.HasPrefix(version, "<") {
+											version = ">=" + version
+										}
+										config.DependencyConfig.Roles = append(config.DependencyConfig.Roles, RoleRequirement{
+											Name:    roleNameWithScenario,
+											Src:     role.Src,
+											Scm:     role.Scm,
+											Version: version,
+										})
+										fmt.Printf("    ✓ Added role: %s %s\n", roleNameWithScenario, version)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Also check meta/main.yml for collections
+			metaPath := "meta/main.yml"
+			if _, err := os.Stat(metaPath); err == nil {
+				fmt.Println("  Found meta/main.yml")
+				meta, err := ParseMetaFile()
+				if err == nil {
+					for _, col := range meta.Collections {
+						// Parse collection string
+						name, version := parseCollectionString(col)
+
+						// Check if collection already exists
+						exists := false
+						for _, existing := range config.DependencyConfig.Collections {
+							if existing.Name == name {
+								exists = true
+								break
+							}
+						}
+						if !exists {
+							// Add version constraint
+							if version == "" {
+								version = ">=1.0.0" // Default constraint
+							}
+							config.DependencyConfig.Collections = append(config.DependencyConfig.Collections, CollectionRequirement{
+								Name:    name,
+								Version: version,
+							})
+							fmt.Printf("    ✓ Added collection from meta: %s %s\n", name, version)
+						}
+					}
+				}
 			}
 
 			// Save config
@@ -1099,6 +1336,96 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 			}
 
 			fmt.Println("\033[32mDependency configuration initialized in diffusion.toml\033[0m")
+			if len(config.DependencyConfig.Collections) > 0 {
+				fmt.Printf("\033[32m  Collections found: %d\033[0m\n", len(config.DependencyConfig.Collections))
+			}
+			if len(config.DependencyConfig.Roles) > 0 {
+				fmt.Printf("\033[32m  Roles found: %d\033[0m\n", len(config.DependencyConfig.Roles))
+			}
+			return nil
+		},
+	}
+
+	// deps sync - restore dependencies from lock file to requirements.yml and meta.yml
+	depsSyncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Sync dependencies from lock file to requirements.yml and meta.yml",
+		Long:  `Restore dependency versions from diffusion.lock to requirements.yml and meta.yml. Useful for rollback scenarios.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load lock file
+			lockFile, err := LoadLockFile()
+			if err != nil {
+				return fmt.Errorf("failed to load lock file: %w", err)
+			}
+			if lockFile == nil {
+				return fmt.Errorf("lock file not found. Run 'diffusion deps lock' first")
+			}
+
+			// Load current role config
+			meta, req, err := LoadRoleConfig(RoleScenario)
+			if err != nil {
+				return fmt.Errorf("failed to load role config: %w", err)
+			}
+
+			// Sync collections to requirements.yml (structured format with resolved versions)
+			fmt.Println("Syncing collections to requirements.yml...")
+			req.Collections = []RequirementCollection{}
+			for _, col := range lockFile.Collections {
+				version := col.ResolvedVersion
+				if version == "" {
+					version = col.Version
+				}
+				req.Collections = append(req.Collections, RequirementCollection{
+					Name:    col.Name,
+					Version: version,
+				})
+				fmt.Printf("  ✓ %s: %s\n", col.Name, version)
+			}
+
+			// Sync collections to meta.yml (simple string format - names only, no versions)
+			fmt.Println("Syncing collections to meta.yml...")
+			meta.Collections = []string{}
+			for _, col := range lockFile.Collections {
+				// meta.yml should only have collection names, no version constraints
+				meta.Collections = append(meta.Collections, col.Name)
+				fmt.Printf("  ✓ %s\n", col.Name)
+			}
+
+			// Sync roles to requirements.yml
+			fmt.Println("Syncing roles to requirements.yml...")
+			req.Roles = []RequirementRole{}
+			for _, role := range lockFile.Roles {
+				version := role.ResolvedVersion
+				if version == "" {
+					version = role.Version
+				}
+				// If still no version, default to "main"
+				if version == "" || version == "latest" {
+					version = "main"
+				}
+
+				req.Roles = append(req.Roles, RequirementRole{
+					Name:    role.Name,
+					Version: version,
+					Src:     role.Src,    // Restore git URL
+					Scm:     role.Source, // Restore SCM type
+				})
+				fmt.Printf("  ✓ %s: %s\n", role.Name, version)
+			}
+
+			// Save requirements.yml
+			if err := SaveRequirementFile(req, RoleScenario); err != nil {
+				return fmt.Errorf("failed to save requirements.yml: %w", err)
+			}
+			fmt.Printf("\033[32m✓ requirements.yml updated\033[0m\n")
+
+			// Save meta.yml
+			if err := SaveMetaFile(meta); err != nil {
+				return fmt.Errorf("failed to save meta.yml: %w", err)
+			}
+			fmt.Printf("\033[32m✓ meta.yml updated\033[0m\n")
+
+			fmt.Printf("\033[32mDependencies synced successfully from lock file\033[0m\n")
 			return nil
 		},
 	}
@@ -1107,6 +1434,7 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 	depsCmd.AddCommand(depsCheckCmd)
 	depsCmd.AddCommand(depsResolveCmd)
 	depsCmd.AddCommand(depsInitCmd)
+	depsCmd.AddCommand(depsSyncCmd)
 	rootCmd.AddCommand(depsCmd)
 
 	// version command
@@ -1346,12 +1674,12 @@ func MetaConfigSetup(roleName string) *Meta {
 	fmt.Print("Collections required (comma-separated) (optional): ")
 	collectionsInput, _ := reader.ReadString('\n')
 	collectionsInput = strings.TrimSpace(collectionsInput)
-	collectionsList := []RequirementCollection{}
+	collectionsList := []string{}
 	if collectionsInput != "" {
 		for c := range strings.SplitSeq(collectionsInput, ",") {
 			c = strings.TrimSpace(c)
 			if c != "" {
-				collectionsList = append(collectionsList, RequirementCollection{Name: c})
+				collectionsList = append(collectionsList, c)
 			}
 		}
 	}
@@ -1374,12 +1702,18 @@ func MetaConfigSetup(roleName string) *Meta {
 	return roleSettings
 
 }
-func RequirementConfigSetup(collections []RequirementCollection) *Requirement {
+func RequirementConfigSetup(collections []string) *Requirement {
 	if collections == nil {
-		collections = []RequirementCollection{}
+		collections = []string{}
 	}
 	reader := bufio.NewReader(os.Stdin)
-	collectionsList := collections
+
+	// Convert string collections to structured format
+	collectionsList := []RequirementCollection{}
+	for _, col := range collections {
+		name, version := parseCollectionString(col)
+		collectionsList = append(collectionsList, RequirementCollection{Name: name, Version: version})
+	}
 
 	rolesList := []RequirementRole{}
 	fmt.Print("Enter roles to add? (y/n): ")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -17,7 +18,8 @@ type LockFileEntry struct {
 	Type            string            `yaml:"type"`                       // "collection", "role", "tool"
 	Hash            string            `yaml:"hash,omitempty"`
 	PythonDeps      map[string]string `yaml:"python_deps,omitempty"` // Python dependencies with versions
-	Source          string            `yaml:"source,omitempty"`      // "galaxy", "pypi", "git"
+	Src             string            `yaml:"src,omitempty"`         // Source URL for roles (git repo)
+	Source          string            `yaml:"scm,omitempty"`         // SCM type for roles (git, hg, etc.)
 }
 
 // LockFile represents the diffusion.lock file structure
@@ -75,7 +77,7 @@ func SaveLockFile(lockFile *LockFile) error {
 }
 
 // GenerateLockFile generates a new lock file from current dependencies with resolved versions
-func GenerateLockFile(collections []CollectionRequirement, roles []RequirementRole, toolVersions map[string]string, pythonVersion *PythonVersion) (*LockFile, error) {
+func GenerateLockFile(collections []CollectionRequirement, roles []RoleRequirement, toolVersions map[string]string, pythonVersion *PythonVersion) (*LockFile, error) {
 	lockFile := &LockFile{
 		Version:     LockFileVersion,
 		Python:      pythonVersion,
@@ -88,20 +90,40 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RequirementRo
 
 	// Add collections with resolved versions
 	for _, col := range collections {
+		if col.Source == "" {
+			col.Source = "galaxy"
+		}
 		entry := LockFileEntry{
 			Name:    col.Name,
 			Version: col.Version,
 			Type:    "collection",
-			Source:  "galaxy",
+			Source:  col.Source,
+			Src:     col.SourceURL,
 		}
 
-		// Resolve version from Galaxy
-		resolvedVersion, err := galaxyAPI.ResolveCollectionVersion(col.Name, col.Version)
-		if err != nil {
-			fmt.Printf("Warning: Failed to resolve version for %s: %v\n", col.Name, err)
-			entry.ResolvedVersion = col.Version
+		if col.Source != "galaxy" {
+			// For non-Galaxy sources we are trying to resolve from git
+
+			if col.SourceURL == "" {
+				log.Printf("Skipping collection %s: missing source URL for non-Galaxy source %s", col.Name, col.Source)
+			}
+
+			resolvedVersion, err := ResolveVersionFromGit(col.SourceURL, col.Version)
+			if err != nil {
+				log.Printf("Failed to resolve version for collection %s from git: %v", col.Name, err)
+				entry.ResolvedVersion = col.Version
+			} else {
+				entry.ResolvedVersion = resolvedVersion
+			}
 		} else {
-			entry.ResolvedVersion = resolvedVersion
+			// Resolve version from Galaxy
+			resolvedVersion, err := galaxyAPI.ResolveVersion(col.Name, "collection", col.Version)
+			if err != nil {
+				fmt.Printf("Warning: Failed to resolve version for %s: %v\n", col.Name, err)
+				entry.ResolvedVersion = col.Version
+			} else {
+				entry.ResolvedVersion = resolvedVersion
+			}
 		}
 
 		// Get Python dependencies for this collection
@@ -121,25 +143,52 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RequirementRo
 
 	// Add roles with resolved versions
 	for _, role := range roles {
+		if role.Scm == "" {
+			role.Scm = "git"
+		}
 		entry := LockFileEntry{
 			Name:    role.Name,
-			Version: role.Version,
+			Version: role.Version, // This is the constraint from diffusion.toml
 			Type:    "role",
-			Source:  "galaxy",
+			Src:     role.Src, // Store git URL
+			Source:  role.Scm, // Store SCM type (git, hg, etc.) - yaml tag is "scm"
 		}
 
-		// Parse role name (namespace.name or just name)
-		parts := strings.Split(role.Name, ".")
-		if len(parts) == 2 {
-			resolvedVersion, err := galaxyAPI.ResolveRoleVersion(parts[0], parts[1], role.Version)
+		// Determine resolution strategy based on source
+		resolved := false
+
+		// Priority 1: If git URL is provided, resolve from git
+		if role.Src != "" && (strings.Contains(role.Src, "github.com") || strings.Contains(role.Src, "gitlab.com") || strings.HasSuffix(role.Src, ".git")) {
+			resolvedVersion, err := ResolveVersionFromGit(role.Src, role.Version)
 			if err != nil {
-				fmt.Printf("Warning: Failed to resolve version for role %s: %v\n", role.Name, err)
-				entry.ResolvedVersion = role.Version
+				fmt.Printf("Warning: Failed to resolve version for role %s from git: %v\n", role.Name, err)
 			} else {
 				entry.ResolvedVersion = resolvedVersion
+				resolved = true
 			}
-		} else {
-			entry.ResolvedVersion = role.Version
+		}
+
+		// Priority 2: If not resolved and has namespace, try Galaxy API
+		if !resolved {
+			parts := strings.Split(role.Name, ".")
+			if len(parts) == 2 {
+				resolvedVersion, err := galaxyAPI.ResolveRoleVersion(parts[0], parts[1], role.Version)
+				if err != nil {
+					fmt.Printf("Warning: Failed to resolve version for role %s from Galaxy: %v\n", role.Name, err)
+				} else {
+					entry.ResolvedVersion = resolvedVersion
+					resolved = true
+				}
+			}
+		}
+
+		// Fallback: Use constraint or default
+		if !resolved {
+			if role.Version == "" || role.Version == "latest" {
+				entry.ResolvedVersion = "main"
+			} else {
+				entry.ResolvedVersion = role.Version
+			}
 		}
 
 		lockFile.Roles = append(lockFile.Roles, entry)
@@ -184,7 +233,7 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RequirementRo
 }
 
 // ValidateLockFile validates if the lock file is up-to-date
-func ValidateLockFile(lockFile *LockFile, collections []CollectionRequirement, roles []RequirementRole, toolVersions map[string]string, pythonVersion *PythonVersion) (bool, error) {
+func ValidateLockFile(lockFile *LockFile, collections []CollectionRequirement, roles []RoleRequirement, toolVersions map[string]string, pythonVersion *PythonVersion) (bool, error) {
 	if lockFile == nil {
 		return false, nil
 	}
@@ -214,11 +263,16 @@ func UpdateLockFile() error {
 		return fmt.Errorf("failed to resolve collections: %w", err)
 	}
 
+	roles, err := resolver.ResolveRoleDependencies()
+	if err != nil {
+		return fmt.Errorf("failed to resolve roles: %w", err)
+	}
+
 	pythonVersion := resolver.ResolvePythonVersion()
 	toolVersions := resolver.ResolveToolVersions()
 
 	// Generate and save lock file
-	lockFile, err := GenerateLockFile(collections, req.Roles, toolVersions, pythonVersion)
+	lockFile, err := GenerateLockFile(collections, roles, toolVersions, pythonVersion)
 	if err != nil {
 		return fmt.Errorf("failed to generate lock file: %w", err)
 	}
@@ -260,9 +314,14 @@ func CheckLockFileStatus() (bool, error) {
 		return false, fmt.Errorf("failed to resolve collections: %w", err)
 	}
 
+	roles, err := resolver.ResolveRoleDependencies()
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve roles: %w", err)
+	}
+
 	pythonVersion := resolver.ResolvePythonVersion()
 	toolVersions := resolver.ResolveToolVersions()
 
 	// Validate lock file
-	return ValidateLockFile(lockFile, collections, req.Roles, toolVersions, pythonVersion)
+	return ValidateLockFile(lockFile, collections, roles, toolVersions, pythonVersion)
 }
