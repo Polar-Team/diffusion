@@ -2015,7 +2015,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 
 		// Create tests directory for verify/lint
-		moleculeDefaultTestsPath := fmt.Sprintf("%s.%s/molecule/%s/tests", OrgFlag, RoleFlag, scenario)
+		moleculeDefaultTestsPath := fmt.Sprintf("molecule/%s.%s/molecule/%s/tests", OrgFlag, RoleFlag, scenario)
 		if err := os.MkdirAll(moleculeDefaultTestsPath, 0o755); err != nil {
 			log.Printf("\033[33mwarning: cannot create scenario tests dir: %v\033[0m", err)
 		}
