@@ -2073,10 +2073,10 @@ func GcpCliInit(registryServer string) error {
 
 	// Try to get the project ID if available (optional, may fail if not set)
 	projectID, _ := runCommandCapture(ctx, "gcloud", "config", "get-value", "project")
-	if projectID != "" && projectID != "(unset)" {
-		if err := os.Setenv("GCP_PROJECT_ID", projectID); err != nil {
+	if projectID != "" && projectID != GcloudUnsetValue {
+		if err := os.Setenv(EnvGCPProjectID, projectID); err != nil {
 			// Non-fatal error, just log it
-			log.Printf("warning: failed to set GCP_PROJECT_ID environment variable: %v", err)
+			log.Printf("warning: failed to set %s environment variable: %v", EnvGCPProjectID, err)
 		}
 	}
 

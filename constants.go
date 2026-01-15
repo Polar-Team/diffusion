@@ -98,8 +98,15 @@ const (
 	EnvGitURLPrefix    = "GIT_URL_"      // Indexed: GIT_URL_1, GIT_URL_2, etc.
 	EnvYCCloudID       = "YC_CLOUD_ID"
 	EnvYCFolderID      = "YC_FOLDER_ID"
+	EnvGCPProjectID    = "GCP_PROJECT_ID"
 	EnvAnsibleRunTags  = "ANSIBLE_RUN_TAGS"
 	MaxArtifactSources = 10 // Maximum number of artifact sources supported
+)
+
+// GCP-specific constants
+const (
+	GcloudUnsetValue       = "(unset)" // Value returned by gcloud when config is not set
+	MinGCPTokenLength      = 20        // Minimum expected length for GCP OAuth2 token
 )
 
 // Error messages
