@@ -44,6 +44,7 @@ Before using Diffusion, ensure you have the following tools installed:
 - **Vault CLI**: (Optional) For HashiCorp Vault integration
 - **YC CLI**: (Optional) For Yandex Cloud registry authentication
 - **AWS CLI**: (Optional) For AWS ECR registry authentication
+- **gcloud CLI**: (Optional) For GCP Artifact Registry/GCR authentication
 
 ### 💡 Recommended Terminal Setup
 
@@ -474,6 +475,60 @@ type = "diffusion"
 enabled = true
 ```
 
+### Example 3: GCP Artifact Registry
+
+```toml
+# Container Registry Settings
+[container_registry]
+registry_server = "us-docker.pkg.dev"
+registry_provider = "GCP"
+molecule_container_name = "my-project/my-repo/diffusion-molecule-container"
+molecule_container_tag = "latest-amd64"
+
+# HashiCorp Vault Integration (optional)
+[vault]
+enabled = false
+
+# Artifact Sources (optional)
+[[artifact_sources]]
+name = "github-private"
+url = "https://github.company.com"
+use_vault = false
+
+# YAML Linting Configuration
+[yaml_lint]
+extends = "default"
+ignore = [".git/*", "molecule/**", "vars/*", "files/*", ".yamllint", ".ansible-lint"]
+
+[yaml_lint.rules]
+braces = { max-spaces-inside = 1, level = "warning" }
+brackets = { max-spaces-inside = 1, level = "warning" }
+comments = { min-spaces-from-content = 1 }
+comments-indentation = false
+octal-values = { forbid-implicit-octal = true }
+
+[yaml_lint.rules.new-lines]
+type = "platform"
+
+# Ansible Linting Configuration
+[ansible_lint]
+exclude_paths = [
+  "molecule/default/tests/*.yml",
+  "molecule/default/tests/*/*/*.yml",
+  "tests/test.yml"
+]
+warn_list = ["meta-no-info", "yaml[line-length]"]
+skip_list = ["meta-incorrect", "role-name[path]"]
+
+# Tests Configuration
+[tests]
+type = "local"
+
+# Cache Configuration
+[cache]
+enabled = false
+```
+
 ### Configuration Options
 
 **Container Registry:**
@@ -613,10 +668,57 @@ Diffusion can integrate with HashiCorp Vault to securely manage credentials:
 - **Lint**: Validate YAML and Ansible best practices
 
 ### Registry Support
-- **Yandex Cloud (YC)**: Automatic authentication with YC CLI
-- **AWS ECR**: Automatic authentication with AWS CLI (`aws ecr get-login-password`)
-- **GCP Artifact Registry**: Google Cloud registry support
-- **Public Registries**: Docker Hub and other public registries
+
+Diffusion provides automatic authentication for multiple container registries:
+
+#### Yandex Cloud (YC)
+- **Authentication**: Automatic with YC CLI
+- **Command**: `yc iam create-token`
+- **Registry Format**: `cr.yandex`
+- **Setup**: Install [YC CLI](https://cloud.yandex.com/docs/cli/quickstart) and configure with `yc init`
+
+#### AWS ECR (Elastic Container Registry)
+- **Authentication**: Automatic with AWS CLI
+- **Command**: `aws ecr get-login-password`
+- **Registry Format**: `<account-id>.dkr.ecr.<region>.amazonaws.com`
+- **Setup**: Install [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) and configure with `aws configure`
+
+#### GCP (Google Cloud Platform)
+- **Authentication**: Automatic with gcloud CLI
+- **Command**: `gcloud auth print-access-token`
+- **Registry Formats**: 
+  - Container Registry: `gcr.io`, `us.gcr.io`, `eu.gcr.io`, `asia.gcr.io`
+  - Artifact Registry: `<region>-docker.pkg.dev` (e.g., `us-docker.pkg.dev`, `europe-west1-docker.pkg.dev`)
+- **Setup**: 
+  1. Install [gcloud CLI](https://cloud.google.com/sdk/docs/install)
+  2. Authenticate: `gcloud auth login`
+  3. Set project: `gcloud config set project PROJECT_ID`
+  4. (Optional) Configure Docker: `gcloud auth configure-docker` or `gcloud auth configure-docker <region>-docker.pkg.dev`
+
+**Configuration Example for GCP Artifact Registry:**
+```toml
+[container_registry]
+registry_server = "us-docker.pkg.dev"
+registry_provider = "GCP"
+molecule_container_name = "my-project/my-repo/diffusion-molecule-container"
+molecule_container_tag = "latest-amd64"
+```
+
+**Configuration Example for GCP Container Registry:**
+```toml
+[container_registry]
+registry_server = "gcr.io"
+registry_provider = "GCP"
+molecule_container_name = "my-project/diffusion-molecule-container"
+molecule_container_tag = "latest-amd64"
+```
+
+#### Public Registries
+- **Authentication**: None required
+- **Registries**: Docker Hub (`docker.io`), GitHub Container Registry (`ghcr.io`), etc.
+- **Setup**: No CLI installation needed
+
+**Note**: When using GCP, AWS, or YC registries, ensure the respective CLI tool is installed, authenticated, and configured before running Diffusion. The authentication tokens are automatically retrieved and used for Docker login.
 
 ## 🤝 Contributing
 

@@ -2018,6 +2018,72 @@ func AwsCliInit(registryServer string) error {
 	return nil
 }
 
+// isValidGcpRegistry validates if the registry server is a valid GCP registry format
+// Supports:
+// - Container Registry: gcr.io, us.gcr.io, eu.gcr.io, asia.gcr.io
+// - Artifact Registry: <region>-docker.pkg.dev
+func isValidGcpRegistry(registryServer string) bool {
+	// Container Registry formats
+	// Examples: gcr.io, us.gcr.io, gcr.io/project, asia.gcr.io/project/image
+	if registryServer == "gcr.io" || strings.HasPrefix(registryServer, "gcr.io/") {
+		return true
+	}
+	if strings.HasSuffix(registryServer, ".gcr.io") || strings.Contains(registryServer, ".gcr.io/") {
+		return true
+	}
+	
+	// Artifact Registry formats
+	// Examples: us-docker.pkg.dev, europe-west1-docker.pkg.dev, us-docker.pkg.dev/project/repo
+	if strings.HasSuffix(registryServer, "-docker.pkg.dev") || strings.Contains(registryServer, "-docker.pkg.dev/") {
+		return true
+	}
+	
+	return false
+}
+
+// GcpCliInit runs gcloud CLI commands and retrieves access token
+// Sets TOKEN environment variable for Docker authentication
+// Supports both gcr.io and Artifact Registry (pkg.dev) formats
+func GcpCliInit(registryServer string) error {
+	// Check if gcloud CLI is installed
+	if _, err := exec.LookPath("gcloud"); err != nil {
+		return fmt.Errorf("gcloud CLI is not installed or not in PATH. Please install gcloud CLI to use GCP authentication. Visit: https://cloud.google.com/sdk/docs/install")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Validate GCP registry format
+	if !isValidGcpRegistry(registryServer) {
+		return fmt.Errorf("invalid GCP registry server format: %s (expected format: gcr.io or <region>-docker.pkg.dev)", registryServer)
+	}
+
+	// Get GCP access token using gcloud CLI
+	// This returns an OAuth2 access token that can be used for Docker authentication
+	token, err := runCommandCapture(ctx, "gcloud", "auth", "print-access-token")
+	if err != nil {
+		// Don't include gcloud error details in case they contain sensitive info
+		return fmt.Errorf("gcloud auth print-access-token failed. Ensure gcloud CLI is configured and authenticated (run 'gcloud auth login')")
+	}
+
+	// Set TOKEN environment variable for Docker authentication
+	if err := os.Setenv("TOKEN", token); err != nil {
+		return fmt.Errorf("failed to set TOKEN environment variable: %w", err)
+	}
+
+	// Try to get the project ID if available (optional, may fail if not set)
+	// gcloud may return empty string or "(unset)" when project is not configured
+	projectID, _ := runCommandCapture(ctx, "gcloud", "config", "get-value", "project")
+	if projectID != "" && projectID != GcloudUnsetValue {
+		if err := os.Setenv(EnvGCPProjectID, projectID); err != nil {
+			// Non-fatal error, just log it
+			log.Printf("warning: failed to set %s environment variable: %v", EnvGCPProjectID, err)
+		}
+	}
+
+	return nil
+}
+
 // runMolecule is the core function that implements the behavior from your PS script
 func runMolecule(cmd *cobra.Command, args []string) error {
 
@@ -2318,14 +2384,13 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				log.Printf("\033[33mdocker login to AWS ECR registry failed: %v\033[0m", err)
 			}
 		case "GCP":
-			// GCP: Initialize gcloud CLI and login to Artifact Registry (placeholder)
-			// if err := runCommand("gcloud", "init", "..."); err != nil {
-			//     log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
-			// }
-			// if err := runCommand("gcloud", "auth", "configure-docker", "..."); err != nil {
-			//     log.Printf("\033[33mgcloud docker auth failed: %v\033[0m", err)
-			// }
-			log.Printf("\033[33mGCP Artifact Registry authentication not yet implemented\033[0m")
+			// GCP: Initialize gcloud CLI and login to Artifact Registry or GCR
+			if err := GcpCliInit(config.ContainerRegistry.RegistryServer); err != nil {
+				log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
+			}
+			if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "oauth2accesstoken", "--password", os.Getenv("TOKEN")); err != nil {
+				log.Printf("\033[33mdocker login to GCP registry failed: %v\033[0m", err)
+			}
 		case "Public":
 			// Public registry: No CLI init or authentication needed
 			log.Printf("\033[35mUsing public registry, skipping CLI initialization and authentication\033[0m")
@@ -2559,8 +2624,9 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		loginCmd := fmt.Sprintf(`echo $TOKEN | docker login %s --username AWS --password-stdin`, config.ContainerRegistry.RegistryServer)
 		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", loginCmd)
 	case "GCP":
-		// GCP Artifact Registry login would go here if needed
-		// _ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `gcloud auth print-access-token | docker login ...`)
+		// GCP Artifact Registry/GCR login inside container
+		loginCmd := fmt.Sprintf(`echo $TOKEN | docker login %s --username oauth2accesstoken --password-stdin`, config.ContainerRegistry.RegistryServer)
+		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", loginCmd)
 	case "Public":
 		// No login needed for public registries
 		log.Printf("\033[35mUsing public registry, skipping authentication\033[0m")
