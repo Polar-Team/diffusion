@@ -43,6 +43,7 @@ Before using Diffusion, ensure you have the following tools installed:
 - **Go 1.25.4+**: For building from source (if needed)
 - **Vault CLI**: (Optional) For HashiCorp Vault integration
 - **YC CLI**: (Optional) For Yandex Cloud registry authentication
+- **AWS CLI**: (Optional) For AWS ECR registry authentication
 
 ### 💡 Recommended Terminal Setup
 
@@ -613,7 +614,7 @@ Diffusion can integrate with HashiCorp Vault to securely manage credentials:
 
 ### Registry Support
 - **Yandex Cloud (YC)**: Automatic authentication with YC CLI
-- **AWS ECR**: Support for AWS container registries
+- **AWS ECR**: Automatic authentication with AWS CLI (`aws ecr get-login-password`)
 - **GCP Artifact Registry**: Google Cloud registry support
 - **Public Registries**: Docker Hub and other public registries
 

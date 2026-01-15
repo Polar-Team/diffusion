@@ -1971,6 +1971,53 @@ func YcCliInit() error {
 	return nil
 }
 
+// AwsCliInit runs AWS CLI commands and retrieves ECR authorization token
+// Sets TOKEN environment variable for Docker authentication
+func AwsCliInit(registryServer string) error {
+	// Check if AWS CLI is installed
+	if _, err := exec.LookPath("aws"); err != nil {
+		return fmt.Errorf("AWS CLI is not installed or not in PATH. Please install AWS CLI to use AWS ECR authentication. Visit: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Extract region from registry server (e.g., "123456789.dkr.ecr.us-east-1.amazonaws.com")
+	// Format: <account-id>.dkr.ecr.<region>.amazonaws.com
+	parts := strings.Split(registryServer, ".")
+	if len(parts) != 6 {
+		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
+	}
+	
+	// Validate ECR format: parts should be [account-id, dkr, ecr, region, amazonaws, com]
+	if parts[1] != "dkr" || parts[2] != "ecr" || parts[4] != "amazonaws" || parts[5] != "com" {
+		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
+	}
+	
+	region := parts[3]
+
+	// Get ECR authorization token using AWS CLI
+	// This returns a base64-encoded authorization token
+	// Note: runCommandCapture automatically trims whitespace from the output
+	token, err := runCommandCapture(ctx, "aws", "ecr", "get-login-password", "--region", region)
+	if err != nil {
+		// Don't include AWS CLI error details in case they contain sensitive info
+		return fmt.Errorf("aws ecr get-login-password failed for region %s. Ensure AWS CLI is configured with valid credentials", region)
+	}
+
+	// Set TOKEN environment variable for Docker authentication
+	if err := os.Setenv("TOKEN", token); err != nil {
+		return fmt.Errorf("failed to set TOKEN environment variable: %w", err)
+	}
+
+	// Set AWS region for reference (may be used by scripts or other tools)
+	if err := os.Setenv("AWS_REGION", region); err != nil {
+		return fmt.Errorf("failed to set AWS_REGION environment variable: %w", err)
+	}
+
+	return nil
+}
+
 // runMolecule is the core function that implements the behavior from your PS script
 func runMolecule(cmd *cobra.Command, args []string) error {
 
@@ -2263,14 +2310,13 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
 			}
 		case "AWS":
-			// AWS: Initialize AWS CLI and login to ECR (placeholder)
-			// if err := runCommand("aws", "configure", "..."); err != nil {
-			//     log.Printf("\033[33maws configure warning: %v\033[0m", err)
-			// }
-			// if err := runCommand("aws", "ecr", "get-login-password", "..."); err != nil {
-			//     log.Printf("\033[33maws ecr login failed: %v\033[0m", err)
-			// }
-			log.Printf("\033[33mAWS ECR authentication not yet implemented\033[0m")
+			// AWS: Initialize AWS CLI and login to ECR
+			if err := AwsCliInit(config.ContainerRegistry.RegistryServer); err != nil {
+				log.Printf("\033[33maws ecr init warning: %v\033[0m", err)
+			}
+			if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
+				log.Printf("\033[33mdocker login to AWS ECR registry failed: %v\033[0m", err)
+			}
 		case "GCP":
 			// GCP: Initialize gcloud CLI and login to Artifact Registry (placeholder)
 			// if err := runCommand("gcloud", "init", "..."); err != nil {
@@ -2509,8 +2555,9 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// Yandex Cloud registry login
 		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `echo $TOKEN | docker login cr.yandex --username iam --password-stdin`)
 	case "AWS":
-		// AWS ECR login would go here if needed
-		// _ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `aws ecr get-login-password | docker login ...`)
+		// AWS ECR login inside container
+		loginCmd := fmt.Sprintf(`echo $TOKEN | docker login %s --username AWS --password-stdin`, config.ContainerRegistry.RegistryServer)
+		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", loginCmd)
 	case "GCP":
 		// GCP Artifact Registry login would go here if needed
 		// _ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `gcloud auth print-access-token | docker login ...`)
