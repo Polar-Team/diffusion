@@ -1974,6 +1974,11 @@ func YcCliInit() error {
 // AwsCliInit runs AWS CLI commands and retrieves ECR authorization token
 // Sets TOKEN environment variable for Docker authentication
 func AwsCliInit(registryServer string) error {
+	// Check if AWS CLI is installed
+	if _, err := exec.LookPath("aws"); err != nil {
+		return fmt.Errorf("AWS CLI is not installed or not in PATH. Please install AWS CLI to use AWS ECR authentication. Visit: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -1997,7 +2002,7 @@ func AwsCliInit(registryServer string) error {
 	token, err := runCommandCapture(ctx, "aws", "ecr", "get-login-password", "--region", region)
 	if err != nil {
 		// Don't include AWS CLI error details in case they contain sensitive info
-		return fmt.Errorf("aws ecr get-login-password failed for region %s", region)
+		return fmt.Errorf("aws ecr get-login-password failed for region %s. Ensure AWS CLI is configured with valid credentials", region)
 	}
 
 	// Set TOKEN environment variable for Docker authentication

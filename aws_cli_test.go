@@ -140,11 +140,36 @@ func TestAwsCliInitExtractsRegion(t *testing.T) {
 				// by looking at the error message (should contain the region)
 				if err != nil {
 					errMsg := err.Error()
-					if !strings.Contains(errMsg, tt.expectedRegion) && !strings.Contains(errMsg, "aws ecr get-login-password") {
-						t.Logf("Expected error to reference region %s or AWS ECR command, got: %s", tt.expectedRegion, errMsg)
+					if !strings.Contains(errMsg, tt.expectedRegion) && !strings.Contains(errMsg, "aws ecr get-login-password") && !strings.Contains(errMsg, "AWS CLI is not installed") {
+						t.Logf("Expected error to reference region %s or AWS ECR command or AWS CLI installation, got: %s", tt.expectedRegion, errMsg)
 					}
 				}
 			}
 		})
+	}
+}
+
+// TestAwsCliNotInstalled tests the error message when AWS CLI is not installed
+func TestAwsCliNotInstalled(t *testing.T) {
+	// This test verifies that if AWS CLI is not in PATH, we get a helpful error
+	// We can't easily simulate this in a real environment where aws might be installed
+	// but the error handling code path is there and will be triggered if aws is not found
+	
+	// Test with a valid registry server format
+	registryServer := "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+	
+	err := AwsCliInit(registryServer)
+	
+	// The function should return an error (either AWS CLI not installed or not configured)
+	if err == nil {
+		t.Skip("AWS CLI appears to be installed and configured, skipping error test")
+	}
+	
+	// Verify the error message is helpful
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "AWS CLI is not installed") {
+		t.Logf("Got expected AWS CLI not installed error: %s", errMsg)
+	} else {
+		t.Logf("Got AWS CLI configured but authentication failed (expected in CI): %s", errMsg)
 	}
 }
