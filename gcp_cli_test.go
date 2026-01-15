@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -210,7 +211,7 @@ func TestGcpCliNotInstalled(t *testing.T) {
 // This test will only pass if gcloud is installed and authenticated
 func TestGcpCliInitSuccessfulAuth(t *testing.T) {
 	// Skip if gcloud is not available
-	if _, err := os.Stat("/usr/bin/gcloud"); os.IsNotExist(err) {
+	if _, err := exec.LookPath("gcloud"); err != nil {
 		t.Skip("gcloud CLI not installed, skipping successful auth test")
 	}
 

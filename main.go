@@ -2018,6 +2018,29 @@ func AwsCliInit(registryServer string) error {
 	return nil
 }
 
+// isValidGcpRegistry validates if the registry server is a valid GCP registry format
+// Supports:
+// - Container Registry: gcr.io, us.gcr.io, eu.gcr.io, asia.gcr.io
+// - Artifact Registry: <region>-docker.pkg.dev
+func isValidGcpRegistry(registryServer string) bool {
+	// Container Registry formats
+	// Examples: gcr.io, us.gcr.io, gcr.io/project, asia.gcr.io/project/image
+	if registryServer == "gcr.io" || strings.HasPrefix(registryServer, "gcr.io/") {
+		return true
+	}
+	if strings.HasSuffix(registryServer, ".gcr.io") || strings.Contains(registryServer, ".gcr.io/") {
+		return true
+	}
+	
+	// Artifact Registry formats
+	// Examples: us-docker.pkg.dev, europe-west1-docker.pkg.dev, us-docker.pkg.dev/project/repo
+	if strings.HasSuffix(registryServer, "-docker.pkg.dev") || strings.Contains(registryServer, "-docker.pkg.dev/") {
+		return true
+	}
+	
+	return false
+}
+
 // GcpCliInit runs gcloud CLI commands and retrieves access token
 // Sets TOKEN environment variable for Docker authentication
 // Supports both gcr.io and Artifact Registry (pkg.dev) formats
@@ -2031,20 +2054,7 @@ func GcpCliInit(registryServer string) error {
 	defer cancel()
 
 	// Validate GCP registry format
-	// Supported formats:
-	// - gcr.io (legacy Container Registry)
-	// - <region>-docker.pkg.dev (Artifact Registry)
-	// Examples: gcr.io, us-docker.pkg.dev, europe-west1-docker.pkg.dev
-	
-	isGcrIo := registryServer == "gcr.io" || 
-		strings.HasPrefix(registryServer, "gcr.io/") ||
-		strings.HasSuffix(registryServer, ".gcr.io") ||
-		strings.Contains(registryServer, ".gcr.io/")
-	
-	isPkgDev := strings.HasSuffix(registryServer, "-docker.pkg.dev") ||
-		strings.Contains(registryServer, "-docker.pkg.dev/")
-	
-	if !isGcrIo && !isPkgDev {
+	if !isValidGcpRegistry(registryServer) {
 		return fmt.Errorf("invalid GCP registry server format: %s (expected format: gcr.io or <region>-docker.pkg.dev)", registryServer)
 	}
 
