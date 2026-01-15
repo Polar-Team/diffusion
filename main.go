@@ -2290,7 +2290,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// docker run --rm -d --name=molecule-$role -v "$path/molecule:/opt/molecule" -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e ... --privileged --pull always cr.yandex/...
 		image := fmt.Sprintf("%s/%s:%s", config.ContainerRegistry.RegistryServer, config.ContainerRegistry.MoleculeContainerName, config.ContainerRegistry.MoleculeContainerTag)
 		args := []string{
-			"run", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
+			"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
 		}
 
 		// Note: Not using user mapping here because DinD (Docker-in-Docker) requires root
@@ -2302,6 +2302,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		}
 
 		args = append(args,
+			"-e", "UV_VENV_CLEAR=1",
 			"-e", "TOKEN="+os.Getenv("TOKEN"),
 			"-e", "VAULT_TOKEN="+os.Getenv("VAULT_TOKEN"),
 			"-e", "VAULT_ADDR="+os.Getenv("VAULT_ADDR"),
