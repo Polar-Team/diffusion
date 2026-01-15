@@ -2072,6 +2072,7 @@ func GcpCliInit(registryServer string) error {
 	}
 
 	// Try to get the project ID if available (optional, may fail if not set)
+	// gcloud may return empty string or "(unset)" when project is not configured
 	projectID, _ := runCommandCapture(ctx, "gcloud", "config", "get-value", "project")
 	if projectID != "" && projectID != GcloudUnsetValue {
 		if err := os.Setenv(EnvGCPProjectID, projectID); err != nil {

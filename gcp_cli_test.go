@@ -98,8 +98,8 @@ func TestGcpCliInit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear environment before test
-			os.Unsetenv("TOKEN")
-			os.Unsetenv("GCP_PROJECT_ID")
+			os.Unsetenv(EnvToken)
+			os.Unsetenv(EnvGCPProjectID)
 
 			err := GcpCliInit(tt.registryServer)
 
@@ -156,8 +156,8 @@ func TestGcpCliInitValidatesRegistryFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear environment before test
-			os.Unsetenv("TOKEN")
-			os.Unsetenv("GCP_PROJECT_ID")
+			os.Unsetenv(EnvToken)
+			os.Unsetenv(EnvGCPProjectID)
 
 			err := GcpCliInit(tt.registryServer)
 
@@ -218,17 +218,17 @@ func TestGcpCliInitSuccessfulAuth(t *testing.T) {
 	registryServer := "gcr.io"
 
 	// Clear environment before test
-	os.Unsetenv("TOKEN")
-	os.Unsetenv("GCP_PROJECT_ID")
+	os.Unsetenv(EnvToken)
+	os.Unsetenv(EnvGCPProjectID)
 
 	err := GcpCliInit(registryServer)
 
 	// If gcloud is configured, this should succeed
 	if err == nil {
 		// Verify TOKEN was set
-		token := os.Getenv("TOKEN")
+		token := os.Getenv(EnvToken)
 		if token == "" {
-			t.Error("TOKEN environment variable should be set after successful GcpCliInit")
+			t.Errorf("%s environment variable should be set after successful GcpCliInit", EnvToken)
 		}
 		if len(token) < MinGCPTokenLength {
 			t.Errorf("TOKEN seems too short (expected at least %d chars), got length: %d", MinGCPTokenLength, len(token))
