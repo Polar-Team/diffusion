@@ -1993,6 +1993,7 @@ func AwsCliInit(registryServer string) error {
 
 	// Get ECR authorization token using AWS CLI
 	// This returns a base64-encoded authorization token
+	// Note: runCommandCapture automatically trims whitespace from the output
 	token, err := runCommandCapture(ctx, "aws", "ecr", "get-login-password", "--region", region)
 	if err != nil {
 		// Don't log the token value in error messages (security concern)
