@@ -1980,7 +1980,7 @@ func AwsCliInit(registryServer string) error {
 	// Extract region from registry server (e.g., "123456789.dkr.ecr.us-east-1.amazonaws.com")
 	// Format: <account-id>.dkr.ecr.<region>.amazonaws.com
 	parts := strings.Split(registryServer, ".")
-	if len(parts) < 6 {
+	if len(parts) != 6 {
 		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
 	}
 	
