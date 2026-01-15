@@ -38,6 +38,24 @@ func TestAwsCliInit(t *testing.T) {
 			wantErr:        true,
 			errContains:    "invalid AWS ECR registry server format",
 		},
+		{
+			name:           "invalid registry format - wrong dkr position",
+			registryServer: "123456789012.ecr.dkr.us-east-1.amazonaws.com",
+			wantErr:        true,
+			errContains:    "invalid AWS ECR registry server format",
+		},
+		{
+			name:           "invalid registry format - missing dkr",
+			registryServer: "123456789012.ecr.us-east-1.amazonaws.com",
+			wantErr:        true,
+			errContains:    "invalid AWS ECR registry server format",
+		},
+		{
+			name:           "invalid registry format - not amazonaws.com",
+			registryServer: "123456789012.dkr.ecr.us-east-1.example.com",
+			wantErr:        true,
+			errContains:    "invalid AWS ECR registry server format",
+		},
 	}
 
 	for _, tt := range tests {

@@ -1980,9 +1980,15 @@ func AwsCliInit(registryServer string) error {
 	// Extract region from registry server (e.g., "123456789.dkr.ecr.us-east-1.amazonaws.com")
 	// Format: <account-id>.dkr.ecr.<region>.amazonaws.com
 	parts := strings.Split(registryServer, ".")
-	if len(parts) < 4 {
+	if len(parts) < 6 {
 		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
 	}
+	
+	// Validate ECR format: parts should be [account-id, dkr, ecr, region, amazonaws, com]
+	if parts[1] != "dkr" || parts[2] != "ecr" || parts[4] != "amazonaws" || parts[5] != "com" {
+		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
+	}
+	
 	region := parts[3]
 
 	// Get ECR authorization token using AWS CLI
