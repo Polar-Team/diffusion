@@ -168,7 +168,7 @@ func TestSaveMetaFile(t *testing.T) {
 			},
 			GalaxyTags: []string{"test", "example"},
 		},
-		Collections: []RequirementCollection{{Name: "community.general"}},
+		Collections: []string{"community.general"},
 	}
 
 	// Save meta file

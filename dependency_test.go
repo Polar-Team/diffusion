@@ -34,9 +34,9 @@ func TestParseCollectionString(t *testing.T) {
 
 func TestResolveCollectionDependencies(t *testing.T) {
 	meta := &Meta{
-		Collections: []RequirementCollection{
-			{Name: "community.general", Version: ">=7.4.0"},
-			{Name: "community.docker"},
+		Collections: []string{
+			"community.general>=7.4.0",
+			"community.docker",
 		},
 	}
 
@@ -148,7 +148,7 @@ func TestComputeDependencyHash(t *testing.T) {
 		{Name: "community.docker", Version: ">=3.4.0"},
 	}
 
-	roles := []RequirementRole{
+	roles := []RoleRequirement{
 		{Name: "geerlingguy.docker", Version: "6.0.0"},
 	}
 
@@ -185,7 +185,7 @@ func TestGenerateLockFile(t *testing.T) {
 		{Name: "community.general", Version: ">=7.4.0"},
 	}
 
-	roles := []RequirementRole{
+	roles := []RoleRequirement{
 		{Name: "geerlingguy.docker", Version: "6.0.0"},
 	}
 
