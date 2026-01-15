@@ -1995,14 +1995,19 @@ func AwsCliInit(registryServer string) error {
 	// This returns a base64-encoded authorization token
 	token, err := runCommandCapture(ctx, "aws", "ecr", "get-login-password", "--region", region)
 	if err != nil {
-		return fmt.Errorf("aws ecr get-login-password failed: %v (%s)", err, token)
+		// Don't log the token value in error messages (security concern)
+		return fmt.Errorf("aws ecr get-login-password failed for region %s: %v", region, err)
 	}
 
 	// Set TOKEN environment variable for Docker authentication
-	_ = os.Setenv("TOKEN", token)
+	if err := os.Setenv("TOKEN", token); err != nil {
+		return fmt.Errorf("failed to set TOKEN environment variable: %w", err)
+	}
 
 	// Set AWS region for reference
-	_ = os.Setenv("AWS_REGION", region)
+	if err := os.Setenv("AWS_REGION", region); err != nil {
+		return fmt.Errorf("failed to set AWS_REGION environment variable: %w", err)
+	}
 
 	return nil
 }
