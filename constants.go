@@ -105,8 +105,7 @@ const (
 
 // GCP-specific constants
 const (
-	GcloudUnsetValue       = "(unset)" // Value returned by gcloud when config is not set
-	MinGCPTokenLength      = 20        // Minimum expected length for GCP OAuth2 token
+	GcloudUnsetValue = "(unset)" // Value returned by gcloud when config is not set
 )
 
 // Error messages
