@@ -103,15 +103,20 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RoleRequireme
 
 		if col.Source != "galaxy" {
 			// For non-Galaxy sources we are trying to resolve from git
-
 			if col.SourceURL == "" {
 				log.Printf("Skipping collection %s: missing source URL for non-Galaxy source %s", col.Name, col.Source)
+				continue
 			}
 
 			resolvedVersion, err := ResolveVersionFromGit(col.SourceURL, col.Version)
 			if err != nil {
 				log.Printf("Failed to resolve version for collection %s from git: %v", col.Name, err)
-				entry.ResolvedVersion = col.Version
+				// Use the version constraint if resolution fails
+				if col.Version != "" && col.Version != "latest" {
+					entry.ResolvedVersion = col.Version
+				} else {
+					entry.ResolvedVersion = "main"
+				}
 			} else {
 				entry.ResolvedVersion = resolvedVersion
 			}
@@ -120,7 +125,12 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RoleRequireme
 			resolvedVersion, err := galaxyAPI.ResolveVersion(col.Name, "collection", col.Version)
 			if err != nil {
 				fmt.Printf("Warning: Failed to resolve version for %s: %v\n", col.Name, err)
-				entry.ResolvedVersion = col.Version
+				// Use the version constraint if resolution fails
+				if col.Version != "" && col.Version != "latest" {
+					entry.ResolvedVersion = col.Version
+				} else {
+					entry.ResolvedVersion = "latest"
+				}
 			} else {
 				entry.ResolvedVersion = resolvedVersion
 			}
@@ -162,6 +172,11 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RoleRequireme
 			resolvedVersion, err := ResolveVersionFromGit(role.Src, role.Version)
 			if err != nil {
 				fmt.Printf("Warning: Failed to resolve version for role %s from git: %v\n", role.Name, err)
+				// If resolution fails but we have a version constraint, use it
+				if role.Version != "" && role.Version != "latest" {
+					entry.ResolvedVersion = role.Version
+					resolved = true
+				}
 			} else {
 				entry.ResolvedVersion = resolvedVersion
 				resolved = true
@@ -182,11 +197,12 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RoleRequireme
 			}
 		}
 
-		// Fallback: Use constraint or default
+		// Fallback: Use constraint or default to "main"
 		if !resolved {
-			if role.Version == "" || role.Version == "latest" {
+			if role.Version == "" || role.Version == "latest" || role.Version == "main" {
 				entry.ResolvedVersion = "main"
 			} else {
+				// Use the version constraint as resolved version
 				entry.ResolvedVersion = role.Version
 			}
 		}
@@ -250,26 +266,50 @@ func UpdateLockFile() error {
 		return fmt.Errorf("failed to load dependency config: %w", err)
 	}
 
-	// Load meta and requirements
-	meta, req, err := LoadRoleConfig("")
-	if err != nil {
-		return fmt.Errorf("failed to load role config: %w", err)
+	// Convert depConfig to resolver format
+	// Collections: use directly from depConfig
+	collections := depConfig.Collections
+	if collections == nil {
+		collections = []CollectionRequirement{}
 	}
 
-	// Resolve dependencies
-	resolver := NewDependencyResolver(meta, req, depConfig)
-	collections, err := resolver.ResolveCollectionDependencies()
-	if err != nil {
-		return fmt.Errorf("failed to resolve collections: %w", err)
+	// Roles: use directly from depConfig (already normalized in LoadDependencyConfig)
+	roles := depConfig.Roles
+	if roles == nil {
+		roles = []RoleRequirement{}
 	}
 
-	roles, err := resolver.ResolveRoleDependencies()
-	if err != nil {
-		return fmt.Errorf("failed to resolve roles: %w", err)
+	// Python version
+	pythonVersion := depConfig.Python
+	if pythonVersion == nil {
+		pythonVersion = &PythonVersion{
+			Min:    DefaultMinPythonVersion,
+			Max:    DefaultMaxPythonVersion,
+			Pinned: PinnedPythonVersion,
+		}
 	}
 
-	pythonVersion := resolver.ResolvePythonVersion()
-	toolVersions := resolver.ResolveToolVersions()
+	// Tool versions
+	toolVersions := map[string]string{
+		"ansible":      depConfig.Ansible,
+		"molecule":     depConfig.Molecule,
+		"ansible-lint": depConfig.AnsibleLint,
+		"yamllint":     depConfig.YamlLint,
+	}
+
+	// Set defaults for empty tool versions
+	if toolVersions["ansible"] == "" {
+		toolVersions["ansible"] = DefaultAnsibleVersion
+	}
+	if toolVersions["molecule"] == "" {
+		toolVersions["molecule"] = DefaultMoleculeVersion
+	}
+	if toolVersions["ansible-lint"] == "" {
+		toolVersions["ansible-lint"] = DefaultAnsibleLintVersion
+	}
+	if toolVersions["yamllint"] == "" {
+		toolVersions["yamllint"] = DefaultYamlLintVersion
+	}
 
 	// Generate and save lock file
 	lockFile, err := GenerateLockFile(collections, roles, toolVersions, pythonVersion)

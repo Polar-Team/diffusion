@@ -327,6 +327,7 @@ func LoadDependencyConfig() (*DependencyConfig, error) {
 			Molecule:    DefaultMoleculeVersion,
 			YamlLint:    DefaultYamlLintVersion,
 		}, nil
+
 	}
 
 	// Validate and normalize Python versions
@@ -368,6 +369,95 @@ func LoadDependencyConfig() (*DependencyConfig, error) {
 
 		// Clear Additional versions - not supported for container
 		python.Additional = nil
+
+	}
+	// Validate and normalize Roles versions
+	if config.DependencyConfig.Roles != nil {
+		for i, role := range config.DependencyConfig.Roles {
+			// Extract actual role name from scenario prefix (e.g., "default.rolename" -> "rolename")
+			// Roles in diffusion.toml are stored as "scenario.rolename" or "scenario.namespace.rolename"
+			roleName := role.Name
+
+			// Determine if this has a scenario prefix by checking if it has a src
+			// If it has a src (git URL), the first part before the dot is the scenario
+			// If no src, we need to check if it looks like "scenario.namespace.role" or "namespace.role"
+			if role.Src != "" {
+				// Has src, so first part is scenario - strip it
+				if strings.Contains(roleName, ".") {
+					parts := strings.SplitN(roleName, ".", 2)
+					if len(parts) == 2 {
+						roleName = parts[1]
+					}
+				}
+			} else {
+				// No src, check if it's a galaxy role with scenario prefix
+				// Format could be: "default.namespace.role" or "namespace.role"
+				parts := strings.Split(roleName, ".")
+				if len(parts) == 3 {
+					// Likely "scenario.namespace.role" - strip scenario
+					roleName = parts[1] + "." + parts[2]
+				} else if len(parts) == 2 {
+					// Could be "scenario.role" or "namespace.role"
+					// If first part looks like a common scenario name, strip it
+					commonScenarios := []string{
+						"default",
+						"test",
+						"testing",
+						"production",
+						"prod",
+						"staging",
+						"dev",
+						"development"}
+					isScenario := false
+					for _, scenario := range commonScenarios {
+						if parts[0] == scenario {
+							isScenario = true
+							break
+						}
+					}
+					if isScenario {
+						roleName = parts[1]
+					}
+					// Otherwise keep as is (it's namespace.role)
+				}
+				// If only one part, keep as is
+			}
+
+			// Store the cleaned role name
+			config.DependencyConfig.Roles[i].Name = roleName
+
+			if role.Scm == "git" && role.Src != "" {
+				config.DependencyConfig.Roles[i].Src = role.Src
+				config.DependencyConfig.Roles[i].Scm = "git"
+				config.DependencyConfig.Roles[i].Version = role.Version
+			} else {
+				// Galaxy role - need to split namespace and name
+				config.DependencyConfig.Roles[i].Scm = "galaxy"
+				config.DependencyConfig.Roles[i].Version = role.Version
+			}
+
+			if roleName == "" {
+				return nil, fmt.Errorf("role name cannot be empty")
+			}
+		}
+	}
+
+	// Validate and normalize Collections versions
+	if config.DependencyConfig.Collections != nil {
+		for i, collection := range config.DependencyConfig.Collections {
+			if collection.Source == "git" && collection.SourceURL != "" {
+				config.DependencyConfig.Collections[i].SourceURL = collection.SourceURL
+				config.DependencyConfig.Collections[i].Source = "git"
+				config.DependencyConfig.Collections[i].Version = collection.Version
+			} else {
+				config.DependencyConfig.Collections[i].Source = "galaxy"
+				config.DependencyConfig.Collections[i].Version = collection.Version
+			}
+
+			if collection.Name == "" {
+				return nil, fmt.Errorf("collection name cannot be empty")
+			}
+		}
 	}
 
 	return config.DependencyConfig, nil

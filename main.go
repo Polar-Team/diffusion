@@ -242,7 +242,12 @@ func main() {
 			if err := SaveConfig(config); err != nil {
 				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
-			fmt.Printf("\033[32mRole '%s' (version %s) added successfully to diffusion.toml\n\033[0m", roleKey, configVersionConstraint)
+
+			err = UpdateLockFile()
+			if err != nil {
+				return fmt.Errorf("failed to update lock file: %w", err)
+			}
+			fmt.Printf("\033[32mRole '%s' (version %s) added successfully to diffusion.toml and diffusion.lock\n\033[0m", roleKey, configVersionConstraint)
 
 			return nil
 		},
@@ -284,8 +289,11 @@ func main() {
 			if err := SaveConfig(config); err != nil {
 				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
-
-			fmt.Printf("\033[32mRole '%s' removed successfully from diffusion.toml\n\033[0m", roleKey)
+			err = UpdateLockFile()
+			if err != nil {
+				return fmt.Errorf("failed to update lock file: %w", err)
+			}
+			fmt.Printf("\033[32mRole '%s' removed successfully from diffusion.toml and diffusion.lock\n\033[0m", roleKey)
 			fmt.Printf("\033[33mNote: Role remains in requirements.yml (use 'deps sync' to update if needed)\n\033[0m")
 			return nil
 		},
@@ -348,7 +356,11 @@ func main() {
 			if err := SaveConfig(config); err != nil {
 				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
-			fmt.Printf("\033[32mCollection '%s' (version %s) added successfully to diffusion.toml\n\033[0m", name, configVersionConstraint)
+			err = UpdateLockFile()
+			if err != nil {
+				return fmt.Errorf("failed to update lock file: %w", err)
+			}
+			fmt.Printf("\033[32mCollection '%s' (version %s) added successfully to diffusion.toml and diffusion.lock\n\033[0m", name, configVersionConstraint)
 
 			return nil
 		},
@@ -391,8 +403,11 @@ func main() {
 			if err := SaveConfig(config); err != nil {
 				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
-
-			fmt.Printf("\033[32mCollection '%s' removed successfully from diffusion.toml\n\033[0m", name)
+			err = UpdateLockFile()
+			if err != nil {
+				return fmt.Errorf("failed to update lock file: %w", err)
+			}
+			fmt.Printf("\033[32mCollection '%s' removed successfully from diffusion.toml and diffusion.lock\n\033[0m", name)
 			fmt.Printf("\033[33mRun 'diffusion deps sync' to update requirements.yml and meta/main.yml\n\033[0m")
 
 			return nil
@@ -2275,7 +2290,7 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// docker run --rm -d --name=molecule-$role -v "$path/molecule:/opt/molecule" -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e ... --privileged --pull always cr.yandex/...
 		image := fmt.Sprintf("%s/%s:%s", config.ContainerRegistry.RegistryServer, config.ContainerRegistry.MoleculeContainerName, config.ContainerRegistry.MoleculeContainerTag)
 		args := []string{
-			"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
+			"run", "-d", "--name=" + fmt.Sprintf("molecule-%s", RoleFlag),
 		}
 
 		// Note: Not using user mapping here because DinD (Docker-in-Docker) requires root
