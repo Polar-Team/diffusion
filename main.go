@@ -1971,6 +1971,36 @@ func YcCliInit() error {
 	return nil
 }
 
+// AwsCliInit runs AWS CLI commands and retrieves ECR authorization token
+// Sets TOKEN environment variable for Docker authentication
+func AwsCliInit(registryServer string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Extract region from registry server (e.g., "123456789.dkr.ecr.us-east-1.amazonaws.com")
+	// Format: <account-id>.dkr.ecr.<region>.amazonaws.com
+	parts := strings.Split(registryServer, ".")
+	if len(parts) < 4 {
+		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
+	}
+	region := parts[3]
+
+	// Get ECR authorization token using AWS CLI
+	// This returns a base64-encoded authorization token
+	token, err := runCommandCapture(ctx, "aws", "ecr", "get-login-password", "--region", region)
+	if err != nil {
+		return fmt.Errorf("aws ecr get-login-password failed: %v (%s)", err, token)
+	}
+
+	// Set TOKEN environment variable for Docker authentication
+	_ = os.Setenv("TOKEN", token)
+
+	// Set AWS region for reference
+	_ = os.Setenv("AWS_REGION", region)
+
+	return nil
+}
+
 // runMolecule is the core function that implements the behavior from your PS script
 func runMolecule(cmd *cobra.Command, args []string) error {
 
@@ -2263,14 +2293,13 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 				log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
 			}
 		case "AWS":
-			// AWS: Initialize AWS CLI and login to ECR (placeholder)
-			// if err := runCommand("aws", "configure", "..."); err != nil {
-			//     log.Printf("\033[33maws configure warning: %v\033[0m", err)
-			// }
-			// if err := runCommand("aws", "ecr", "get-login-password", "..."); err != nil {
-			//     log.Printf("\033[33maws ecr login failed: %v\033[0m", err)
-			// }
-			log.Printf("\033[33mAWS ECR authentication not yet implemented\033[0m")
+			// AWS: Initialize AWS CLI and login to ECR
+			if err := AwsCliInit(config.ContainerRegistry.RegistryServer); err != nil {
+				log.Printf("\033[33maws ecr init warning: %v\033[0m", err)
+			}
+			if err := runCommandHide("docker", "login", config.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
+				log.Printf("\033[33mdocker login to AWS ECR registry failed: %v\033[0m", err)
+			}
 		case "GCP":
 			// GCP: Initialize gcloud CLI and login to Artifact Registry (placeholder)
 			// if err := runCommand("gcloud", "init", "..."); err != nil {
@@ -2509,8 +2538,9 @@ func runMolecule(cmd *cobra.Command, args []string) error {
 		// Yandex Cloud registry login
 		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `echo $TOKEN | docker login cr.yandex --username iam --password-stdin`)
 	case "AWS":
-		// AWS ECR login would go here if needed
-		// _ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `aws ecr get-login-password | docker login ...`)
+		// AWS ECR login inside container
+		loginCmd := fmt.Sprintf(`echo $TOKEN | docker login %s --username AWS --password-stdin`, config.ContainerRegistry.RegistryServer)
+		_ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", loginCmd)
 	case "GCP":
 		// GCP Artifact Registry login would go here if needed
 		// _ = dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", `gcloud auth print-access-token | docker login ...`)
