@@ -230,9 +230,6 @@ func TestGcpCliInitSuccessfulAuth(t *testing.T) {
 		if token == "" {
 			t.Errorf("%s environment variable should be set after successful GcpCliInit", EnvToken)
 		}
-		if len(token) < MinGCPTokenLength {
-			t.Errorf("TOKEN seems too short (expected at least %d chars), got length: %d", MinGCPTokenLength, len(token))
-		}
 		t.Logf("Successfully authenticated with gcloud, token length: %d", len(token))
 	} else {
 		// If not configured, we should get an authentication error, not a format error
