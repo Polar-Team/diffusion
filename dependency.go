@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+
 	"sort"
 	"strings"
 )
@@ -278,7 +279,16 @@ func ComputeDependencyHash(collections []CollectionRequirement, roles []RoleRequ
 		return collections[i].Name < collections[j].Name
 	})
 	for _, col := range collections {
-		h.Write([]byte(fmt.Sprintf("collection:%s:%s\n", col.Name, col.Version)))
+		galaxyAPI := NewGalaxyAPI()
+		resolvedVersion, err := galaxyAPI.ResolveVersion(col.Name, "collection", col.Version)
+		if err == nil {
+			col.Version = resolvedVersion
+		}
+		_, err = fmt.Fprintf(h, "collection:%s:%s\n", col.Name, col.Version)
+		if err != nil {
+			fmt.Printf("Error hashing collection: %v\n", err)
+		}
+
 	}
 
 	// Sort and hash roles
@@ -286,7 +296,26 @@ func ComputeDependencyHash(collections []CollectionRequirement, roles []RoleRequ
 		return roles[i].Name < roles[j].Name
 	})
 	for _, role := range roles {
-		h.Write([]byte(fmt.Sprintf("role:%s:%s:%s\n", role.Name, role.Version, role.Src)))
+		// Resolve git versions
+		resolvedVersion, err := ResolveVersionFromGit(role.Src, role.Version)
+		if err == nil {
+			role.Version = resolvedVersion
+		}
+		// Normalize role names by stripping scenario prefixes
+		parts := strings.SplitN(role.Name, ".", 2)
+		var prefix string
+		if len(parts) == 2 {
+			prefix = fmt.Sprintf("%s.", parts[0])
+		} else if prefix == "default" || prefix == "" {
+			prefix = "default."
+		}
+
+		role.Name = strings.TrimPrefix(role.Name, prefix)
+
+		_, err = fmt.Fprintf(h, "role:%s:%s:%s:%s\n", strings.Replace(prefix, ".", "", 1), role.Name, role.Version, role.Src)
+		if err != nil {
+			fmt.Printf("Error hashing role: %v\n", err)
+		}
 	}
 
 	// Sort and hash tool versions
@@ -296,12 +325,19 @@ func ComputeDependencyHash(collections []CollectionRequirement, roles []RoleRequ
 	}
 	sort.Strings(tools)
 	for _, tool := range tools {
-		h.Write([]byte(fmt.Sprintf("tool:%s:%s\n", tool, toolVersions[tool])))
+		_, err := fmt.Fprintf(h, "tool:%s:%s\n", tool, toolVersions[tool])
+		if err != nil {
+			fmt.Printf("Error hashing tool: %v\n", err)
+		}
+
 	}
 
 	// Hash Python version
 	if pythonVersion != nil {
-		h.Write([]byte(fmt.Sprintf("python:%s:%s:%s\n", pythonVersion.Min, pythonVersion.Max, pythonVersion.Pinned)))
+		_, err := fmt.Fprintf(h, "python:%s:%s:%s\n", pythonVersion.Min, pythonVersion.Max, pythonVersion.Pinned)
+		if err != nil {
+			fmt.Printf("Error hashing python version: %v\n", err)
+		}
 	}
 
 	return hex.EncodeToString(h.Sum(nil))
@@ -377,51 +413,6 @@ func LoadDependencyConfig() (*DependencyConfig, error) {
 			// Extract actual role name from scenario prefix (e.g., "default.rolename" -> "rolename")
 			// Roles in diffusion.toml are stored as "scenario.rolename" or "scenario.namespace.rolename"
 			roleName := role.Name
-
-			// Determine if this has a scenario prefix by checking if it has a src
-			// If it has a src (git URL), the first part before the dot is the scenario
-			// If no src, we need to check if it looks like "scenario.namespace.role" or "namespace.role"
-			if role.Src != "" {
-				// Has src, so first part is scenario - strip it
-				if strings.Contains(roleName, ".") {
-					parts := strings.SplitN(roleName, ".", 2)
-					if len(parts) == 2 {
-						roleName = parts[1]
-					}
-				}
-			} else {
-				// No src, check if it's a galaxy role with scenario prefix
-				// Format could be: "default.namespace.role" or "namespace.role"
-				parts := strings.Split(roleName, ".")
-				if len(parts) == 3 {
-					// Likely "scenario.namespace.role" - strip scenario
-					roleName = parts[1] + "." + parts[2]
-				} else if len(parts) == 2 {
-					// Could be "scenario.role" or "namespace.role"
-					// If first part looks like a common scenario name, strip it
-					commonScenarios := []string{
-						"default",
-						"test",
-						"testing",
-						"production",
-						"prod",
-						"staging",
-						"dev",
-						"development"}
-					isScenario := false
-					for _, scenario := range commonScenarios {
-						if parts[0] == scenario {
-							isScenario = true
-							break
-						}
-					}
-					if isScenario {
-						roleName = parts[1]
-					}
-					// Otherwise keep as is (it's namespace.role)
-				}
-				// If only one part, keep as is
-			}
 
 			// Store the cleaned role name
 			config.DependencyConfig.Roles[i].Name = roleName

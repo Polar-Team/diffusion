@@ -32,10 +32,11 @@ type RequirementRole struct {
 }
 
 type RequirementCollection struct {
-	Name    string `yaml:"name"`
-	Type    string `yaml:"type,omitempty"`
-	Source  string `yaml:"source,omitempty"`
-	Version string `yaml:"version,omitempty"`
+	Name      string `yaml:"name"`
+	Type      string `yaml:"type,omitempty"`
+	Source    string `yaml:"source,omitempty"`
+	SourceURL string `yaml:"source_url,omitempty"`
+	Version   string `yaml:"version,omitempty"`
 }
 
 // UnmarshalYAML implements custom YAML unmarshaling to support both string and structured formats

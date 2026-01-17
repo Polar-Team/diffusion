@@ -413,7 +413,7 @@ func main() {
 			return nil
 		},
 	}
-
+	roleRemoveRoleCmd.Flags().StringVarP(&RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
 	roleCmd.AddCommand(roleRemoveRoleCmd)
 
 	roleCmd.AddCommand(roleRemoveCollectionCmd)
@@ -1115,7 +1115,7 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 			if upToDate {
 				fmt.Printf("\033[32m%s\033[0m\n", MsgLockFileUpToDate)
 			} else {
-				fmt.Printf("\033[33mLock file is out of date. Run 'diffusion deps lock' to update.\033[0m\n")
+				fmt.Printf("\033[33mLock file is not fitting yaml manifests. Run 'diffusion deps sync' to update.\033[0m\n")
 				os.Exit(1)
 			}
 			return nil
@@ -1297,6 +1297,7 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 										if version != "" && version != "main" && version != "master" && !strings.HasPrefix(version, ">=") && !strings.HasPrefix(version, "<=") && !strings.HasPrefix(version, "==") && !strings.HasPrefix(version, ">") && !strings.HasPrefix(version, "<") {
 											version = ">=" + version
 										}
+										version = strings.Replace(version, "v", "", 1)
 										config.DependencyConfig.Roles = append(config.DependencyConfig.Roles, RoleRequirement{
 											Name:    roleNameWithScenario,
 											Src:     role.Src,
@@ -1375,26 +1376,95 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 			if lockFile == nil {
 				return fmt.Errorf("lock file not found. Run 'diffusion deps lock' first")
 			}
-
-			// Load current role config
-			meta, req, err := LoadRoleConfig(RoleScenario)
-			if err != nil {
-				return fmt.Errorf("failed to load role config: %w", err)
+			scenarios := []string{}
+			scenariosDir := "scenarios"
+			if _, err := os.Stat(scenariosDir); err == nil {
+				// Read all scenario folders
+				entries, err := os.ReadDir(scenariosDir)
+				if err == nil {
+					for _, entry := range entries {
+						if entry.IsDir() {
+							scenarios = append(scenarios, entry.Name())
+						}
+					}
+				}
+			}
+			if len(scenarios) == 0 {
+				scenarios = append(scenarios, "default")
 			}
 
-			// Sync collections to requirements.yml (structured format with resolved versions)
-			fmt.Println("Syncing collections to requirements.yml...")
-			req.Collections = []RequirementCollection{}
-			for _, col := range lockFile.Collections {
-				version := col.ResolvedVersion
-				if version == "" {
-					version = col.Version
+			// Sync roles and collections to requirements.yml for each scenario
+			for _, scenario := range scenarios {
+				// Load current role config
+				_, req, err := LoadRoleConfig(scenario)
+				if err != nil {
+					return fmt.Errorf("failed to load role config: %w", err)
 				}
-				req.Collections = append(req.Collections, RequirementCollection{
-					Name:    col.Name,
-					Version: version,
-				})
-				fmt.Printf("  ✓ %s: %s\n", col.Name, version)
+
+				// Sync collections to requirements.yml (structured format with resolved versions)
+				fmt.Printf("Syncing collections to requirements.yml for %s...\n", scenario)
+				req.Collections = []RequirementCollection{}
+				for _, col := range lockFile.Collections {
+					version := col.ResolvedVersion
+					if version == "" {
+						version = col.Version
+					}
+					req.Collections = append(req.Collections, RequirementCollection{
+						Name:    col.Name,
+						Version: version,
+					})
+					fmt.Printf("  ✓ %s: %s\n", col.Name, version)
+				}
+
+				// Sync roles to requirements.yml
+				fmt.Printf("Syncing roles to requirements.yml for %s...\n", scenario)
+				req.Roles = []RequirementRole{}
+				scenarioRoles := []LockFileEntry{}
+				prefix := scenario + "."
+				// Filter roles for this scenario
+				// (roles are prefixed with scenario name in lock file)
+				// e.g., "default.myrole"
+				// So we only pick roles that start with "default."
+				for _, role := range lockFile.Roles {
+					if strings.HasPrefix(role.Name, prefix) {
+						scenarioRoles = append(scenarioRoles, role)
+					}
+				}
+				// Now add the filtered roles to requirements.yml
+				for _, role := range scenarioRoles {
+					version := role.ResolvedVersion
+					if version == "" {
+						version = role.Version
+					}
+					// If still no version, default to "main"
+					if version == "" || version == "latest" {
+						version = "main"
+					}
+
+					// Remove scenario prefix from role name
+					prefix := scenario + "."
+					role.Name = strings.TrimPrefix(role.Name, prefix)
+
+					req.Roles = append(req.Roles, RequirementRole{
+						Name:    role.Name,
+						Version: version,
+						Src:     role.Src,    // Restore git URL
+						Scm:     role.Source, // Restore SCM type
+					})
+					fmt.Printf("  ✓ %s: %s\n", role.Name, version)
+				}
+				// Save requirements.yml
+				if err := SaveRequirementFile(req, scenario); err != nil {
+					return fmt.Errorf("failed to save requirements.yml: %w", err)
+				}
+				fmt.Printf("\033[32m✓ requirements.yml updated for %s\033[0m\n", scenario)
+
+			}
+			// Sync collections to meta/main.yml
+
+			meta, _, err := LoadRoleConfig("")
+			if err != nil {
+				return fmt.Errorf("failed to load meta config: %w", err)
 			}
 
 			// Sync collections to meta.yml (simple string format - names only, no versions)
@@ -1405,34 +1475,6 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 				meta.Collections = append(meta.Collections, col.Name)
 				fmt.Printf("  ✓ %s\n", col.Name)
 			}
-
-			// Sync roles to requirements.yml
-			fmt.Println("Syncing roles to requirements.yml...")
-			req.Roles = []RequirementRole{}
-			for _, role := range lockFile.Roles {
-				version := role.ResolvedVersion
-				if version == "" {
-					version = role.Version
-				}
-				// If still no version, default to "main"
-				if version == "" || version == "latest" {
-					version = "main"
-				}
-
-				req.Roles = append(req.Roles, RequirementRole{
-					Name:    role.Name,
-					Version: version,
-					Src:     role.Src,    // Restore git URL
-					Scm:     role.Source, // Restore SCM type
-				})
-				fmt.Printf("  ✓ %s: %s\n", role.Name, version)
-			}
-
-			// Save requirements.yml
-			if err := SaveRequirementFile(req, RoleScenario); err != nil {
-				return fmt.Errorf("failed to save requirements.yml: %w", err)
-			}
-			fmt.Printf("\033[32m✓ requirements.yml updated\033[0m\n")
 
 			// Save meta.yml
 			if err := SaveMetaFile(meta); err != nil {
@@ -1988,12 +2030,12 @@ func AwsCliInit(registryServer string) error {
 	if len(parts) != 6 {
 		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
 	}
-	
+
 	// Validate ECR format: parts should be [account-id, dkr, ecr, region, amazonaws, com]
 	if parts[1] != "dkr" || parts[2] != "ecr" || parts[4] != "amazonaws" || parts[5] != "com" {
 		return fmt.Errorf("invalid AWS ECR registry server format: %s (expected format: <account-id>.dkr.ecr.<region>.amazonaws.com)", registryServer)
 	}
-	
+
 	region := parts[3]
 
 	// Get ECR authorization token using AWS CLI
@@ -2031,13 +2073,13 @@ func isValidGcpRegistry(registryServer string) bool {
 	if strings.HasSuffix(registryServer, ".gcr.io") || strings.Contains(registryServer, ".gcr.io/") {
 		return true
 	}
-	
+
 	// Artifact Registry formats
 	// Examples: us-docker.pkg.dev, europe-west1-docker.pkg.dev, us-docker.pkg.dev/project/repo
 	if strings.HasSuffix(registryServer, "-docker.pkg.dev") || strings.Contains(registryServer, "-docker.pkg.dev/") {
 		return true
 	}
-	
+
 	return false
 }
 
