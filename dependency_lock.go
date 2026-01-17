@@ -156,6 +156,7 @@ func GenerateLockFile(collections []CollectionRequirement, roles []RoleRequireme
 		if role.Scm == "" {
 			role.Scm = "git"
 		}
+
 		entry := LockFileEntry{
 			Name:    role.Name,
 			Version: role.Version, // This is the constraint from diffusion.toml
@@ -253,7 +254,6 @@ func ValidateLockFile(lockFile *LockFile, collections []CollectionRequirement, r
 	if lockFile == nil {
 		return false, nil
 	}
-
 	currentHash := ComputeDependencyHash(collections, roles, toolVersions, pythonVersion)
 	return lockFile.Hash == currentHash, nil
 }
@@ -335,33 +335,65 @@ func CheckLockFileStatus() (bool, error) {
 		return false, nil // No lock file exists
 	}
 
-	// Load current configuration
-	depConfig, err := LoadDependencyConfig()
+	depsConfig, err := LoadDependencyConfig()
 	if err != nil {
 		return false, fmt.Errorf("failed to load dependency config: %w", err)
 	}
 
-	// Load meta and requirements
-	meta, req, err := LoadRoleConfig("")
-	if err != nil {
-		return false, fmt.Errorf("failed to load role config: %w", err)
+	scenarios := []string{}
+	for _, role := range depsConfig.Roles {
+		// Normalize role source if missing
+
+		parts := strings.SplitN(role.Name, ".", 2)
+		var scenarioName string
+		if len(parts) == 2 {
+			scenarioName = parts[0]
+		} else if scenarioName == "default" || scenarioName == "" {
+			scenarioName = "default"
+		}
+		scenarios = append(scenarios, scenarioName)
 	}
 
-	// Resolve dependencies
-	resolver := NewDependencyResolver(meta, req, depConfig)
-	collections, err := resolver.ResolveCollectionDependencies()
-	if err != nil {
-		return false, fmt.Errorf("failed to resolve collections: %w", err)
+	roles := []RoleRequirement{}
+	// Load requirements for each scenario
+	for _, scenario := range scenarios {
+		meta, req, err := LoadRoleConfig(scenario)
+		if err != nil {
+			return false, fmt.Errorf("failed to load role config for scenario %s: %w", scenario, err)
+		}
+
+		for role := range req.Roles {
+			roles = append(roles, RoleRequirement{
+				Name:    fmt.Sprintf("%s.%s", scenario, req.Roles[role].Name),
+				Src:     req.Roles[role].Src,
+				Scm:     req.Roles[role].Scm,
+				Version: req.Roles[role].Version,
+			})
+		}
+		_ = meta // Currently not used
 	}
 
-	roles, err := resolver.ResolveRoleDependencies()
+	collections := []CollectionRequirement{}
+	_, req, err := LoadRoleConfig("")
 	if err != nil {
-		return false, fmt.Errorf("failed to resolve roles: %w", err)
+		return false, fmt.Errorf("failed to load default role config: %w", err)
+	}
+	for collection := range req.Collections {
+		collections = append(collections, CollectionRequirement{
+			Name:      req.Collections[collection].Name,
+			Source:    req.Collections[collection].Source,
+			SourceURL: req.Collections[collection].SourceURL,
+			Version:   req.Collections[collection].Version,
+		})
 	}
 
-	pythonVersion := resolver.ResolvePythonVersion()
-	toolVersions := resolver.ResolveToolVersions()
+	toolVersions := map[string]string{
+		"ansible":      depsConfig.Ansible,
+		"molecule":     depsConfig.Molecule,
+		"ansible-lint": depsConfig.AnsibleLint,
+		"yamllint":     depsConfig.YamlLint,
+	}
 
 	// Validate lock file
-	return ValidateLockFile(lockFile, collections, roles, toolVersions, pythonVersion)
+	return ValidateLockFile(lockFile, collections, roles, toolVersions, depsConfig.Python)
 }

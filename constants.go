@@ -124,7 +124,7 @@ const (
 	MsgVerifyDone           = "Verify Done Successfully!"
 	MsgIdempotenceDone      = "Idempotence Done Successfully!"
 	MsgLockFileGenerated    = "Lock file generated successfully"
-	MsgLockFileUpToDate     = "Lock file is up-to-date"
+	MsgLockFileUpToDate     = "YAML manifests is up-to-date"
 	MsgPyProjectGenerated   = "pyproject.toml generated successfully"
 	MsgDependenciesResolved = "Dependencies resolved successfully"
 )
