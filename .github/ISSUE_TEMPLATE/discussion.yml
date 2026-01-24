@@ -1,0 +1,78 @@
+name: Discussion
+description: Start a discussion about Diffusion (questions, ideas, feedback)
+title: "[Discussion]: "
+labels: ["discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for starting a discussion! This is the place to ask questions, share ideas, or provide general feedback about Diffusion.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Discussion Type
+      description: What type of discussion is this?
+      options:
+        - Question
+        - Idea / Brainstorming
+        - General Feedback
+        - Community
+        - Documentation
+        - Architecture / Design
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: topic
+    attributes:
+      label: Topic
+      description: What would you like to discuss?
+      placeholder: I'd like to discuss...
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Provide any relevant context, background, or details
+      placeholder: Here's some background information...
+    validations:
+      required: true
+
+  - type: textarea
+    id: questions
+    attributes:
+      label: Questions / Points for Discussion
+      description: What specific questions or points would you like to discuss?
+      placeholder: |
+        1. First question or point...
+        2. Second question or point...
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Related Component (Optional)
+      description: Is this discussion related to a specific component?
+      options:
+        - Not specific to any component
+        - CLI Interface
+        - Ansible Role Management
+        - Molecule Testing
+        - Docker Integration
+        - Vault Integration
+        - Registry Support (AWS/GCP/YC)
+        - Linting
+        - Configuration
+        - Documentation
+        - Community / Project Management
+        - Other
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Information
+      description: Any additional information, links, or references
+      placeholder: Add any additional information...
