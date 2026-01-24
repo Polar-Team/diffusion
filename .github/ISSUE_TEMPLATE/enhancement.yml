@@ -1,0 +1,96 @@
+name: Enhancement
+description: Suggest an improvement to an existing feature in Diffusion
+title: "[Enhancement]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an enhancement! This template is for improving existing features. If you're proposing a completely new feature, please use the Feature Request template instead.
+
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current Behavior
+      description: Describe how the feature currently works
+      placeholder: Currently, Diffusion...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-improvement
+    attributes:
+      label: Proposed Improvement
+      description: Describe how you'd like to enhance the existing feature
+      placeholder: It would be better if...
+    validations:
+      required: true
+
+  - type: textarea
+    id: benefits
+    attributes:
+      label: Benefits
+      description: What are the benefits of this enhancement?
+      placeholder: This enhancement would provide...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which component would this enhancement affect?
+      options:
+        - CLI Interface
+        - Ansible Role Management
+        - Molecule Testing
+        - Docker Integration
+        - Vault Integration
+        - Registry Support (AWS/GCP/YC)
+        - Linting
+        - Configuration
+        - Performance
+        - Error Messages
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: breaking-change
+    attributes:
+      label: Breaking Change
+      description: Would this enhancement introduce breaking changes?
+      options:
+        - label: This enhancement would be a breaking change
+        - label: This enhancement would maintain backward compatibility
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Ideas
+      description: Do you have any ideas on how this could be implemented?
+      placeholder: This could be implemented by...
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples
+      description: Provide examples of how the enhanced feature would work
+      placeholder: |
+        Before:
+        ```bash
+        diffusion command --old-way
+        ```
+        
+        After:
+        ```bash
+        diffusion command --improved-way
+        ```
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or references
+      placeholder: Add any additional information...
