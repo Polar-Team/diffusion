@@ -13,6 +13,25 @@ All releases are:
 - Include SLSA Level 3 provenance
 - Have SHA256 checksums published
 
+## Automatic Verification During Installation
+
+The Chocolatey install script automatically performs the following verifications:
+
+1. **SHA256 Checksum** (always): Verified by Chocolatey during download
+2. **Cosign Signature** (if cosign is installed): Automatically verified against GitHub's OIDC
+3. **SLSA Level 3 Provenance** (if slsa-verifier is installed): Automatically verified
+
+To enable full automatic verification, install the verification tools:
+```powershell
+# Install Cosign for signature verification
+choco install cosign
+
+# Install SLSA verifier for provenance verification
+# Download from: https://github.com/slsa-framework/slsa-verifier/releases
+```
+
+## Manual Verification
+
 To verify the binaries manually:
 
 1. Download the archive from: https://github.com/Polar-Team/diffusion/releases
@@ -25,6 +44,13 @@ To verify the binaries manually:
      --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" `
      --certificate-oidc-issuer="https://token.actions.githubusercontent.com" `
      diffusion-windows-amd64.zip
+   ```
+4. Verify SLSA provenance:
+   ```powershell
+   slsa-verifier verify-artifact diffusion-windows-amd64.zip `
+     --provenance-path multiple.intoto.jsonl `
+     --source-uri github.com/Polar-Team/diffusion `
+     --source-tag v<VERSION>
    ```
 
 The package maintainers: Polar-Team

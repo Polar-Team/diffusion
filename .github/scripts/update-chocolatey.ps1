@@ -53,23 +53,23 @@ $newChecksumLogic = @"
 `$checksum = `$checksums[`$arch]
 "@
 
-# Find the line with $url and insert checksum logic after it
+# Find the line with download paths comments and insert checksum logic after provenanceUrl
 $lines = $scriptContent -split "`r?`n"
 $newLines = @()
-$urlLineFound = $false
+$provenanceUrlLineFound = $false
 
 foreach ($line in $lines) {
     $newLines += $line
-    if (-not $urlLineFound -and $line -match '^\$url = ') {
-        $urlLineFound = $true
-        # Add empty line and checksum logic after the $url line
+    if (-not $provenanceUrlLineFound -and $line -match '^\$provenanceUrl = ') {
+        $provenanceUrlLineFound = $true
+        # Add empty line and checksum logic after the provenanceUrl line
         $newLines += ""
         $newLines += $newChecksumLogic.Split("`n")
     }
 }
 
-if (-not $urlLineFound) {
-    throw "Could not find `$url line in install script"
+if (-not $provenanceUrlLineFound) {
+    throw "Could not find `$provenanceUrl line in install script"
 }
 
 # Replace the empty checksum placeholder

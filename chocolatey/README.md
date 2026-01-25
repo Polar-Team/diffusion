@@ -5,17 +5,41 @@ This directory contains the Chocolatey package configuration for Diffusion.
 ## Files
 
 - `diffusion.nuspec` - Package metadata and configuration
-- `tools/chocolateyinstall.ps1` - Installation script that downloads and installs the appropriate binary
+- `tools/chocolateyinstall.ps1` - Installation script that downloads and installs the appropriate binary with automatic security verification
 - `tools/chocolateyuninstall.ps1` - Uninstallation script
+- `tools/VERIFICATION.txt` - Verification instructions for package reviewers
 
 ## How it Works
 
 The Chocolatey package automatically:
 1. Detects the Windows architecture (amd64, arm64, or arm)
 2. Downloads the appropriate release binary from GitHub
-3. Verifies the checksum
-4. Extracts and renames the binary to `diffusion.exe`
-5. Adds it to the system PATH
+3. **Automatically verifies SHA256 checksum** (always)
+4. **Automatically verifies Cosign signature** (if cosign is installed)
+5. **Automatically verifies SLSA Level 3 provenance** (if slsa-verifier is installed)
+6. Extracts and renames the binary to `diffusion.exe`
+7. Adds it to the system PATH
+
+## Security Verification
+
+### Always Verified
+- **SHA256 Checksum**: Automatically verified by Chocolatey during download
+
+### Optional Automatic Verification
+For enhanced security, the install script can automatically verify:
+- **Cosign Signature**: Verifies the binary was signed by the official GitHub Actions workflow
+- **SLSA Level 3 Provenance**: Verifies the build provenance and supply chain security
+
+To enable full automatic verification, install the verification tools:
+```powershell
+# Install Cosign for signature verification
+choco install cosign
+
+# Install SLSA verifier for provenance verification
+# Download from: https://github.com/slsa-framework/slsa-verifier/releases
+```
+
+The installation will proceed even if these tools are not installed, with SHA256 checksum verification as the baseline. However, having these tools installed provides the highest level of security assurance.
 
 ## Installation
 

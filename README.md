@@ -79,7 +79,16 @@ choco upgrade diffusion
 The Chocolatey package automatically:
 - Detects your Windows architecture (AMD64, ARM64, or ARM)
 - Downloads and verifies the appropriate release
+- **Verifies SHA256 checksum** (always)
+- **Verifies Cosign signature** (if cosign is installed)
+- **Verifies SLSA Level 3 provenance** (if slsa-verifier is installed)
 - Adds `diffusion` to your PATH
+
+For maximum security, install verification tools:
+```powershell
+choco install cosign  # For automatic signature verification
+# slsa-verifier: https://github.com/slsa-framework/slsa-verifier/releases
+```
 
 ### From Source
 
