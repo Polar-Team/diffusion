@@ -99,7 +99,10 @@ jobs:
             tar -czf "$ARCHIVE_NAME" "${{ matrix.binary }}"
             echo "Created: $ARCHIVE_NAME"
           else
-            ARCHIVE_NAME="${{ matrix.binary }}.zip"
+            # For Windows, remove .exe from archive name
+            BINARY_BASE="${{ matrix.binary }}"
+            BINARY_BASE="${BINARY_BASE%.exe}"
+            ARCHIVE_NAME="${BINARY_BASE}.zip"
             zip "$ARCHIVE_NAME" "${{ matrix.binary }}"
             echo "Created: $ARCHIVE_NAME"
           fi
@@ -275,9 +278,9 @@ jobs:
           - Apple Silicon: `diffusion-darwin-arm64.tar.gz`
           
           **Windows:**
-          - AMD64: `diffusion-windows-amd64.exe.zip`
-          - ARM64: `diffusion-windows-arm64.exe.zip`
-          - ARM: `diffusion-windows-arm.exe.zip`
+          - AMD64: `diffusion-windows-amd64.zip`
+          - ARM64: `diffusion-windows-arm64.zip`
+          - ARM: `diffusion-windows-arm.zip`
           
           ### Extraction
           
@@ -289,7 +292,7 @@ jobs:
           
           **Windows:**
           ```powershell
-          Expand-Archive diffusion-windows-amd64.exe.zip
+          Expand-Archive diffusion-windows-amd64.zip
           ```
           
           ### Verification

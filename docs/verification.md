@@ -226,14 +226,14 @@ choco install gh
 
 # Verify (PowerShell)
 cosign verify-blob `
-  --certificate diffusion-windows-amd64.exe.zip.pem `
-  --signature diffusion-windows-amd64.exe.zip.sig `
+  --certificate diffusion-windows-amd64.zip.pem `
+  --signature diffusion-windows-amd64.zip.sig `
   --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" `
   --certificate-oidc-issuer="https://token.actions.githubusercontent.com" `
-  diffusion-windows-amd64.exe.zip
+  diffusion-windows-amd64.zip
 
 # Verify SLSA provenance
-slsa-verifier verify-artifact diffusion-windows-amd64.exe.zip `
+slsa-verifier verify-artifact diffusion-windows-amd64.zip `
   --provenance-path multiple.intoto.jsonl `
   --source-uri github.com/Polar-Team/diffusion `
   --source-tag v1.0.0
