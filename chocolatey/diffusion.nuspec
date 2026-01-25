@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>diffusion</id>
+    <version>0.0.0</version>
+    <title>Diffusion</title>
+    <authors>Polar-Team</authors>
+    <owners>Polar-Team</owners>
+    <licenseUrl>https://github.com/Polar-Team/diffusion/blob/main/LICENSE</licenseUrl>
+    <projectUrl>https://github.com/Polar-Team/diffusion</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/Polar-Team/diffusion/main/img/logo.jpg</iconUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>
+Diffusion is a powerful Go-based CLI framework for simplifying Ansible role testing with Molecule.
+
+## Features
+- Ansible Role Management: Initialize, configure, and manage Ansible roles with ease
+- Docker-Based Testing: Automated Molecule workflow with containerized testing environments
+- HashiCorp Vault Integration: Secure credential management for private repositories
+- Multiple Registry Support: Works with Yandex Cloud (YC), AWS, GCP, and public registries
+- Built-in Linting: Integrated YAML and Ansible linting with customizable rules
+- Comprehensive Testing: Support for convergence, verification, idempotence, and lint testing
+- Interactive Configuration: User-friendly prompts for project setup
+
+## Installation
+After installation, run `diffusion --help` to get started.
+
+## Documentation
+- Installation Guide: https://github.com/Polar-Team/diffusion#-installation
+- Building from Source: https://github.com/Polar-Team/diffusion/blob/main/docs/building.md
+- Verification Guide: https://github.com/Polar-Team/diffusion/blob/main/docs/verification.md
+    </description>
+    <summary>A powerful Go-based CLI framework for simplifying Ansible role testing with Molecule</summary>
+    <releaseNotes>https://github.com/Polar-Team/diffusion/releases</releaseNotes>
+    <copyright>Polar-Team</copyright>
+    <tags>ansible molecule testing devops automation cli docker go</tags>
+    <projectSourceUrl>https://github.com/Polar-Team/diffusion</projectSourceUrl>
+    <packageSourceUrl>https://github.com/Polar-Team/diffusion/tree/main/chocolatey</packageSourceUrl>
+    <docsUrl>https://github.com/Polar-Team/diffusion/blob/main/README.md</docsUrl>
+    <bugTrackerUrl>https://github.com/Polar-Team/diffusion/issues</bugTrackerUrl>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

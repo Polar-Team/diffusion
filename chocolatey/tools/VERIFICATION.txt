@@ -1,0 +1,57 @@
+VERIFICATION
+Verification is intended to assist the Chocolatey moderators and community
+in verifying that this package's contents are trustworthy.
+
+The binaries included in this package are downloaded from the official GitHub releases:
+https://github.com/Polar-Team/diffusion/releases
+
+The package downloads binaries directly from GitHub releases during installation,
+ensuring that users always get the official, signed releases.
+
+All releases are:
+- Signed with Cosign (keyless)
+- Include SLSA Level 3 provenance
+- Have SHA256 checksums published
+
+## Automatic Verification During Installation
+
+The Chocolatey install script automatically performs the following verifications:
+
+1. **SHA256 Checksum** (always): Verified by Chocolatey during download
+2. **Cosign Signature** (if cosign is installed): Automatically verified against GitHub's OIDC
+3. **SLSA Level 3 Provenance** (if slsa-verifier is installed): Automatically verified
+
+To enable full automatic verification, install the verification tools:
+```powershell
+# Install Cosign for signature verification
+choco install cosign
+
+# Install SLSA verifier for provenance verification
+# Download from: https://github.com/slsa-framework/slsa-verifier/releases
+```
+
+## Manual Verification
+
+To verify the binaries manually:
+
+1. Download the archive from: https://github.com/Polar-Team/diffusion/releases
+2. Verify the checksum against SHA256SUMS file
+3. Verify the Cosign signature:
+   ```powershell
+   cosign verify-blob `
+     --certificate diffusion-windows-amd64.zip.pem `
+     --signature diffusion-windows-amd64.zip.sig `
+     --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" `
+     --certificate-oidc-issuer="https://token.actions.githubusercontent.com" `
+     diffusion-windows-amd64.zip
+   ```
+4. Verify SLSA provenance:
+   ```powershell
+   slsa-verifier verify-artifact diffusion-windows-amd64.zip `
+     --provenance-path multiple.intoto.jsonl `
+     --source-uri github.com/Polar-Team/diffusion `
+     --source-tag v<VERSION>
+   ```
+
+The package maintainers: Polar-Team
+The software maintainers: Polar-Team
