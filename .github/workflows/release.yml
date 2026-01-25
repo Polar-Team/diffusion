@@ -14,8 +14,6 @@ jobs:
   build:
     name: Build Binaries
     runs-on: ubuntu-latest
-    outputs:
-      hashes: ${{ steps.hash.outputs.hashes }}
     strategy:
       matrix:
         include:
@@ -114,12 +112,6 @@ jobs:
           name: ${{ matrix.binary }}-archive
           path: bin/*
           retention-days: 1
-      
-      - name: Generate hash for artifact
-        id: hash
-        run: |
-          cd bin
-          sha256sum ./* | tee hashes.txt
   
   combine-hashes:
     name: Combine artifact hashes
@@ -331,7 +323,6 @@ jobs:
             bin/*.sig
             bin/*.pem
             bin/SHA256SUMS
-            bin/multiple.intoto.jsonl
           body_path: release-notes.md
           draft: false
           prerelease: false
