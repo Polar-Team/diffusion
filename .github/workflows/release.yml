@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # Required for Cosign signing
+  id-token: write  # Required for Cosign signing and SLSA
   packages: write
 
 jobs:
@@ -21,31 +21,39 @@ jobs:
           - goos: linux
             goarch: amd64
             binary: diffusion-linux-amd64
+            archive_type: tar.gz
           - goos: linux
             goarch: arm64
             binary: diffusion-linux-arm64
+            archive_type: tar.gz
           - goos: linux
             goarch: arm
             goarm: 7
             binary: diffusion-linux-arm
+            archive_type: tar.gz
           # macOS builds
           - goos: darwin
             goarch: amd64
             binary: diffusion-darwin-amd64
+            archive_type: tar.gz
           - goos: darwin
             goarch: arm64
             binary: diffusion-darwin-arm64
+            archive_type: tar.gz
           # Windows builds
           - goos: windows
             goarch: amd64
             binary: diffusion-windows-amd64.exe
+            archive_type: zip
           - goos: windows
             goarch: arm64
             binary: diffusion-windows-arm64.exe
+            archive_type: zip
           - goos: windows
             goarch: arm
             goarm: 7
             binary: diffusion-windows-arm.exe
+            archive_type: zip
     
     steps:
       - name: Checkout code
@@ -69,8 +77,8 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
       
       - name: Build binary
@@ -83,20 +91,71 @@ jobs:
           go build -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }}" -o bin/${{ matrix.binary }} .
           echo "Built: bin/${{ matrix.binary }}"
       
-      - name: Upload binary
+      - name: Create archive
+        run: |
+          cd bin
+          if [ "${{ matrix.archive_type }}" = "tar.gz" ]; then
+            ARCHIVE_NAME="${{ matrix.binary }}.tar.gz"
+            tar -czf "$ARCHIVE_NAME" "${{ matrix.binary }}"
+            echo "Created: $ARCHIVE_NAME"
+          else
+            # For Windows, remove .exe from archive name
+            BINARY_BASE="${{ matrix.binary }}"
+            BINARY_BASE="${BINARY_BASE%.exe}"
+            ARCHIVE_NAME="${BINARY_BASE}.zip"
+            zip "$ARCHIVE_NAME" "${{ matrix.binary }}"
+            echo "Created: $ARCHIVE_NAME"
+          fi
+          # Remove the binary, keep only the archive
+          rm "${{ matrix.binary }}"
+      
+      - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary }}
-          path: bin/${{ matrix.binary }}
+          name: ${{ matrix.binary }}-archive
+          path: bin/*
           retention-days: 1
-
+  
+  combine-hashes:
+    name: Combine artifact hashes
+    needs: [build]
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: bin/
+          merge-multiple: true
+      
+      - name: Generate combined hashes
+        id: hashes
+        run: |
+          cd bin
+          # Generate hashes for all archives using find to avoid glob issues
+          archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
+          
+          if [ -z "$archives" ]; then
+            echo "Error: No archive files found"
+            exit 1
+          fi
+          
+          # Generate and encode hashes
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \; | base64 -w0 > combined-hashes.txt
+          echo "hashes=$(cat combined-hashes.txt)" >> "$GITHUB_OUTPUT"
+          
+          echo "Generated hashes:"
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \;
+  
   checksums:
     name: Generate Checksums
-    needs: [build]
+    needs: [combine-hashes]
     runs-on: ubuntu-latest
     
     steps:
-      - name: Download all binaries
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: bin/
@@ -105,7 +164,15 @@ jobs:
       - name: Generate checksums
         run: |
           cd bin
-          sha256sum * > SHA256SUMS
+          # Generate checksums using find to avoid glob issues
+          archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
+          
+          if [ -z "$archives" ]; then
+            echo "Error: No archive files found"
+            exit 1
+          fi
+          
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \; | tee SHA256SUMS
           echo "Checksums generated:"
           cat SHA256SUMS
       
@@ -117,8 +184,8 @@ jobs:
           retention-days: 1
 
   sign:
-    name: Sign Binaries with Cosign
-    needs: [build]
+    name: Sign Archives with Cosign
+    needs: [combine-hashes]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -128,20 +195,27 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
       
-      - name: Download all binaries
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: bin/
           merge-multiple: true
       
-      - name: Sign binaries with Cosign (keyless)
+      - name: Sign archives with Cosign (keyless)
         run: |
           cd bin
-          for file in diffusion-*; do
-            if [[ -f "$file" ]]; then
-              echo "Signing $file..."
-              cosign sign-blob --yes "$file" --output-signature "${file}.sig" --output-certificate "${file}.pem"
-            fi
+          # Find all archives using find to avoid glob issues
+          archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
+          
+          if [ -z "$archives" ]; then
+            echo "Error: No archive files found"
+            exit 1
+          fi
+          
+          # Sign all archives
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) | while IFS= read -r file; do
+            echo "Signing $file..."
+            cosign sign-blob --yes "$file" --output-signature "${file}.sig" --output-certificate "${file}.pem"
           done
       
       - name: Upload signatures
@@ -153,9 +227,22 @@ jobs:
             bin/*.pem
           retention-days: 1
 
+  provenance:
+    name: Generate SLSA Provenance
+    needs: [combine-hashes]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.combine-hashes.outputs.hashes }}"
+      upload-assets: true
+      provenance-name: "multiple.intoto.jsonl"
+
   release:
     name: Create GitHub Release
-    needs: [build, checksums, sign]
+    needs: [combine-hashes, checksums, sign, provenance]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -179,25 +266,38 @@ jobs:
           
           ### Installation
           
-          Download the appropriate binary for your platform:
+          Download the appropriate archive for your platform and extract it:
           
           **Linux:**
-          - AMD64: `diffusion-linux-amd64`
-          - ARM64: `diffusion-linux-arm64`
-          - ARM: `diffusion-linux-arm`
+          - AMD64: `diffusion-linux-amd64.tar.gz`
+          - ARM64: `diffusion-linux-arm64.tar.gz`
+          - ARM: `diffusion-linux-arm.tar.gz`
           
           **macOS:**
-          - Intel: `diffusion-darwin-amd64`
-          - Apple Silicon: `diffusion-darwin-arm64`
+          - Intel: `diffusion-darwin-amd64.tar.gz`
+          - Apple Silicon: `diffusion-darwin-arm64.tar.gz`
           
           **Windows:**
-          - AMD64: `diffusion-windows-amd64.exe`
-          - ARM64: `diffusion-windows-arm64.exe`
-          - ARM: `diffusion-windows-arm.exe`
+          - AMD64: `diffusion-windows-amd64.zip`
+          - ARM64: `diffusion-windows-arm64.zip`
+          - ARM: `diffusion-windows-arm.zip`
+          
+          ### Extraction
+          
+          **Linux/macOS:**
+          ```bash
+          tar -xzf diffusion-linux-amd64.tar.gz
+          chmod +x diffusion-linux-amd64
+          ```
+          
+          **Windows:**
+          ```powershell
+          Expand-Archive diffusion-windows-amd64.zip
+          ```
           
           ### Verification
           
-          All binaries are signed with Cosign for authenticity verification.
+          All archives are signed with **Cosign** and have **SLSA Level 3 provenance** for supply chain security.
           
           **Verify checksums:**
           ```bash
@@ -206,12 +306,22 @@ jobs:
           
           **Verify Cosign signature:**
           ```bash
+          # Install cosign from https://github.com/sigstore/cosign
           cosign verify-blob \
-            --certificate diffusion-linux-amd64.pem \
-            --signature diffusion-linux-amd64.sig \
+            --certificate diffusion-linux-amd64.tar.gz.pem \
+            --signature diffusion-linux-amd64.tar.gz.sig \
             --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            diffusion-linux-amd64
+            diffusion-linux-amd64.tar.gz
+          ```
+          
+          **Verify SLSA Provenance:**
+          ```bash
+          # Install slsa-verifier from https://github.com/slsa-framework/slsa-verifier
+          slsa-verifier verify-artifact diffusion-linux-amd64.tar.gz \
+            --provenance-path multiple.intoto.jsonl \
+            --source-uri github.com/Polar-Team/diffusion \
+            --source-tag v$VERSION
           ```
           
           ### What's Changed
@@ -232,9 +342,14 @@ jobs:
           sed -i "s/\$VERSION/$VERSION/g" release-notes.md
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: bin/*
+          files: |
+            bin/*.tar.gz
+            bin/*.zip
+            bin/*.sig
+            bin/*.pem
+            bin/SHA256SUMS
           body_path: release-notes.md
           draft: false
           prerelease: false
@@ -244,14 +359,19 @@ jobs:
       
       - name: Summary
         run: |
-          echo "## Release Created Successfully! 🎉" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${GITHUB_REF#refs/tags/v}" >> $GITHUB_STEP_SUMMARY
-          echo "**Binaries:** $(ls bin/ | grep -v '\.(sig|pem|SHA256SUMS)' | wc -l)" >> $GITHUB_STEP_SUMMARY
-          echo "**Signatures:** $(ls bin/*.sig | wc -l)" >> $GITHUB_STEP_SUMMARY
-          echo "**Signing:** ✓ Cosign (keyless)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Files Released:" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ls -lh bin/ >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Release Created Successfully! 🎉"
+            echo ""
+            echo "**Version:** ${GITHUB_REF#refs/tags/v}"
+            echo "**Archives:** $(find bin/ -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)"
+            echo "**Signatures:** $(find bin/ -type f -name '*.sig' | wc -l)"
+            echo "**Signing:** ✓ Cosign (keyless)"
+            echo "**Provenance:** ✓ SLSA Level 3 (uploaded separately by provenance job)"
+            echo ""
+            echo "### Files Released:"
+            echo '```'
+            find bin/ -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sig' -o -name '*.pem' -o -name 'SHA256SUMS' \) -exec ls -lh {} \;
+            echo '```'
+            echo ""
+            echo "**Note:** SLSA provenance (multiple.intoto.jsonl) is uploaded directly by the provenance job."
+          } >> "$GITHUB_STEP_SUMMARY"
