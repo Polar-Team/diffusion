@@ -426,6 +426,14 @@ jobs:
           $armChecksum = ($checksums | Select-String "diffusion-windows-arm.zip" | `
             ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
 
+          # Validate that all checksums were extracted
+          if (-not $amd64Checksum -or -not $arm64Checksum -or -not $armChecksum) {
+            Write-Error "Failed to extract all required checksums from SHA256SUMS"
+            Write-Host "SHA256SUMS content:"
+            Get-Content SHA256SUMS
+            exit 1
+          }
+
           Write-Host "Extracted Checksums:"
           Write-Host "AMD64: $amd64Checksum"
           Write-Host "ARM64: $arm64Checksum"
