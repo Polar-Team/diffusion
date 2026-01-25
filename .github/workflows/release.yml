@@ -131,16 +131,20 @@ jobs:
         id: hashes
         run: |
           cd bin
-          # Generate hashes for all archives
-          if compgen -G "./*.tar.gz" > /dev/null || compgen -G "./*.zip" > /dev/null; then
-            sha256sum ./*.tar.gz ./*.zip 2>/dev/null | base64 -w0 > combined-hashes.txt
-            echo "hashes=$(cat combined-hashes.txt)" >> "$GITHUB_OUTPUT"
-            echo "Generated hashes:"
-            sha256sum ./*.tar.gz ./*.zip 2>/dev/null
-          else
+          # Generate hashes for all archives using find to avoid glob issues
+          archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
+          
+          if [ -z "$archives" ]; then
             echo "Error: No archive files found"
             exit 1
           fi
+          
+          # Generate and encode hashes
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \; | base64 -w0 > combined-hashes.txt
+          echo "hashes=$(cat combined-hashes.txt)" >> "$GITHUB_OUTPUT"
+          
+          echo "Generated hashes:"
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \;
   
   checksums:
     name: Generate Checksums
@@ -157,14 +161,17 @@ jobs:
       - name: Generate checksums
         run: |
           cd bin
-          if compgen -G "./*.tar.gz" > /dev/null || compgen -G "./*.zip" > /dev/null; then
-            sha256sum ./*.tar.gz ./*.zip 2>/dev/null | tee SHA256SUMS
-            echo "Checksums generated:"
-            cat SHA256SUMS
-          else
+          # Generate checksums using find to avoid glob issues
+          archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
+          
+          if [ -z "$archives" ]; then
             echo "Error: No archive files found"
             exit 1
           fi
+          
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \; | tee SHA256SUMS
+          echo "Checksums generated:"
+          cat SHA256SUMS
       
       - name: Upload checksums
         uses: actions/upload-artifact@v4
@@ -194,18 +201,18 @@ jobs:
       - name: Sign archives with Cosign (keyless)
         run: |
           cd bin
-          # Check if archive files exist
-          if ! compgen -G "./*.tar.gz" > /dev/null && ! compgen -G "./*.zip" > /dev/null; then
+          # Find all archives using find to avoid glob issues
+          archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
+          
+          if [ -z "$archives" ]; then
             echo "Error: No archive files found"
             exit 1
           fi
           
           # Sign all archives
-          for file in ./*.tar.gz ./*.zip; do
-            if [[ -f "$file" ]]; then
-              echo "Signing $file..."
-              cosign sign-blob --yes "$file" --output-signature "${file}.sig" --output-certificate "${file}.pem"
-            fi
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) | while IFS= read -r file; do
+            echo "Signing $file..."
+            cosign sign-blob --yes "$file" --output-signature "${file}.sig" --output-certificate "${file}.pem"
           done
       
       - name: Upload signatures
