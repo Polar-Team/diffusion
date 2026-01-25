@@ -1,5 +1,9 @@
 $ErrorActionPreference = 'Stop'
 
+# NOTE: The checksum validation logic is injected during the build process
+# by the .github/scripts/update-chocolatey.ps1 script. It inserts architecture-specific
+# checksums after the $url definition and sets the $checksum variable accordingly.
+
 $packageName = 'diffusion'
 $toolsDir = "$(Split-Path -parent $MyInvocation.MyCommand.Definition)"
 $version = $env:ChocolateyPackageVersion
