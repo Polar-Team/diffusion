@@ -53,8 +53,18 @@ Write-Host "✓ Archive downloaded and checksum verified" -ForegroundColor Green
 $cosignVerified = $false
 try {
     Write-Host "Downloading Cosign signature and certificate..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $sigUrl -OutFile $sigPath -UseBasicParsing
-    Invoke-WebRequest -Uri $pemUrl -OutFile $pemPath -UseBasicParsing
+    
+    try {
+        Invoke-WebRequest -Uri $sigUrl -OutFile $sigPath -UseBasicParsing -ErrorAction Stop
+        Invoke-WebRequest -Uri $pemUrl -OutFile $pemPath -UseBasicParsing -ErrorAction Stop
+    } catch {
+        throw "Failed to download signature files from GitHub release: $_"
+    }
+
+    # Verify signature files were downloaded
+    if (-not (Test-Path $sigPath) -or -not (Test-Path $pemPath)) {
+        throw "Signature or certificate file not found after download"
+    }
 
     # Check if cosign is available
     $cosignAvailable = Get-Command cosign -ErrorAction SilentlyContinue
@@ -64,7 +74,7 @@ try {
         $verifyOutput = & cosign verify-blob `
             --certificate $pemPath `
             --signature $sigPath `
-            --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" `
+            --certificate-identity-regexp="https://github.com/Polar-Team/diffusion/.github/workflows/release.yml" `
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" `
             $archivePath 2>&1
 
@@ -72,7 +82,9 @@ try {
             Write-Host "✓ Cosign signature verified successfully!" -ForegroundColor Green
             $cosignVerified = $true
         } else {
-            Write-Warning "Cosign verification failed: $verifyOutput"
+            Write-Warning "Cosign signature verification failed"
+            Write-Warning "This may indicate the binary was not signed by the official release workflow"
+            Write-Warning "Details: $verifyOutput"
         }
     } else {
         Write-Warning "Cosign not found - skipping signature verification"
@@ -80,14 +92,26 @@ try {
         Write-Host "  choco install cosign" -ForegroundColor Yellow
     }
 } catch {
-    Write-Warning "Could not verify Cosign signature: $_"
+    Write-Warning "Could not complete Cosign signature verification"
+    Write-Warning "Error: $_"
+    Write-Host "Installation will continue with SHA256 checksum verification" -ForegroundColor Yellow
 }
 
 # Download and verify SLSA provenance
 $slsaVerified = $false
 try {
     Write-Host "Downloading SLSA provenance..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $provenanceUrl -OutFile $provenancePath -UseBasicParsing
+    
+    try {
+        Invoke-WebRequest -Uri $provenanceUrl -OutFile $provenancePath -UseBasicParsing -ErrorAction Stop
+    } catch {
+        throw "Failed to download SLSA provenance from GitHub release: $_"
+    }
+
+    # Verify provenance file was downloaded
+    if (-not (Test-Path $provenancePath)) {
+        throw "SLSA provenance file not found after download"
+    }
 
     # Check if slsa-verifier is available
     $slsaAvailable = Get-Command slsa-verifier -ErrorAction SilentlyContinue
@@ -107,7 +131,9 @@ try {
                 Write-Host "✓ SLSA Level 3 provenance verified successfully!" -ForegroundColor Green
                 $slsaVerified = $true
             } else {
-                Write-Warning "SLSA verification failed: $verifyOutput"
+                Write-Warning "SLSA provenance verification failed"
+                Write-Warning "This may indicate issues with the build provenance or supply chain"
+                Write-Warning "Details: $verifyOutput"
             }
         } finally {
             Pop-Location
@@ -118,7 +144,9 @@ try {
         Write-Host "  https://github.com/slsa-framework/slsa-verifier/releases" -ForegroundColor Yellow
     }
 } catch {
-    Write-Warning "Could not verify SLSA provenance: $_"
+    Write-Warning "Could not complete SLSA provenance verification"
+    Write-Warning "Error: $_"
+    Write-Host "Installation will continue with SHA256 checksum verification" -ForegroundColor Yellow
 }
 
 # Summary of verifications
