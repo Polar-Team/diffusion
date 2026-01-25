@@ -266,6 +266,13 @@ jobs:
           
           ### Installation
           
+          **Windows (Recommended):**
+          Install using Chocolatey for automatic updates:
+          ```powershell
+          choco install diffusion
+          ```
+          
+          **Manual Installation:**
           Download the appropriate archive for your platform and extract it:
           
           **Linux:**
@@ -375,3 +382,147 @@ jobs:
             echo ""
             echo "**Note:** SLSA provenance (multiple.intoto.jsonl) is uploaded directly by the provenance job."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  chocolatey:
+    name: Publish to Chocolatey
+    needs: [release]
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Extract version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref }}" -replace '^refs/tags/v', ''
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "Building Chocolatey package for version: $version"
+      
+      - name: Download SHA256SUMS
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $url = "https://github.com/Polar-Team/diffusion/releases/download/v$version/SHA256SUMS"
+          
+          Write-Host "Downloading SHA256SUMS from: $url"
+          Invoke-WebRequest -Uri $url -OutFile SHA256SUMS
+          
+          # Display checksums for verification
+          Write-Host "`nSHA256 Checksums:"
+          Get-Content SHA256SUMS
+      
+      - name: Update nuspec with version and checksums
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $nuspecPath = "chocolatey/diffusion.nuspec"
+          
+          # Read and update version in nuspec
+          $nuspec = Get-Content $nuspecPath -Raw
+          $nuspec = $nuspec -replace '<version>0.0.0</version>', "<version>$version</version>"
+          Set-Content -Path $nuspecPath -Value $nuspec
+          
+          Write-Host "Updated nuspec version to: $version"
+          
+          # Extract checksums for Windows binaries from SHA256SUMS
+          $checksums = Get-Content SHA256SUMS
+          
+          $amd64Checksum = ($checksums | Select-String "diffusion-windows-amd64.zip" | ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+          $arm64Checksum = ($checksums | Select-String "diffusion-windows-arm64.zip" | ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+          $armChecksum = ($checksums | Select-String "diffusion-windows-arm.zip" | ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+          
+          Write-Host "`nExtracted Checksums:"
+          Write-Host "AMD64: $amd64Checksum"
+          Write-Host "ARM64: $arm64Checksum"
+          Write-Host "ARM: $armChecksum"
+          
+          # Update install script with checksums
+          $installScript = "chocolatey/tools/chocolateyinstall.ps1"
+          $scriptContent = Get-Content $installScript -Raw
+          
+          # Replace the checksum logic to use architecture-specific checksums
+          $newChecksumLogic = @"
+# Architecture-specific checksums
+`$checksums = @{
+    'amd64' = '$amd64Checksum'
+    'arm64' = '$arm64Checksum'
+    'arm'   = '$armChecksum'
+}
+
+`$checksum = `$checksums[`$arch]
+"@
+          
+          # Insert checksum logic before packageArgs
+          $scriptContent = $scriptContent -replace "(\`$url = .+\n)", "`$1`n$newChecksumLogic`n"
+          $scriptContent = $scriptContent -replace "checksum\s*=\s*''", "checksum = `$checksum"
+          
+          Set-Content -Path $installScript -Value $scriptContent
+          
+          Write-Host "`nUpdated install script with checksums"
+      
+      - name: Install Chocolatey
+        shell: pwsh
+        run: |
+          # Chocolatey should be pre-installed on GitHub-hosted Windows runners
+          # This step ensures it's available and updated
+          if (!(Get-Command choco -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing Chocolatey..."
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          } else {
+            Write-Host "Chocolatey is already installed"
+            choco --version
+          }
+      
+      - name: Build Chocolatey package
+        shell: pwsh
+        run: |
+          choco pack chocolatey/diffusion.nuspec --outputdirectory .
+          
+          # Verify the package was created
+          $nupkg = Get-ChildItem -Filter "diffusion.*.nupkg" | Select-Object -First 1
+          if ($nupkg) {
+            Write-Host "Successfully created package: $($nupkg.Name)"
+          } else {
+            throw "Failed to create Chocolatey package"
+          }
+      
+      - name: Publish to Chocolatey
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          $nupkg = Get-ChildItem -Filter "diffusion.*.nupkg" | Select-Object -First 1
+          
+          if ($env:CHOCOLATEY_API_KEY) {
+            Write-Host "Publishing $($nupkg.Name) to Chocolatey..."
+            choco push $nupkg.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+            Write-Host "Successfully published to Chocolatey!"
+          } else {
+            Write-Host "CHOCOLATEY_API_KEY not set - skipping publish"
+            Write-Host "Package built successfully but not published: $($nupkg.Name)"
+          }
+      
+      - name: Summary
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $nupkg = Get-ChildItem -Filter "diffusion.*.nupkg" | Select-Object -First 1
+          
+          $summary = @"
+          ## Chocolatey Package Published! 🍫
+          
+          **Version:** $version
+          **Package:** $($nupkg.Name)
+          **Install Command:**
+          ``````powershell
+          choco install diffusion
+          ``````
+          
+          **Note:** It may take a few minutes for the package to appear on chocolatey.org while it goes through automated verification.
+          "@
+          
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

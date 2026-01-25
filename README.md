@@ -62,6 +62,25 @@ These tools provide proper rendering of Diffusion's colored output, progress ind
 
 ## 📥 Installation
 
+### Windows (Chocolatey)
+
+The easiest way to install Diffusion on Windows is using [Chocolatey](https://chocolatey.org/):
+
+```powershell
+choco install diffusion
+```
+
+To upgrade to the latest version:
+
+```powershell
+choco upgrade diffusion
+```
+
+The Chocolatey package automatically:
+- Detects your Windows architecture (AMD64, ARM64, or ARM)
+- Downloads and verifies the appropriate release
+- Adds `diffusion` to your PATH
+
 ### From Source
 
 ```bash
