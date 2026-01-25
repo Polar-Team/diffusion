@@ -132,10 +132,15 @@ jobs:
         run: |
           cd bin
           # Generate hashes for all archives
-          sha256sum ./*.tar.gz ./*.zip 2>/dev/null | base64 -w0 > combined-hashes.txt
-          echo "hashes=$(cat combined-hashes.txt)" >> "$GITHUB_OUTPUT"
-          echo "Generated hashes:"
-          sha256sum ./*.tar.gz ./*.zip 2>/dev/null
+          if compgen -G "./*.tar.gz" > /dev/null || compgen -G "./*.zip" > /dev/null; then
+            sha256sum ./*.tar.gz ./*.zip 2>/dev/null | base64 -w0 > combined-hashes.txt
+            echo "hashes=$(cat combined-hashes.txt)" >> "$GITHUB_OUTPUT"
+            echo "Generated hashes:"
+            sha256sum ./*.tar.gz ./*.zip 2>/dev/null
+          else
+            echo "Error: No archive files found"
+            exit 1
+          fi
   
   checksums:
     name: Generate Checksums
@@ -152,9 +157,14 @@ jobs:
       - name: Generate checksums
         run: |
           cd bin
-          sha256sum ./*.tar.gz ./*.zip 2>/dev/null | tee SHA256SUMS
-          echo "Checksums generated:"
-          cat SHA256SUMS
+          if compgen -G "./*.tar.gz" > /dev/null || compgen -G "./*.zip" > /dev/null; then
+            sha256sum ./*.tar.gz ./*.zip 2>/dev/null | tee SHA256SUMS
+            echo "Checksums generated:"
+            cat SHA256SUMS
+          else
+            echo "Error: No archive files found"
+            exit 1
+          fi
       
       - name: Upload checksums
         uses: actions/upload-artifact@v4
@@ -184,6 +194,13 @@ jobs:
       - name: Sign archives with Cosign (keyless)
         run: |
           cd bin
+          # Check if archive files exist
+          if ! compgen -G "./*.tar.gz" > /dev/null && ! compgen -G "./*.zip" > /dev/null; then
+            echo "Error: No archive files found"
+            exit 1
+          fi
+          
+          # Sign all archives
           for file in ./*.tar.gz ./*.zip; do
             if [[ -f "$file" ]]; then
               echo "Signing $file..."
@@ -339,10 +356,12 @@ jobs:
             echo "**Archives:** $(find bin/ -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)"
             echo "**Signatures:** $(find bin/ -type f -name '*.sig' | wc -l)"
             echo "**Signing:** ✓ Cosign (keyless)"
-            echo "**Provenance:** ✓ SLSA Level 3"
+            echo "**Provenance:** ✓ SLSA Level 3 (uploaded separately by provenance job)"
             echo ""
             echo "### Files Released:"
             echo '```'
-            find bin/ -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sig' -o -name '*.pem' -o -name '*.jsonl' -o -name 'SHA256SUMS' \) -exec ls -lh {} \;
+            find bin/ -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sig' -o -name '*.pem' -o -name 'SHA256SUMS' \) -exec ls -lh {} \;
             echo '```'
+            echo ""
+            echo "**Note:** SLSA provenance (multiple.intoto.jsonl) is uploaded directly by the provenance job."
           } >> "$GITHUB_STEP_SUMMARY"

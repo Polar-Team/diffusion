@@ -74,12 +74,14 @@ slsa-verifier verify-artifact diffusion-linux-amd64.tar.gz \
 
 **Expected output:**
 ```
-Verified signature against tlog entry index 123456789 at URL: https://rekor.sigstore.dev/api/v1/log/entries/...
-Verified build using builder https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0 at commit abc123...
+Verified signature against tlog entry index <REKOR_INDEX> at URL: https://rekor.sigstore.dev/api/v1/log/entries/<ENTRY_ID>
+Verified build using builder https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@refs/tags/v2.1.0 at commit <COMMIT_SHA>
 Verifying artifact diffusion-linux-amd64.tar.gz: PASSED
 
 PASSED: Verified SLSA provenance
 ```
+
+*Note: Values like `<REKOR_INDEX>`, `<ENTRY_ID>`, and `<COMMIT_SHA>` will be specific to your verification and differ for each release.*
 
 ## Detailed Verification Steps
 
