@@ -415,7 +415,7 @@ jobs:
           Write-Host "Downloading provenance file from: $provenanceUrl"
           
           # Retry logic for provenance file (it may take time to be uploaded)
-          $maxAttempts = 30
+          $maxAttempts = 20
           $downloaded = $false
           for ($i = 1; $i -le $maxAttempts; $i++) {
             try {
@@ -436,7 +436,9 @@ jobs:
             Remove-Item multiple.intoto.jsonl
             Write-Host "Added provenance checksum: $provenanceHash"
           } else {
-            Write-Warning "Provenance file not available after $maxAttempts attempts"
+            Write-Error "Provenance file not available after $maxAttempts attempts ($(($maxAttempts * 10) / 60) minutes)"
+            Write-Error "This is required for Chocolatey publishing compliance (CPMR0073)"
+            exit 1
           }
 
           # Display checksums for verification
