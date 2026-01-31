@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 permissions:
   contents: write
-  id-token: write  # Required for Cosign signing and SLSA
+  id-token: write # Required for Cosign signing and SLSA
   packages: write
 
 jobs:
@@ -72,7 +72,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: "1.21"
 
       - name: Extract version
         id: version
@@ -343,11 +343,7 @@ jobs:
           - [Verification Guide](https://github.com/Polar-Team/diffusion/blob/main/docs/verification.md)
 
           ---
-
-          **Full Changelog**: https://github.com/Polar-Team/diffusion/compare/v$PREVIOUS_VERSION...v$VERSION
           EOF
-
-          sed -i "s/\$VERSION/$VERSION/g" release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -413,7 +409,7 @@ jobs:
           # Download provenance file to calculate its checksum
           $provenanceUrl = "https://github.com/Polar-Team/diffusion/releases/download/v$version/multiple.intoto.jsonl"
           Write-Host "Downloading provenance file from: $provenanceUrl"
-          
+
           # Retry logic for provenance file (it may take time to be uploaded)
           $maxAttempts = 20
           $downloaded = $false
