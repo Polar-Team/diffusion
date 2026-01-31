@@ -55,6 +55,8 @@ $packageArgs = @{
 Write-Host "Downloading $archiveName..." -ForegroundColor Cyan
 Install-ChocolateyZipPackage @packageArgs
 Write-Host "✓ Archive downloaded and checksum verified" -ForegroundColor Green
+Rename-Item -Path (Join-Path $unzipLocation "diffusion-windows-$arch.exe") -NewName "diffusion.exe" -Force
+Write-Host "✓ Diffusion has been installed successfully!" -ForegroundColor Green
 
 # Download and verify Cosign signature
 # $cosignVerified = $false
