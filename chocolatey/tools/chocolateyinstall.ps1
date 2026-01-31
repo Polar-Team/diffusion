@@ -58,8 +58,8 @@ $cosignVerified = $false
 try
 {
   Write-Host "Downloading Cosign signature and certificate..." -ForegroundColor Cyan
-  Get-ChocolateyWebFile -PackageName "$packageName-sig" -FileFullPath $sigPath -Url $sigUrl
-  Get-ChocolateyWebFile -PackageName "$packageName-pem" -FileFullPath $pemPath -Url $pemUrl
+  Get-ChocolateyWebFile -PackageName "$packageName-sig" -FileFullPath $sigPath -Url $sigUrl -Checksum $sigChecksum -ChecksumType 'sha256'
+  Get-ChocolateyWebFile -PackageName "$packageName-pem" -FileFullPath $pemPath -Url $pemUrl -Checksum $pemChecksum -ChecksumType 'sha256'
 
   # Check if cosign is available
   $cosignAvailable = Get-Command cosign -ErrorAction SilentlyContinue
@@ -98,7 +98,7 @@ $slsaVerified = $false
 try
 {
   Write-Host "Downloading SLSA provenance..." -ForegroundColor Cyan
-  Get-ChocolateyWebFile -PackageName "$packageName-provenance" -FileFullPath $provenancePath -Url $provenanceUrl
+  Get-ChocolateyWebFile -PackageName "$packageName-provenance" -FileFullPath $provenancePath -Url $provenanceUrl -Checksum $provenanceChecksum -ChecksumType 'sha256'
 
   # Check if slsa-verifier is available
   $slsaAvailable = Get-Command slsa-verifier -ErrorAction SilentlyContinue

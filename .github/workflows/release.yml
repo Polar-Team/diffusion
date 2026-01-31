@@ -151,7 +151,7 @@ jobs:
 
   checksums:
     name: Generate Checksums
-    needs: [combine-hashes]
+    needs: [combine-hashes, sign]
     runs-on: ubuntu-latest
 
     steps:
@@ -164,7 +164,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd bin
-          # Generate checksums using find to avoid glob issues
+          # Generate checksums for archives
           archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
 
           if [ -z "$archives" ]; then
@@ -172,7 +172,8 @@ jobs:
             exit 1
           fi
 
-          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \; | tee SHA256SUMS
+          # Generate checksums for all files: archives, signatures, and certificates
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sig' -o -name '*.pem' \) -exec sha256sum {} \; | tee SHA256SUMS
           echo "Checksums generated:"
           cat SHA256SUMS
 
@@ -409,6 +410,35 @@ jobs:
           Write-Host "Downloading SHA256SUMS from: $url"
           Invoke-WebRequest -Uri $url -OutFile SHA256SUMS
 
+          # Download provenance file to calculate its checksum
+          $provenanceUrl = "https://github.com/Polar-Team/diffusion/releases/download/v$version/multiple.intoto.jsonl"
+          Write-Host "Downloading provenance file from: $provenanceUrl"
+          
+          # Retry logic for provenance file (it may take time to be uploaded)
+          $maxAttempts = 30
+          $downloaded = $false
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            try {
+              Invoke-WebRequest -Uri $provenanceUrl -OutFile multiple.intoto.jsonl -ErrorAction Stop
+              $downloaded = $true
+              Write-Host "Provenance file downloaded successfully"
+              break
+            } catch {
+              Write-Host "Waiting for provenance file to be available... (attempt $i/$maxAttempts)"
+              Start-Sleep -Seconds 10
+            }
+          }
+
+          if ($downloaded) {
+            # Calculate and append provenance checksum
+            $provenanceHash = (Get-FileHash -Path multiple.intoto.jsonl -Algorithm SHA256).Hash.ToLower()
+            Add-Content -Path SHA256SUMS -Value "$provenanceHash  ./multiple.intoto.jsonl"
+            Remove-Item multiple.intoto.jsonl
+            Write-Host "Added provenance checksum: $provenanceHash"
+          } else {
+            Write-Warning "Provenance file not available after $maxAttempts attempts"
+          }
+
           # Display checksums for verification
           Write-Host "`nSHA256 Checksums:"
           Get-Content SHA256SUMS
@@ -419,32 +449,96 @@ jobs:
           # Extract checksums for Windows binaries from SHA256SUMS
           $checksums = Get-Content SHA256SUMS
 
+          # Extract archive checksums
           $amd64Checksum = ($checksums | Select-String "diffusion-windows-amd64.zip" | `
+            Where-Object { $_ -notmatch '\.sig|\.pem' } | `
             ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
           $arm64Checksum = ($checksums | Select-String "diffusion-windows-arm64.zip" | `
+            Where-Object { $_ -notmatch '\.sig|\.pem' } | `
             ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
           $armChecksum = ($checksums | Select-String "diffusion-windows-arm.zip" | `
+            Where-Object { $_ -notmatch '\.sig|\.pem' } | `
+            ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+
+          # Extract signature file checksums
+          $amd64SigChecksum = ($checksums | Select-String "diffusion-windows-amd64.zip.sig" | `
+            ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+          $arm64SigChecksum = ($checksums | Select-String "diffusion-windows-arm64.zip.sig" | `
+            ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+          $armSigChecksum = ($checksums | Select-String "diffusion-windows-arm.zip.sig" | `
+            ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+
+          # Extract certificate file checksums
+          $amd64PemChecksum = ($checksums | Select-String "diffusion-windows-amd64.zip.pem" | `
+            ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+          $arm64PemChecksum = ($checksums | Select-String "diffusion-windows-arm64.zip.pem" | `
+            ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+          $armPemChecksum = ($checksums | Select-String "diffusion-windows-arm.zip.pem" | `
+            ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
+
+          # Extract provenance checksum (architecture-independent)
+          $provenanceChecksum = ($checksums | Select-String "multiple.intoto.jsonl" | `
             ForEach-Object { $_.Line -split '\s+' } | Select-Object -First 1)
 
           # Validate that all checksums were extracted
           if (-not $amd64Checksum -or -not $arm64Checksum -or -not $armChecksum) {
-            Write-Error "Failed to extract all required checksums from SHA256SUMS"
+            Write-Error "Failed to extract all required archive checksums from SHA256SUMS"
             Write-Host "SHA256SUMS content:"
             Get-Content SHA256SUMS
             exit 1
           }
 
-          Write-Host "Extracted Checksums:"
+          if (-not $amd64SigChecksum -or -not $arm64SigChecksum -or -not $armSigChecksum) {
+            Write-Error "Failed to extract all required signature checksums from SHA256SUMS"
+            Write-Host "SHA256SUMS content:"
+            Get-Content SHA256SUMS
+            exit 1
+          }
+
+          if (-not $amd64PemChecksum -or -not $arm64PemChecksum -or -not $armPemChecksum) {
+            Write-Error "Failed to extract all required certificate checksums from SHA256SUMS"
+            Write-Host "SHA256SUMS content:"
+            Get-Content SHA256SUMS
+            exit 1
+          }
+
+          if (-not $provenanceChecksum) {
+            Write-Error "Provenance checksum not found in SHA256SUMS - this is required for Chocolatey publishing"
+            Write-Host "SHA256SUMS content:"
+            Get-Content SHA256SUMS
+            exit 1
+          }
+
+          Write-Host "Extracted Archive Checksums:"
           Write-Host "AMD64: $amd64Checksum"
           Write-Host "ARM64: $arm64Checksum"
           Write-Host "ARM: $armChecksum"
+          Write-Host ""
+          Write-Host "Extracted Signature Checksums:"
+          Write-Host "AMD64: $amd64SigChecksum"
+          Write-Host "ARM64: $arm64SigChecksum"
+          Write-Host "ARM: $armSigChecksum"
+          Write-Host ""
+          Write-Host "Extracted Certificate Checksums:"
+          Write-Host "AMD64: $amd64PemChecksum"
+          Write-Host "ARM64: $arm64PemChecksum"
+          Write-Host "ARM: $armPemChecksum"
+          Write-Host ""
+          Write-Host "Extracted Provenance Checksum: $provenanceChecksum"
 
           # Run the update script
           .\.github\scripts\update-chocolatey.ps1 `
             -Version "${{ steps.version.outputs.version }}" `
             -Amd64Checksum "$amd64Checksum" `
             -Arm64Checksum "$arm64Checksum" `
-            -ArmChecksum "$armChecksum"
+            -ArmChecksum "$armChecksum" `
+            -Amd64SigChecksum "$amd64SigChecksum" `
+            -Arm64SigChecksum "$arm64SigChecksum" `
+            -ArmSigChecksum "$armSigChecksum" `
+            -Amd64PemChecksum "$amd64PemChecksum" `
+            -Arm64PemChecksum "$arm64PemChecksum" `
+            -ArmPemChecksum "$armPemChecksum" `
+            -ProvenanceChecksum "$provenanceChecksum"
 
       - name: Install Chocolatey
         shell: pwsh
