@@ -4,11 +4,11 @@
     <id>diffusion</id>
     <version>1.0.0</version>
     <title>Diffusion</title>
-    <authors>Polar-Team</authors>
-    <owners>Polar-Team</owners>
+    <authors>Morshimus</authors>
+    <owners>Morshimus</owners>
     <licenseUrl>https://github.com/Polar-Team/diffusion/blob/main/LICENSE</licenseUrl>
     <projectUrl>https://github.com/Polar-Team/diffusion</projectUrl>
-    <iconUrl>https://raw.githubusercontent.com/Polar-Team/diffusion/main/img/logo.jpg</iconUrl>
+    <iconUrl>https://raw.githubusercontent.com/Polar-Team/diffusion/main/img/logo.png</iconUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <description>
 Diffusion is a powerful Go-based CLI framework for simplifying Ansible role testing with Molecule.
@@ -34,7 +34,6 @@ After installation, run `diffusion --help` to get started.
     <releaseNotes>https://github.com/Polar-Team/diffusion/releases</releaseNotes>
     <copyright>Polar-Team</copyright>
     <tags>ansible molecule testing devops automation cli docker go</tags>
-    <projectSourceUrl>https://github.com/Polar-Team/diffusion</projectSourceUrl>
     <packageSourceUrl>https://github.com/Polar-Team/diffusion/tree/main/chocolatey</packageSourceUrl>
     <docsUrl>https://github.com/Polar-Team/diffusion/blob/main/README.md</docsUrl>
     <bugTrackerUrl>https://github.com/Polar-Team/diffusion/issues</bugTrackerUrl>
