@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>diffusion</id>
-    <version>0.0.0</version>
+    <version>1.0.0</version>
     <title>Diffusion</title>
     <authors>Polar-Team</authors>
     <owners>Polar-Team</owners>
@@ -43,3 +43,4 @@ After installation, run `diffusion --help` to get started.
     <file src="tools\**" target="tools" />
   </files>
 </package>
+
