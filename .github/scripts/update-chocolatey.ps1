@@ -83,27 +83,6 @@ $newChecksumLogic = @"
     'arm64' = '$Arm64Checksum'
     'arm'   = '$ArmChecksum'
 }
-
-# Architecture-specific checksums for signature files
-`$sigChecksums = @{
-    'amd64' = '$Amd64SigChecksum'
-    'arm64' = '$Arm64SigChecksum'
-    'arm'   = '$ArmSigChecksum'
-}
-
-# Architecture-specific checksums for certificate files
-`$pemChecksums = @{
-    'amd64' = '$Amd64PemChecksum'
-    'arm64' = '$Arm64PemChecksum'
-    'arm'   = '$ArmPemChecksum'
-}
-
-# Provenance checksum (architecture-independent)
-`$provenanceChecksum = '$ProvenanceChecksum'
-
-`$checksum = `$checksums[`$arch]
-`$sigChecksum = `$sigChecksums[`$arch]
-`$pemChecksum = `$pemChecksums[`$arch]
 "@
 
 # Find the line with download paths comments and insert checksum logic after provenanceUrl
