@@ -8,26 +8,13 @@ $packageName = 'diffusion'
 # $toolsDir = "$(Split-Path -parent $MyInvocation.MyCommand.Definition)"
 $version = $env:ChocolateyPackageVersion
 
-# Determine system architecture
-$arch = if ([Environment]::Is64BitOperatingSystem)
-{
-  if ([Environment]::GetEnvironmentVariable("PROCESSOR_ARCHITECTURE") -eq 'ARM64')
-  {
-    'arm64'
-  } else
-  {
-    'amd64'
-  }
-} else
-{
-  'arm'
-}
+
 
 # GitHub release URL base
 $releaseUrlBase = "https://github.com/Polar-Team/diffusion/releases/download/v$version"
 
 # Determine the correct download URLs
-$archiveName = "diffusion-windows-$arch.zip"
+$archiveName = "diffusion-windows-amd64.zip"
 $url = "$releaseUrlBase/$archiveName"
 
 # Download paths
