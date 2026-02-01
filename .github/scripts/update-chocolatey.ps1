@@ -109,23 +109,23 @@ $newChecksumLogic = @"
 # Find the line with download paths comments and insert checksum logic after provenanceUrl
 $lines = $scriptContent -split "`r?`n"
 $newLines = @()
-$provenanceUrlLineFound = $false
+$checksumsBlockLineFound = $false
 
 foreach ($line in $lines)
 {
   $newLines += $line
-  if (-not $provenanceUrlLineFound -and $line -match '^\DO\s*NOT\s*EDIT\s*BELOW\s*CHECKSUMS\s*')
+  if (-not $checksumsBlockLineFound -and $line -match '^\#DO\s*NOT\s*EDIT\s*BELOW\s*CHECKSUMS\s*')
   {
-    $provenanceUrlLineFound = $true
+    $checksumsBlockLineFound = $true
     # Add empty line and checksum logic after the provenanceUrl line
     $newLines += ""
     $newLines += $newChecksumLogic.Split("`n")
   }
 }
 
-if (-not $provenanceUrlLineFound)
+if (-not $checksumsBlockLineFound)
 {
-  throw "Could not find `$provenanceUrl line in install script"
+  throw "Could not find DO NOT EDIT BELOW CHECKSUMS block."
 }
 
 # Replace the empty checksum placeholder
