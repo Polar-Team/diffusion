@@ -33,7 +33,7 @@ $url = "$releaseUrlBase/$archiveName"
 # Download paths
 $unzipLocation = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
-#DO NOT EDIT BELOW CHECSUMS - they are auto-generated during the build process
+# DO NOT EDIT BELOW CHECSUMS - they are auto-generated during the build process
 
 
 

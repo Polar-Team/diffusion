@@ -114,7 +114,7 @@ $checksumsBlockLineFound = $false
 foreach ($line in $lines)
 {
   $newLines += $line
-  if (-not $checksumsBlockLineFound -and $line -match '^\#DO\s*NOT\s*EDIT\s*BELOW\s*CHECKSUMS\s*')
+  if (-not $checksumsBlockLineFound -and $line -match '^\# DO NOT EDIT BELOW CHECKSUMS ')
   {
     $checksumsBlockLineFound = $true
     # Add empty line and checksum logic after the provenanceUrl line
