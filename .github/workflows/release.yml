@@ -99,6 +99,7 @@ jobs:
             cp "${{ matrix.binary }}" diffusion
             tar -czf "$ARCHIVE_NAME" "diffusion"
             echo "Created: $ARCHIVE_NAME"
+            rm "diffusion"
           else
             # For Windows, remove .exe from archive name
             BINARY_BASE="${{ matrix.binary }}"
@@ -107,6 +108,7 @@ jobs:
             cp "${{ matrix.binary }}" diffusion.exe
             zip "$ARCHIVE_NAME" "diffusion.exe"
             echo "Created: $ARCHIVE_NAME"
+            rm "diffusion.exe"
           fi
           # Remove the binary, keep only the archive
           rm "${{ matrix.binary }}"
