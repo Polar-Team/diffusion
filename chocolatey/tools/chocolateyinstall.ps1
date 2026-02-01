@@ -37,7 +37,7 @@ $packageArgs = @{
 # Download the archive with checksum verification
 Write-Host "Downloading $archiveName..." -ForegroundColor Cyan
 Install-ChocolateyZipPackage @packageArgs
-Write-Host "✓ Archive downloaded and checksum verified" -ForegroundColor Green
+Write-Host "Archive downloaded and checksum verified" -ForegroundColor Green
 
 
 
