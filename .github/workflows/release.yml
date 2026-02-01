@@ -96,14 +96,16 @@ jobs:
           cd bin
           if [ "${{ matrix.archive_type }}" = "tar.gz" ]; then
             ARCHIVE_NAME="${{ matrix.binary }}.tar.gz"
-            tar -czf "$ARCHIVE_NAME" "${{ matrix.binary }}"
+            cp "${{ matrix.binary }}" diffusion
+            tar -czf "$ARCHIVE_NAME" "diffusion"
             echo "Created: $ARCHIVE_NAME"
           else
             # For Windows, remove .exe from archive name
             BINARY_BASE="${{ matrix.binary }}"
             BINARY_BASE="${BINARY_BASE%.exe}"
             ARCHIVE_NAME="${BINARY_BASE}.zip"
-            zip "$ARCHIVE_NAME" "${{ matrix.binary }}"
+            cp "${{ matrxi.binary }}" diffusion.exe
+            zip "$ARCHIVE_NAME" "diffusion.exe"
             echo "Created: $ARCHIVE_NAME"
           fi
           # Remove the binary, keep only the archive

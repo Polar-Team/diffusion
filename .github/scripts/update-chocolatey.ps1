@@ -114,7 +114,7 @@ $provenanceUrlLineFound = $false
 foreach ($line in $lines)
 {
   $newLines += $line
-  if (-not $provenanceUrlLineFound -and $line -match '^\# $provenanceUrl = ')
+  if (-not $provenanceUrlLineFound -and $line -match '^\DO\s*NOT\s*EDIT\s*BELOW\s*CHECKSUMS\s*')
   {
     $provenanceUrlLineFound = $true
     # Add empty line and checksum logic after the provenanceUrl line

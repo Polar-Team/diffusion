@@ -387,31 +387,159 @@ EXPECT_SCRIPT
       iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
       Write-Host "=========================================="
+      Write-Host "Installing Cygwin with expect..."
+      Write-Host "=========================================="
+
+      # Install Cygwin with expect package
+      choco install cygwin -y
+      choco install cyg-get -y
+
+      # Install expect via Cygwin package manager
+      C:\\tools\\cygwin\\cygwinsetup.exe -q -P expect
+
+      Write-Host "=========================================="
       Write-Host "Installing Go and Git..."
       Write-Host "=========================================="
 
       # Install Go and Git
-      choco install golang git -y
+      choco install golang git docker-desktop -y
 
       # Refresh environment
       $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+      Write-Host "=========================================="
+      Write-Host "Setup WSL2 backend for Docker..."
+      Write-Host "=========================================="
+
+      wsl --set-default-version 2
+      wsl --install -d Ubuntu
 
       Write-Host "=========================================="
       Write-Host "Building diffusion..."
       Write-Host "=========================================="
 
       cd C:\\diffusion
-      go build -o bin/diffusion.exe
+      go build -buildvcs=false -o bin/diffusion.exe
 
       Write-Host "=========================================="
-      Write-Host "Running tests..."
+      Write-Host "Running unit tests..."
       Write-Host "=========================================="
 
       go test -v
 
       Write-Host "=========================================="
-      Write-Host "All tests passed on Windows!"
+      Write-Host "Running E2E tests with expect..."
       Write-Host "=========================================="
+
+      # Create test directory
+      if (Test-Path C:\\test) { Remove-Item -Recurse -Force C:\\test }
+      New-Item -ItemType Directory -Path C:\\test
+      cd C:\\test
+
+      # Test 1: Initialize a new role using Cygwin expect
+      Write-Host 'Test 1: Initialize new role...'
+
+      # Create expect script for Windows
+      @"
+#!/usr/bin/expect -f
+set timeout 30
+spawn C:/diffusion/bin/diffusion.exe role --init
+expect "Enter role name:"
+send "test_role\r"
+expect "What namespace of the role should be?:"
+send "testorg\r"
+expect "What company of the role should be?:"
+send "Test Company\r"
+expect "What author of the role should be?:"
+send "Test Author\r"
+expect "Description of the role (optional):"
+send "Test role for E2E testing\r"
+expect "Enter platforms? (y/n):"
+send "n\r"
+expect "Galaxy Tags (comma-separated) (optional):"
+send "test,e2e\r"
+expect "Collections required (comma-separated) (optional):"
+send "\r"
+expect "Enter roles to add? (y/n):"
+send "n\r"
+expect eof
+"@ | Out-File -FilePath C:\\test\\test_init.exp -Encoding ASCII
+
+      # Run expect script via Cygwin
+      C:\\tools\\cygwin\\bin\\bash.exe -c 'expect /cygdrive/c/test/test_init.exp'
+
+      # Verify role was created
+      if (Test-Path C:\\test\\test_role) {
+        Write-Host 'Role initialization successful'
+      } else {
+        Write-Host 'Role initialization failed'
+        exit 1
+      }
+
+      cd C:\\test\\test_role
+
+      # Test 2: Create diffusion config using expect
+      Write-Host 'Test 2: Create diffusion config...'
+
+      @"
+#!/usr/bin/expect -f
+set timeout 60
+spawn C:/diffusion/bin/diffusion.exe molecule --role test_role --org myorg
+expect "Enter RegistryServer*"
+send "\r"
+expect "Enter RegistryProvider*"
+send "\r"
+expect "Enter MoleculeContainerName*"
+send "\r"
+expect "Enter MoleculeContainerTag*"
+send "\r"
+expect "Enable Vault Integration for artifact sources?*"
+send "n\r"
+expect "Configure artifact sources for private repositories?*"
+send "n\r"
+expect "What type of configuration you want use?*"
+send "\r"
+expect eof
+"@ | Out-File -FilePath C:\\test\\test_role\\test_config.exp -Encoding ASCII
+
+      C:\\tools\\cygwin\\bin\\bash.exe -c 'expect /cygdrive/c/test/test_role/test_config.exp'
+
+      # Verify config was created
+      if (Test-Path C:\\test\\test_role\\diffusion.toml) {
+        Write-Host 'Config creation successful'
+      } else {
+        Write-Host 'Config creation failed'
+        exit 1
+      }
+
+      # Test 3: Test cache feature
+      Write-Host 'Test 3: Test cache feature...'
+      C:\\diffusion\\bin\\diffusion.exe cache enable
+      C:\\diffusion\\bin\\diffusion.exe cache status
+
+      if (Test-Path $env:USERPROFILE\\.diffusion\\cache) {
+        Write-Host 'Cache directory created'
+      } else {
+        Write-Host 'Cache directory not created'
+        exit 1
+      }
+
+      # Test 4: Test artifact management
+      Write-Host 'Test 4: Test artifact management...'
+      C:\\diffusion\\bin\\diffusion.exe artifact list
+
+      Write-Host '=========================================='
+      Write-Host 'All E2E tests passed on Windows!'
+      Write-Host '=========================================='
+
+      # Print summary
+      Write-Host ''
+      Write-Host 'Summary:'
+      Write-Host '  - Go version: $(go version)'
+      Write-Host '  - Diffusion built successfully'
+      Write-Host '  - All unit tests passed'
+      Write-Host '  - All E2E tests passed with Cygwin expect'
+      Write-Host ''
     SHELL
 
   elsif box_config[:os_family] == "macos"
