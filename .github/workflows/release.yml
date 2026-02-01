@@ -104,7 +104,7 @@ jobs:
             BINARY_BASE="${{ matrix.binary }}"
             BINARY_BASE="${BINARY_BASE%.exe}"
             ARCHIVE_NAME="${BINARY_BASE}.zip"
-            cp "${{ matrxi.binary }}" diffusion.exe
+            cp "${{ matrix.binary }}" diffusion.exe
             zip "$ARCHIVE_NAME" "diffusion.exe"
             echo "Created: $ARCHIVE_NAME"
           fi
