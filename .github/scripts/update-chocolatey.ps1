@@ -114,7 +114,7 @@ $checksumsBlockLineFound = $false
 foreach ($line in $lines)
 {
   $newLines += $line
-  if (-not $checksumsBlockLineFound -and $line -match '^\# DO NOT EDIT BELOW CHECKSUMS ')
+  if (-not $checksumsBlockLineFound -and $line -match '^\#\s*DO\s*NOT\s*EDIT\s*BELOW\s*CHECKSUMS\s*')
   {
     $checksumsBlockLineFound = $true
     # Add empty line and checksum logic after the provenanceUrl line
@@ -125,7 +125,7 @@ foreach ($line in $lines)
 
 if (-not $checksumsBlockLineFound)
 {
-  throw "Could not find DO NOT EDIT BELOW CHECKSUMS block."
+  throw "Could not found checksums block."
 }
 
 # Replace the empty checksum placeholder
