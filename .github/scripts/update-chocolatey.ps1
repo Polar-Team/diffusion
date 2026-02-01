@@ -78,11 +78,7 @@ $scriptContent = Get-Content $installScript -Raw
 # Replace the checksum logic to use architecture-specific checksums
 $newChecksumLogic = @"
 # Architecture-specific checksums for archives
-`$checksums = @{
-    'amd64' = '$Amd64Checksum'
-    'arm64' = '$Arm64Checksum'
-    'arm'   = '$ArmChecksum'
-}
+`$checksums = '$Amd64Checksum'
 "@
 
 # Find the line with download paths comments and insert checksum logic after provenanceUrl
@@ -108,7 +104,7 @@ if (-not $checksumsBlockLineFound)
 }
 
 # Replace the empty checksum placeholder
-$updatedScript = ($newLines -join "`n") -replace "Checksum\s*=\s*''", "Checksum = `$checksum"
+$updatedScript = ($newLines -join "`n") -replace "Checksum64\s*=\s*''", "Checksum64 = `$checksum"
 
 Set-Content -Path $installScript -Value $updatedScript
 

@@ -41,9 +41,9 @@ $unzipLocation = Split-Path -Parent $MyInvocation.MyCommand.Definition
 # Set package parameters for archive download
 $packageArgs = @{
   PackageName    = $packageName
-  UnzipLocation   = $unzipLocation
-  Url            = $url
-  Checksum       = ''
+  UnzipLocation  = $unzipLocation
+  Url64          = $url
+  Checksum64     = ''
   ChecksumType   = 'sha256'
 }
 
