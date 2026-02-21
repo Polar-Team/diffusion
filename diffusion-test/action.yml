@@ -36,7 +36,18 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Install Diffusion
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Install SLSA verifier
+      shell: bash
+      run: |
+        SLSA_VERSION="v2.7.0"
+        wget -qO /tmp/slsa-verifier "https://github.com/slsa-framework/slsa-verifier/releases/download/${SLSA_VERSION}/slsa-verifier-linux-amd64"
+        chmod +x /tmp/slsa-verifier
+        sudo mv /tmp/slsa-verifier /usr/local/bin/slsa-verifier
+
+    - name: Download Diffusion
       shell: bash
       run: |
         if [ "${{ inputs.diffusion-version }}" = "latest" ]; then
@@ -44,7 +55,8 @@ runs:
         else
           LATEST_RELEASE="${{ inputs.diffusion-version }}"
         fi
-        
+        echo "DIFFUSION_RELEASE=${LATEST_RELEASE}" >> "$GITHUB_ENV"
+
         ARCH=$(uname -m)
         if [ "$ARCH" = "x86_64" ]; then
           ARCHIVE_NAME="diffusion-linux-amd64.tar.gz"
@@ -54,18 +66,53 @@ runs:
           echo "Unsupported architecture: $ARCH"
           exit 1
         fi
-        
-        DOWNLOAD_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}/${ARCHIVE_NAME}"
-        
-        echo "Downloading Diffusion ${LATEST_RELEASE} for ${ARCH}..."
-        wget -O /tmp/diffusion.tar.gz "$DOWNLOAD_URL"
-        
+        echo "DIFFUSION_ARCHIVE=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
+
+        BASE_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}"
+        echo "Downloading Diffusion ${LATEST_RELEASE} (${ARCHIVE_NAME})..."
+        wget -qO /tmp/diffusion.tar.gz        "${BASE_URL}/${ARCHIVE_NAME}"
+        wget -qO /tmp/diffusion.tar.gz.sig    "${BASE_URL}/${ARCHIVE_NAME}.sig"
+        wget -qO /tmp/diffusion.tar.gz.pem    "${BASE_URL}/${ARCHIVE_NAME}.pem"
+        wget -qO /tmp/SHA256SUMS              "${BASE_URL}/SHA256SUMS"
+        wget -qO /tmp/multiple.intoto.jsonl   "${BASE_URL}/multiple.intoto.jsonl"
+
+    - name: Verify SHA256 checksum
+      shell: bash
+      run: |
+        cd /tmp
+        grep "${DIFFUSION_ARCHIVE}" SHA256SUMS | sha256sum --check --ignore-missing
+        echo "Checksum verified."
+
+    - name: Verify Cosign signature
+      shell: bash
+      run: |
+        cosign verify-blob \
+          --certificate /tmp/diffusion.tar.gz.pem \
+          --signature /tmp/diffusion.tar.gz.sig \
+          --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" \
+          --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+          /tmp/diffusion.tar.gz
+        echo "Cosign signature verified."
+
+    - name: Verify SLSA provenance
+      shell: bash
+      run: |
+        slsa-verifier verify-artifact /tmp/diffusion.tar.gz \
+          --provenance-path /tmp/multiple.intoto.jsonl \
+          --source-uri github.com/Polar-Team/diffusion \
+          --source-tag "${DIFFUSION_RELEASE}"
+        echo "SLSA provenance verified."
+
+    - name: Install Diffusion
+      shell: bash
+      run: |
         echo "Extracting archive..."
         tar -xzf /tmp/diffusion.tar.gz -C /tmp
         chmod +x /tmp/diffusion
         sudo mv /tmp/diffusion /usr/local/bin/diffusion
-        rm /tmp/diffusion.tar.gz
-        
+        rm /tmp/diffusion.tar.gz /tmp/diffusion.tar.gz.sig /tmp/diffusion.tar.gz.pem \
+           /tmp/SHA256SUMS /tmp/multiple.intoto.jsonl
+
         echo "Verifying installation..."
         diffusion version
 
