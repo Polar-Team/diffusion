@@ -1,0 +1,23 @@
+---
+# Example: Basic Diffusion Testing Workflow
+# Copy this file to your role repository as .github/workflows/test.yml
+
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Diffusion Molecule Tests
+    uses: Polar-Team/diffusion/actions/diffusion-test@dev-ci-github-action-template
+    with:
+      diffusion-version: 'latest'
+      run-lint: true
+      run-verify: true
+      run-idempotence: true
