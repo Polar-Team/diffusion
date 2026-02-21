@@ -81,15 +81,6 @@ func TestArtifactSourceStructure(t *testing.T) {
 // TestConfigWithArtifactSources tests Config with multiple artifact sources
 func TestConfigWithArtifactSources(t *testing.T) {
 	cfg := &config.Config{
-		ContainerRegistry: &config.ContainerRegistry{
-			RegistryServer:        "ghcr.io",
-			RegistryProvider:      "Public",
-			MoleculeContainerName: "test-container",
-			MoleculeContainerTag:  "latest",
-		},
-		HashicorpVault: &config.HashicorpVault{
-			HashicorpVaultIntegration: true,
-		},
 		ArtifactSources: []config.ArtifactSource{
 			{
 				Name:     "source1",
@@ -105,19 +96,6 @@ func TestConfigWithArtifactSources(t *testing.T) {
 				VaultUsernameField: "user",
 				VaultTokenField:    "pass",
 			},
-		},
-		YamlLintConfig: &config.YamlLint{
-			Extends: "default",
-			Ignore:  []string{".git/*"},
-			Rules:   &config.YamlLintRules{},
-		},
-		AnsibleLintConfig: &config.AnsibleLint{
-			ExcludedPaths: []string{"test/*"},
-			WarnList:      []string{},
-			SkipList:      []string{},
-		},
-		TestsConfig: &config.TestsSettings{
-			Type: "diffusion",
 		},
 	}
 
@@ -143,45 +121,15 @@ func TestConfigWithArtifactSources(t *testing.T) {
 
 // TestBackwardCompatibilityArtifactUrl tests backward compatibility with ArtifactUrl
 func TestBackwardCompatibilityArtifactUrl(t *testing.T) {
-	// Old config with ArtifactUrl
-	oldConfig := &config.Config{
-		ContainerRegistry: &config.ContainerRegistry{
-			RegistryServer:        "ghcr.io",
-			RegistryProvider:      "Public",
-			MoleculeContainerName: "test",
-			MoleculeContainerTag:  "latest",
-		},
-		HashicorpVault: &config.HashicorpVault{
-			HashicorpVaultIntegration: false,
-		},
-		YamlLintConfig: &config.YamlLint{
-			Extends: "default",
-			Ignore:  []string{},
-			Rules:   &config.YamlLintRules{},
-		},
-		AnsibleLintConfig: &config.AnsibleLint{
-			ExcludedPaths: []string{},
-			WarnList:      []string{},
-			SkipList:      []string{},
-		},
-		TestsConfig: &config.TestsSettings{
-			Type: "diffusion",
-		},
-	}
 
 	// New config should use ArtifactSources
 	newConfig := &config.Config{
-		ContainerRegistry: oldConfig.ContainerRegistry,
-		HashicorpVault:    oldConfig.HashicorpVault,
 		ArtifactSources: []config.ArtifactSource{
 			{
 				Name:     "legacy-migration",
 				UseVault: false,
 			},
 		},
-		YamlLintConfig:    oldConfig.YamlLintConfig,
-		AnsibleLintConfig: oldConfig.AnsibleLintConfig,
-		TestsConfig:       oldConfig.TestsConfig,
 	}
 
 	if len(newConfig.ArtifactSources) != 1 {
@@ -192,31 +140,7 @@ func TestBackwardCompatibilityArtifactUrl(t *testing.T) {
 
 // TestEmptyArtifactSources tests config with no artifact sources
 func TestEmptyArtifactSources(t *testing.T) {
-	cfg := &config.Config{
-		ContainerRegistry: &config.ContainerRegistry{
-			RegistryServer:        "ghcr.io",
-			RegistryProvider:      "Public",
-			MoleculeContainerName: "test",
-			MoleculeContainerTag:  "latest",
-		},
-		HashicorpVault: &config.HashicorpVault{
-			HashicorpVaultIntegration: false,
-		},
-		ArtifactSources: []config.ArtifactSource{}, // Empty
-		YamlLintConfig: &config.YamlLint{
-			Extends: "default",
-			Ignore:  []string{},
-			Rules:   &config.YamlLintRules{},
-		},
-		AnsibleLintConfig: &config.AnsibleLint{
-			ExcludedPaths: []string{},
-			WarnList:      []string{},
-			SkipList:      []string{},
-		},
-		TestsConfig: &config.TestsSettings{
-			Type: "diffusion",
-		},
-	}
+	cfg := &config.Config{}
 
 	if len(cfg.ArtifactSources) != 0 {
 		t.Errorf("expected 0 artifact sources, got %d", len(cfg.ArtifactSources))

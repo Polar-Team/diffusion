@@ -23,17 +23,17 @@ func NewDepsCmd(cli *CLI) *cobra.Command {
 Generates diffusion.lock file and updates pyproject.toml for the molecule container.`,
 	}
 
-	depsCmd.AddCommand(newDepsLockCmd(cli))
-	depsCmd.AddCommand(newDepsCheckCmd(cli))
-	depsCmd.AddCommand(newDepsResolveCmd(cli))
-	depsCmd.AddCommand(newDepsInitCmd(cli))
-	depsCmd.AddCommand(newDepsSyncCmd(cli))
+	depsCmd.AddCommand(newDepsLockCmd())
+	depsCmd.AddCommand(newDepsCheckCmd())
+	depsCmd.AddCommand(newDepsResolveCmd())
+	depsCmd.AddCommand(newDepsInitCmd())
+	depsCmd.AddCommand(newDepsSyncCmd())
 
 	return depsCmd
 }
 
 // newDepsLockCmd creates the lock subcommand
-func newDepsLockCmd(cli *CLI) *cobra.Command {
+func newDepsLockCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "lock",
 		Short: "Generate or update diffusion.lock file",
@@ -51,7 +51,7 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 }
 
 // newDepsCheckCmd creates the check subcommand
-func newDepsCheckCmd(cli *CLI) *cobra.Command {
+func newDepsCheckCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "check",
 		Short: "Check if lock file is up-to-date",
@@ -73,7 +73,7 @@ func newDepsCheckCmd(cli *CLI) *cobra.Command {
 }
 
 // newDepsResolveCmd creates the resolve subcommand
-func newDepsResolveCmd(cli *CLI) *cobra.Command {
+func newDepsResolveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "resolve",
 		Short: "Resolve and display all dependencies with actual versions",
@@ -151,7 +151,7 @@ func newDepsResolveCmd(cli *CLI) *cobra.Command {
 }
 
 // newDepsInitCmd creates the init subcommand
-func newDepsInitCmd(cli *CLI) *cobra.Command {
+func newDepsInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
 		Short: "Initialize dependency configuration in diffusion.toml",
@@ -317,7 +317,7 @@ func newDepsInitCmd(cli *CLI) *cobra.Command {
 }
 
 // newDepsSyncCmd creates the sync subcommand
-func newDepsSyncCmd(cli *CLI) *cobra.Command {
+func newDepsSyncCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "sync",
 		Short: "Sync dependencies from lock file to requirements.yml and meta.yml",

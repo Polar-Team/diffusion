@@ -16,16 +16,16 @@ func NewCacheCmd(cli *CLI) *cobra.Command {
 		Short: "Manage Ansible cache for faster role execution",
 	}
 
-	cacheCmd.AddCommand(newCacheEnableCmd(cli))
-	cacheCmd.AddCommand(newCacheDisableCmd(cli))
-	cacheCmd.AddCommand(newCacheCleanCmd(cli))
-	cacheCmd.AddCommand(newCacheStatusCmd(cli))
-	cacheCmd.AddCommand(newCacheListCmd(cli))
+	cacheCmd.AddCommand(newCacheEnableCmd())
+	cacheCmd.AddCommand(newCacheDisableCmd())
+	cacheCmd.AddCommand(newCacheCleanCmd())
+	cacheCmd.AddCommand(newCacheStatusCmd())
+	cacheCmd.AddCommand(newCacheListCmd())
 
 	return cacheCmd
 }
 
-func newCacheEnableCmd(cli *CLI) *cobra.Command {
+func newCacheEnableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "enable",
 		Short: "Enable Ansible cache for this role",
@@ -66,7 +66,7 @@ func newCacheEnableCmd(cli *CLI) *cobra.Command {
 	}
 }
 
-func newCacheDisableCmd(cli *CLI) *cobra.Command {
+func newCacheDisableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disable",
 		Short: "Disable Ansible cache for this role",
@@ -94,7 +94,7 @@ func newCacheDisableCmd(cli *CLI) *cobra.Command {
 	}
 }
 
-func newCacheCleanCmd(cli *CLI) *cobra.Command {
+func newCacheCleanCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clean",
 		Short: "Clean the Ansible cache for this role",
@@ -133,7 +133,7 @@ func newCacheCleanCmd(cli *CLI) *cobra.Command {
 	}
 }
 
-func newCacheStatusCmd(cli *CLI) *cobra.Command {
+func newCacheStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show cache status for this role",
@@ -169,7 +169,7 @@ func newCacheStatusCmd(cli *CLI) *cobra.Command {
 	}
 }
 
-func newCacheListCmd(cli *CLI) *cobra.Command {
+func newCacheListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all cache directories in home directory.",
