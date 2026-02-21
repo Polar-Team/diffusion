@@ -47,18 +47,24 @@ runs:
         
         ARCH=$(uname -m)
         if [ "$ARCH" = "x86_64" ]; then
-          DOWNLOAD_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}/diffusion-linux-amd64"
+          ARCHIVE_NAME="diffusion-linux-amd64.tar.gz"
         elif [ "$ARCH" = "aarch64" ]; then
-          DOWNLOAD_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}/diffusion-linux-arm64"
+          ARCHIVE_NAME="diffusion-linux-arm64.tar.gz"
         else
           echo "Unsupported architecture: $ARCH"
           exit 1
         fi
         
+        DOWNLOAD_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}/${ARCHIVE_NAME}"
+        
         echo "Downloading Diffusion ${LATEST_RELEASE} for ${ARCH}..."
-        wget -O /tmp/diffusion "$DOWNLOAD_URL"
+        wget -O /tmp/diffusion.tar.gz "$DOWNLOAD_URL"
+        
+        echo "Extracting archive..."
+        tar -xzf /tmp/diffusion.tar.gz -C /tmp
         chmod +x /tmp/diffusion
         sudo mv /tmp/diffusion /usr/local/bin/diffusion
+        rm /tmp/diffusion.tar.gz
         
         echo "Verifying installation..."
         diffusion version
