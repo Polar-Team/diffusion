@@ -85,6 +85,8 @@ func NewRoleCmd(cli *CLI) *cobra.Command {
 	// Add subcommands
 	roleCmd.AddCommand(newRoleAddRoleCmd(cli))
 	roleCmd.AddCommand(newRoleRemoveRoleCmd(cli))
+	roleCmd.AddCommand(NewRoleAddCollectionCmd(cli))
+	roleCmd.AddCommand(NewRoleRemoveCollectionCmd(cli))
 
 	return roleCmd
 }

@@ -19,15 +19,15 @@ func NewArtifactCmd(cli *CLI) *cobra.Command {
 		Short: "Manage private artifact repository credentials",
 	}
 
-	artifactCmd.AddCommand(newArtifactAddCmd(cli))
-	artifactCmd.AddCommand(newArtifactListCmd(cli))
-	artifactCmd.AddCommand(newArtifactRemoveCmd(cli))
-	artifactCmd.AddCommand(newArtifactShowCmd(cli))
+	artifactCmd.AddCommand(newArtifactAddCmd())
+	artifactCmd.AddCommand(newArtifactListCmd())
+	artifactCmd.AddCommand(newArtifactRemoveCmd())
+	artifactCmd.AddCommand(newArtifactShowCmd())
 
 	return artifactCmd
 }
 
-func newArtifactAddCmd(cli *CLI) *cobra.Command {
+func newArtifactAddCmd() *cobra.Command {
 	artifactAddCmd := &cobra.Command{
 		Use:   "add [source-name]",
 		Short: "Add credentials for a private artifact source",
@@ -142,7 +142,7 @@ func newArtifactAddCmd(cli *CLI) *cobra.Command {
 	return artifactAddCmd
 }
 
-func newArtifactListCmd(cli *CLI) *cobra.Command {
+func newArtifactListCmd() *cobra.Command {
 	artifactListCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all stored artifact sources",
@@ -173,7 +173,7 @@ func newArtifactListCmd(cli *CLI) *cobra.Command {
 	return artifactListCmd
 }
 
-func newArtifactRemoveCmd(cli *CLI) *cobra.Command {
+func newArtifactRemoveCmd() *cobra.Command {
 	artifactRemoveCmd := &cobra.Command{
 		Use:   "remove [source-name]",
 		Short: "Remove stored credentials for an artifact source",
@@ -221,7 +221,7 @@ func newArtifactRemoveCmd(cli *CLI) *cobra.Command {
 	return artifactRemoveCmd
 }
 
-func newArtifactShowCmd(cli *CLI) *cobra.Command {
+func newArtifactShowCmd() *cobra.Command {
 	artifactShowCmd := &cobra.Command{
 		Use:   "show [source-name]",
 		Short: "Show details for an artifact source (without token)",

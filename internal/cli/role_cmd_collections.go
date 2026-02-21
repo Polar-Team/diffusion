@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newRoleAddCollectionCmd creates the add-collection subcommand
-func newRoleAddCollectionCmd(cli *CLI) *cobra.Command {
+// NewRoleAddCollectionCmd creates the add-collection subcommand
+func NewRoleAddCollectionCmd(cli *CLI) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add-collection [collection-name]",
 		Short: "Add a collection to diffusion.toml (use 'deps sync' to update requirements.yml and meta.yml)",
@@ -84,7 +84,8 @@ func newRoleAddCollectionCmd(cli *CLI) *cobra.Command {
 	return cmd
 }
 
-func newRoleRemoveCollectionCmd(cli *CLI) *cobra.Command {
+// NewRoleRemoveCollectionCmd creates the remove-collection subcommand
+func NewRoleRemoveCollectionCmd(cli *CLI) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove-collection [collection-name]",
 		Short: "Remove a collection from diffusion.toml (use 'deps sync' to update requirements.yml and meta.yml)",
