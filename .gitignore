@@ -1,3 +1,6 @@
 bin/*
 molecule/*
 diffusion.toml
+
+# Git worktrees (not submodules — never stage these)
+dev-new-features
