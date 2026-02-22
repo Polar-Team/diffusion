@@ -97,7 +97,7 @@ help:
 build:
 	@echo "$(COLOR_GREEN)Building $(BINARY_NAME) for $(GOOS)/$(GOARCH)...$(COLOR_RESET)"
 	@mkdir -p $(BIN_DIR)
-	@go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)$(shell go env GOEXE) .
+	@go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)$(shell go env GOEXE) ./cmd/diffusion
 	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(BINARY_NAME)$(shell go env GOEXE)$(COLOR_RESET)"
 
 # Build for all platforms
@@ -114,19 +114,19 @@ linux: linux-amd64 linux-arm64 linux-arm
 linux-amd64:
 	@echo "$(COLOR_YELLOW)Building for Linux AMD64...$(COLOR_RESET)"
 	@mkdir -p $(BIN_DIR)
-	@GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 .
+	@GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/diffusion
 	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(BINARY_NAME)-linux-amd64$(COLOR_RESET)"
 
 linux-arm64:
 	@echo "$(COLOR_YELLOW)Building for Linux ARM64...$(COLOR_RESET)"
 	@mkdir -p $(BIN_DIR)
-	@GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm64 .
+	@GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/diffusion
 	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(BINARY_NAME)-linux-arm64$(COLOR_RESET)"
 
 linux-arm:
 	@echo "$(COLOR_YELLOW)Building for Linux ARM...$(COLOR_RESET)"
 	@mkdir -p $(BIN_DIR)
-	@GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm .
+	@GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm ./cmd/diffusion
 	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(BINARY_NAME)-linux-arm$(COLOR_RESET)"
 
 # macOS builds
