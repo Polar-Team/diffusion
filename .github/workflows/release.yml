@@ -266,7 +266,7 @@ jobs:
         id: notes
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          cat > release-notes.md << 'EOF'
+          cat > release-notes.md << EOF
           ## Diffusion $VERSION
 
           ### Installation
