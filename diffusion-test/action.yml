@@ -32,6 +32,18 @@ inputs:
     description: 'Working directory for the role'
     required: false
     default: '.'
+  cache-enabled:
+    description: 'Enable caching for Ansible roles, collections, and optionally UV/Docker'
+    required: false
+    default: 'false'
+  cache-uv:
+    description: 'Cache UV/Python packages (requires cache-enabled: true)'
+    required: false
+    default: 'false'
+  cache-docker:
+    description: 'Cache DinD Docker images as tarballs (requires cache-enabled: true)'
+    required: false
+    default: 'false'
 
 runs:
   using: 'composite'
@@ -116,6 +128,58 @@ runs:
         echo "Verifying installation..."
         diffusion version
 
+    # --- Cache setup ---
+    - name: Configure Diffusion cache
+      if: inputs.cache-enabled == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Configuring Diffusion cache"
+        CACHE_FLAGS=""
+        if [ "${{ inputs.cache-uv }}" = "true" ]; then
+          CACHE_FLAGS="${CACHE_FLAGS} --uv"
+        fi
+        if [ "${{ inputs.cache-docker }}" = "true" ]; then
+          CACHE_FLAGS="${CACHE_FLAGS} --docker"
+        fi
+        diffusion cache enable${CACHE_FLAGS}
+        echo "Cache configured:"
+        diffusion cache status
+        echo "::endgroup::"
+
+    - name: Compute cache key
+      if: inputs.cache-enabled == 'true'
+      id: cache-key
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        # Build a hash from dependency-relevant files
+        HASH_INPUT=""
+        if [ -f diffusion.toml ]; then
+          HASH_INPUT="${HASH_INPUT}$(cat diffusion.toml)"
+        fi
+        if [ -f requirements.yml ]; then
+          HASH_INPUT="${HASH_INPUT}$(cat requirements.yml)"
+        fi
+        if [ -f diffusion.lock ]; then
+          HASH_INPUT="${HASH_INPUT}$(cat diffusion.lock)"
+        fi
+        FILE_HASH=$(echo -n "${HASH_INPUT}" | sha256sum | cut -d' ' -f1)
+        echo "hash=${FILE_HASH}" >> "$GITHUB_OUTPUT"
+
+        # Read cache_id from diffusion.toml for the cache path
+        CACHE_ID=$(grep -E '^\s*cache_id\s*=' diffusion.toml | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ')
+        echo "cache-id=${CACHE_ID}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Diffusion cache
+      if: inputs.cache-enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.diffusion/cache
+        key: diffusion-cache-${{ steps.cache-key.outputs.hash }}
+        restore-keys: |
+          diffusion-cache-
+
     - name: Run converge
       if: inputs.run-converge == 'true'
       shell: bash
@@ -159,4 +223,13 @@ runs:
       run: |
         echo "::group::Cleaning up"
         diffusion molecule --ci --wipe || true
+        echo "::endgroup::"
+
+    - name: Show cache status
+      if: always() && inputs.cache-enabled == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Cache status after run"
+        diffusion cache status || true
         echo "::endgroup::"

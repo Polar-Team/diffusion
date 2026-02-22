@@ -45,6 +45,9 @@ That's it! This will run:
 | `run-idempotence` | Run idempotence tests | No | `true` |
 | `run-converge` | Run converge (always runs before other tests) | No | `true` |
 | `working-directory` | Working directory for the role | No | `.` |
+| `cache-enabled` | Enable caching for Ansible roles, collections, and optionally UV/Docker | No | `false` |
+| `cache-uv` | Cache UV/Python packages (requires `cache-enabled: true`) | No | `false` |
+| `cache-docker` | Cache DinD Docker images as tarballs (requires `cache-enabled: true`) | No | `false` |
 
 ## Examples
 
@@ -140,6 +143,45 @@ jobs:
       run-idempotence: true
 ```
 
+### Caching
+
+Enable caching to speed up repeated CI runs. Cached items are persisted across
+workflow runs using `actions/cache` and restored automatically. Ansible roles
+and collections are always cached when caching is enabled; UV and Docker caches
+are opt-in.
+
+```yaml
+jobs:
+  test:
+    name: Molecule Tests (cached)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Diffusion Tests
+        uses: Polar-Team/diffusion/diffusion-test@main
+        with:
+          cache-enabled: 'true'
+          cache-uv: 'true'
+          cache-docker: 'true'
+          run-lint: 'true'
+          run-verify: 'true'
+          run-idempotence: 'true'
+```
+
+**What gets cached:**
+
+| Type | Description | Flag |
+|------|-------------|------|
+| Ansible roles | Downloaded roles from `requirements.yml` | Always (when cache is enabled) |
+| Ansible collections | Downloaded collections from `requirements.yml` | Always (when cache is enabled) |
+| UV packages | Python packages installed via UV | `cache-uv: true` |
+| Docker images | DinD images pulled inside the molecule container | `cache-docker: true` |
+
+The cache key is derived from `diffusion.toml`, `requirements.yml`, and
+`diffusion.lock` so that dependency changes automatically invalidate the cache.
+
 ## Requirements
 
 Your role repository must have:
@@ -215,11 +257,12 @@ pinned = "3.13"
 
 1. **Checkout** - Checks out your role repository
 2. **Install Diffusion** - Downloads and installs Diffusion binary
-3. **Converge** - Applies your role to test instance
-4. **Lint** (optional) - Runs yamllint and ansible-lint
-5. **Verify** (optional) - Runs verification tests
-6. **Idempotence** (optional) - Tests role idempotence
-7. **Cleanup** - Destroys test instances and cleans up
+3. **Configure cache** (if enabled) - Runs `diffusion cache enable` and restores cached artifacts from previous runs
+4. **Converge** - Applies your role to test instance
+5. **Lint** (optional) - Runs yamllint and ansible-lint
+6. **Verify** (optional) - Runs verification tests
+7. **Idempotence** (optional) - Tests role idempotence
+8. **Cleanup** - Destroys test instances, saves cache artifacts, and cleans up
 
 ## Test Output
 
@@ -278,6 +321,7 @@ Idempotence tests ensure your role can be run multiple times without changes. Co
 
 See the [examples/](examples/) directory for more workflow examples:
 - [basic-test.yml](examples/basic-test.yml) - Basic usage
+- [cached-test.yml](examples/cached-test.yml) - Caching enabled
 - [custom-test.yml](examples/custom-test.yml) - Custom test selection
 - [multi-role-test.yml](examples/multi-role-test.yml) - Multi-role testing
 - [version-pinned-test.yml](examples/version-pinned-test.yml) - Version pinning
