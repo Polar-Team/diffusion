@@ -386,8 +386,27 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 
 		setupRegistryAuth(cfg)
 
-		if err := runContainer(opts, cfg, path, roleDirName); err != nil {
+		// Docker image cache: try to load cached image before running container
+		dockerCacheLoaded := false
+		if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache && cfg.CacheConfig.CacheID != "" {
+			loaded, err := cache.LoadDockerImage(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
+			if err != nil {
+				log.Printf("\033[33mwarning: failed to load Docker image from cache: %v\033[0m", err)
+			} else if loaded {
+				dockerCacheLoaded = true
+			}
+		}
+
+		if err := runContainer(opts, cfg, path, roleDirName, dockerCacheLoaded); err != nil {
 			return err
+		}
+
+		// Docker image cache: save image after successful container creation
+		if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache && cfg.CacheConfig.CacheID != "" && !dockerCacheLoaded {
+			image := utils.GetImageURL(cfg.ContainerRegistry)
+			if err := cache.SaveDockerImage(image, cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath); err != nil {
+				log.Printf("\033[33mwarning: failed to save Docker image to cache: %v\033[0m", err)
+			}
 		}
 	}
 
@@ -510,7 +529,9 @@ func setupRegistryAuth(cfg *config.Config) {
 }
 
 // runContainer builds docker run arguments and starts the molecule container.
-func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName string) error {
+// If dockerCacheLoaded is true, the pull policy is set to "missing" instead of "always"
+// since the image was already loaded from cache.
+func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName string, dockerCacheLoaded bool) error {
 	image := utils.GetImageURL(cfg.ContainerRegistry)
 	args := []string{
 		"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", opts.RoleFlag),
@@ -583,14 +604,15 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		args = append(args, "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw")
 	}
 
-	// Add cache volume mounts if enabled (roles and collections only)
+	// Add cache volume mounts if enabled
 	if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
 		cacheDir, err := cache.EnsureCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 		if err != nil {
 			log.Printf("\033[33mwarning: failed to create cache directory: %v\033[0m", err)
 		} else {
-			rolesDir := filepath.Join(cacheDir, "roles")
-			collectionsDir := filepath.Join(cacheDir, "collections")
+			// Roles and collections cache (always mounted when cache is enabled)
+			rolesDir := filepath.Join(cacheDir, config.CacheRolesDir)
+			collectionsDir := filepath.Join(cacheDir, config.CacheCollectionsDir)
 
 			if err := os.MkdirAll(rolesDir, 0755); err != nil {
 				log.Printf("\033[33mwarning: failed to create roles cache directory: %v\033[0m", err)
@@ -603,6 +625,17 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 			args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/roles", rolesDir, containerHome))
 			args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/collections", collectionsDir, containerHome))
 			log.Printf("\033[32mCache enabled: mounting roles and collections from %s\033[0m", cacheDir)
+
+			// UV/Python package cache mount
+			if cfg.CacheConfig.UVCache {
+				uvDir, err := cache.EnsureUVCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
+				if err != nil {
+					log.Printf("\033[33mwarning: failed to create UV cache directory: %v\033[0m", err)
+				} else {
+					args = append(args, "-v", fmt.Sprintf("%s:%s", uvDir, config.ContainerUVCachePath))
+					log.Printf("\033[32mUV cache enabled: mounting %s -> %s\033[0m", uvDir, config.ContainerUVCachePath)
+				}
+			}
 		}
 	}
 
@@ -619,7 +652,14 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		}
 	}
 
-	args = append(args, "--cgroupns", "host", "--privileged", "--pull", "always", image)
+	// Set pull policy: skip pull if image was loaded from Docker cache
+	pullPolicy := "always"
+	if dockerCacheLoaded {
+		pullPolicy = "missing"
+		log.Printf("\033[32mDocker cache hit: using --pull missing (image already loaded)\033[0m")
+	}
+
+	args = append(args, "--cgroupns", "host", "--privileged", "--pull", pullPolicy, image)
 
 	// Run docker with error capture for better debugging
 	cmd := exec.Command("docker", args...)

@@ -228,3 +228,156 @@ func containsMiddle(s, substr string) bool {
 	}
 	return false
 }
+
+func TestEnsureUVCacheDir(t *testing.T) {
+	cacheID := "testuvcache"
+	customPath := ""
+
+	uvDir, err := EnsureUVCacheDir(cacheID, customPath)
+	if err != nil {
+		t.Fatalf("EnsureUVCacheDir failed: %v", err)
+	}
+	defer CleanupCache(cacheID, customPath)
+
+	// Verify directory was created
+	info, err := os.Stat(uvDir)
+	if err != nil {
+		t.Fatalf("UV cache directory should exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("UV cache path should be a directory")
+	}
+
+	// Should end with /uv
+	if filepath.Base(uvDir) != config.CacheUVDir {
+		t.Errorf("UV cache dir should end with '%s', got %s", config.CacheUVDir, filepath.Base(uvDir))
+	}
+}
+
+func TestEnsureDockerCacheDir(t *testing.T) {
+	cacheID := "testdockercache"
+	customPath := ""
+
+	dockerDir, err := EnsureDockerCacheDir(cacheID, customPath)
+	if err != nil {
+		t.Fatalf("EnsureDockerCacheDir failed: %v", err)
+	}
+	defer CleanupCache(cacheID, customPath)
+
+	// Verify directory was created
+	info, err := os.Stat(dockerDir)
+	if err != nil {
+		t.Fatalf("Docker cache directory should exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("Docker cache path should be a directory")
+	}
+
+	// Should end with /docker
+	if filepath.Base(dockerDir) != config.CacheDockerDir {
+		t.Errorf("Docker cache dir should end with '%s', got %s", config.CacheDockerDir, filepath.Base(dockerDir))
+	}
+}
+
+func TestGetDockerImageTarballPath(t *testing.T) {
+	cacheID := "testtarball"
+	customPath := ""
+
+	tarballPath, err := GetDockerImageTarballPath(cacheID, customPath)
+	if err != nil {
+		t.Fatalf("GetDockerImageTarballPath failed: %v", err)
+	}
+
+	// Should end with docker/image.tar
+	if filepath.Base(tarballPath) != config.DockerImageTarball {
+		t.Errorf("tarball path should end with '%s', got %s", config.DockerImageTarball, filepath.Base(tarballPath))
+	}
+	parentDir := filepath.Base(filepath.Dir(tarballPath))
+	if parentDir != config.CacheDockerDir {
+		t.Errorf("tarball parent dir should be '%s', got %s", config.CacheDockerDir, parentDir)
+	}
+}
+
+func TestHasCachedDockerImage(t *testing.T) {
+	cacheID := "testhascached"
+	customPath := ""
+
+	// Should return false when no tarball exists
+	if HasCachedDockerImage(cacheID, customPath) {
+		t.Error("HasCachedDockerImage should return false when no tarball exists")
+	}
+
+	// Create the tarball file
+	dockerDir, err := EnsureDockerCacheDir(cacheID, customPath)
+	if err != nil {
+		t.Fatalf("EnsureDockerCacheDir failed: %v", err)
+	}
+	defer CleanupCache(cacheID, customPath)
+
+	tarballPath := filepath.Join(dockerDir, config.DockerImageTarball)
+	if err := os.WriteFile(tarballPath, []byte("fake tarball"), 0644); err != nil {
+		t.Fatalf("failed to create fake tarball: %v", err)
+	}
+
+	// Should return true now
+	if !HasCachedDockerImage(cacheID, customPath) {
+		t.Error("HasCachedDockerImage should return true when tarball exists")
+	}
+}
+
+func TestGetSubdirSize(t *testing.T) {
+	cacheID := "testsubdir"
+	customPath := ""
+
+	// Create cache with subdirectories
+	cacheDir, err := EnsureCacheDir(cacheID, customPath)
+	if err != nil {
+		t.Fatalf("EnsureCacheDir failed: %v", err)
+	}
+	defer CleanupCache(cacheID, customPath)
+
+	// Non-existent subdir should return 0
+	size, err := GetSubdirSize(cacheID, customPath, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetSubdirSize failed for nonexistent dir: %v", err)
+	}
+	if size != 0 {
+		t.Errorf("expected size 0 for nonexistent subdir, got %d", size)
+	}
+
+	// Create a subdir with a file
+	rolesDir := filepath.Join(cacheDir, config.CacheRolesDir)
+	if err := os.MkdirAll(rolesDir, 0755); err != nil {
+		t.Fatalf("failed to create roles dir: %v", err)
+	}
+	testData := []byte("test role data for size measurement")
+	if err := os.WriteFile(filepath.Join(rolesDir, "test.yml"), testData, 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	size, err = GetSubdirSize(cacheID, customPath, config.CacheRolesDir)
+	if err != nil {
+		t.Fatalf("GetSubdirSize failed: %v", err)
+	}
+	if size < int64(len(testData)) {
+		t.Errorf("expected size >= %d, got %d", len(testData), size)
+	}
+}
+
+func TestCacheConfigDockerUVFields(t *testing.T) {
+	cfg := &config.Config{
+		CacheConfig: &config.CacheSettings{
+			Enabled:     true,
+			CacheID:     "test456",
+			DockerCache: true,
+			UVCache:     true,
+		},
+	}
+
+	if !cfg.CacheConfig.DockerCache {
+		t.Error("DockerCache should be true")
+	}
+	if !cfg.CacheConfig.UVCache {
+		t.Error("UVCache should be true")
+	}
+}

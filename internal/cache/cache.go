@@ -4,8 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"diffusion/internal/config"
 )
@@ -126,5 +129,116 @@ func GetCacheSize(cacheID string, customPath string) (int64, error) {
 		return nil
 	})
 
+	return size, err
+}
+
+// EnsureUVCacheDir creates the UV cache subdirectory within the role cache.
+func EnsureUVCacheDir(cacheID, customPath string) (string, error) {
+	cacheDir, err := EnsureCacheDir(cacheID, customPath)
+	if err != nil {
+		return "", err
+	}
+	uvDir := filepath.Join(cacheDir, config.CacheUVDir)
+	if err := os.MkdirAll(uvDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create UV cache directory: %w", err)
+	}
+	return uvDir, nil
+}
+
+// EnsureDockerCacheDir creates the Docker image cache subdirectory within the role cache.
+func EnsureDockerCacheDir(cacheID, customPath string) (string, error) {
+	cacheDir, err := EnsureCacheDir(cacheID, customPath)
+	if err != nil {
+		return "", err
+	}
+	dockerDir := filepath.Join(cacheDir, config.CacheDockerDir)
+	if err := os.MkdirAll(dockerDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create Docker cache directory: %w", err)
+	}
+	return dockerDir, nil
+}
+
+// GetDockerImageTarballPath returns the path to the cached Docker image tarball.
+func GetDockerImageTarballPath(cacheID, customPath string) (string, error) {
+	cacheDir, err := GetCacheDir(cacheID, customPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, config.CacheDockerDir, config.DockerImageTarball), nil
+}
+
+// SaveDockerImage saves a Docker image to a tarball in the cache directory.
+// It runs "docker save -o <path> <image>" to persist the image.
+func SaveDockerImage(image, cacheID, customPath string) error {
+	dockerDir, err := EnsureDockerCacheDir(cacheID, customPath)
+	if err != nil {
+		return err
+	}
+	tarballPath := filepath.Join(dockerDir, config.DockerImageTarball)
+
+	log.Printf("\033[32mSaving Docker image to cache: %s\033[0m", tarballPath)
+	cmd := exec.Command("docker", "save", "-o", tarballPath, image)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker save failed: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	log.Printf("\033[32mDocker image cached successfully\033[0m")
+	return nil
+}
+
+// LoadDockerImage loads a Docker image from a cached tarball.
+// It runs "docker load -i <path>" to restore the image.
+// Returns true if the image was loaded, false if no cached tarball exists.
+func LoadDockerImage(cacheID, customPath string) (bool, error) {
+	tarballPath, err := GetDockerImageTarballPath(cacheID, customPath)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err := os.Stat(tarballPath); os.IsNotExist(err) {
+		return false, nil
+	}
+
+	log.Printf("\033[32mLoading Docker image from cache: %s\033[0m", tarballPath)
+	cmd := exec.Command("docker", "load", "-i", tarballPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("docker load failed: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	log.Printf("\033[32mDocker image loaded from cache\033[0m")
+	return true, nil
+}
+
+// HasCachedDockerImage checks whether a cached Docker image tarball exists.
+func HasCachedDockerImage(cacheID, customPath string) bool {
+	tarballPath, err := GetDockerImageTarballPath(cacheID, customPath)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(tarballPath)
+	return err == nil
+}
+
+// GetSubdirSize returns the size of a specific subdirectory within the cache in bytes.
+func GetSubdirSize(cacheID, customPath, subdir string) (int64, error) {
+	cacheDir, err := GetCacheDir(cacheID, customPath)
+	if err != nil {
+		return 0, err
+	}
+	targetDir := filepath.Join(cacheDir, subdir)
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		return 0, nil
+	}
+
+	var size int64
+	err = filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
 	return size, err
 }

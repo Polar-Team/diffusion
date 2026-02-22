@@ -126,9 +126,11 @@ type TestsSettings struct {
 }
 
 type CacheSettings struct {
-	Enabled   bool   `toml:"enabled"`
-	CacheID   string `toml:"cache_id,omitempty"`   // Unique identifier for this role's cache
-	CachePath string `toml:"cache_path,omitempty"` // Custom cache path (optional)
+	Enabled     bool   `toml:"enabled"`
+	CacheID     string `toml:"cache_id,omitempty"`     // Unique identifier for this role's cache
+	CachePath   string `toml:"cache_path,omitempty"`   // Custom cache path (optional)
+	DockerCache bool   `toml:"docker_cache,omitempty"` // Cache Docker images as tarballs
+	UVCache     bool   `toml:"uv_cache,omitempty"`     // Cache UV/Python packages
 }
 
 type Config struct {

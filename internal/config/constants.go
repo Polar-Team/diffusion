@@ -56,6 +56,16 @@ const (
 	PyProjectFileName      = "pyproject.toml"
 )
 
+// Cache directory names and container paths
+const (
+	CacheRolesDir        = "roles"
+	CacheCollectionsDir  = "collections"
+	CacheUVDir           = "uv"
+	CacheDockerDir       = "docker"
+	ContainerUVCachePath = "/root/.cache/uv" // UV cache location inside the container
+	DockerImageTarball   = "image.tar"       // Filename for cached Docker image tarball
+)
+
 // Registry providers
 const (
 	RegistryProviderYC     = "YC"
