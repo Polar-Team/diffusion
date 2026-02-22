@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 permissions:
   contents: write
-  id-token: write  # Required for Cosign signing and SLSA
+  id-token: write # Required for Cosign signing and SLSA
   packages: write
 
 jobs:
@@ -54,13 +54,13 @@ jobs:
             goarm: 7
             binary: diffusion-windows-arm.exe
             archive_type: zip
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Check if tag is on main branch
         run: |
           git fetch origin main
@@ -68,19 +68,19 @@ jobs:
             echo "Error: Tag must be created from main branch"
             exit 1
           fi
-      
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
-      
+          go-version: "1.21"
+
       - name: Extract version
         id: version
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
-      
+
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
@@ -88,9 +88,9 @@ jobs:
           GOARM: ${{ matrix.goarm }}
         run: |
           mkdir -p bin
-          go build -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }}" -o bin/${{ matrix.binary }} .
+          go build -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }}" -o bin/${{ matrix.binary }} ./cmd/diffusion
           echo "Built: bin/${{ matrix.binary }}"
-      
+
       - name: Create archive
         run: |
           cd bin
@@ -108,74 +108,74 @@ jobs:
           fi
           # Remove the binary, keep only the archive
           rm "${{ matrix.binary }}"
-      
+
       - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}-archive
           path: bin/*
           retention-days: 1
-  
+
   combine-hashes:
     name: Combine artifact hashes
     needs: [build]
     runs-on: ubuntu-latest
     outputs:
       hashes: ${{ steps.hashes.outputs.hashes }}
-    
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: bin/
           merge-multiple: true
-      
+
       - name: Generate combined hashes
         id: hashes
         run: |
           cd bin
           # Generate hashes for all archives using find to avoid glob issues
           archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
-          
+
           if [ -z "$archives" ]; then
             echo "Error: No archive files found"
             exit 1
           fi
-          
+
           # Generate and encode hashes
           find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \; | base64 -w0 > combined-hashes.txt
           echo "hashes=$(cat combined-hashes.txt)" >> "$GITHUB_OUTPUT"
-          
+
           echo "Generated hashes:"
           find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \;
-  
+
   checksums:
     name: Generate Checksums
     needs: [combine-hashes]
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: bin/
           merge-multiple: true
-      
+
       - name: Generate checksums
         run: |
           cd bin
           # Generate checksums using find to avoid glob issues
           archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
-          
+
           if [ -z "$archives" ]; then
             echo "Error: No archive files found"
             exit 1
           fi
-          
+
           find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec sha256sum {} \; | tee SHA256SUMS
           echo "Checksums generated:"
           cat SHA256SUMS
-      
+
       - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
@@ -190,34 +190,34 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    
+
     steps:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
-      
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: bin/
           merge-multiple: true
-      
+
       - name: Sign archives with Cosign (keyless)
         run: |
           cd bin
           # Find all archives using find to avoid glob issues
           archives=$(find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) 2>/dev/null)
-          
+
           if [ -z "$archives" ]; then
             echo "Error: No archive files found"
             exit 1
           fi
-          
+
           # Sign all archives
           find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) | while IFS= read -r file; do
             echo "Signing $file..."
             cosign sign-blob --yes "$file" --output-signature "${file}.sig" --output-certificate "${file}.pem"
           done
-      
+
       - name: Upload signatures
         uses: actions/upload-artifact@v4
         with:
@@ -246,64 +246,64 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: bin/
           merge-multiple: true
-      
+
       - name: Create release notes
         id: notes
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           cat > release-notes.md << 'EOF'
           ## Diffusion $VERSION
-          
+
           ### Installation
-          
+
           Download the appropriate archive for your platform and extract it:
-          
+
           **Linux:**
           - AMD64: `diffusion-linux-amd64.tar.gz`
           - ARM64: `diffusion-linux-arm64.tar.gz`
           - ARM: `diffusion-linux-arm.tar.gz`
-          
+
           **macOS:**
           - Intel: `diffusion-darwin-amd64.tar.gz`
           - Apple Silicon: `diffusion-darwin-arm64.tar.gz`
-          
+
           **Windows:**
           - AMD64: `diffusion-windows-amd64.zip`
           - ARM64: `diffusion-windows-arm64.zip`
           - ARM: `diffusion-windows-arm.zip`
-          
+
           ### Extraction
-          
+
           **Linux/macOS:**
           ```bash
           tar -xzf diffusion-linux-amd64.tar.gz
           chmod +x diffusion-linux-amd64
           ```
-          
+
           **Windows:**
           ```powershell
           Expand-Archive diffusion-windows-amd64.zip
           ```
-          
+
           ### Verification
-          
+
           All archives are signed with **Cosign** and have **SLSA Level 3 provenance** for supply chain security.
-          
+
           **Verify checksums:**
           ```bash
           sha256sum --check SHA256SUMS --ignore-missing
           ```
-          
+
           **Verify Cosign signature:**
           ```bash
           # Install cosign from https://github.com/sigstore/cosign
@@ -314,7 +314,7 @@ jobs:
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
             diffusion-linux-amd64.tar.gz
           ```
-          
+
           **Verify SLSA Provenance:**
           ```bash
           # Install slsa-verifier from https://github.com/slsa-framework/slsa-verifier
@@ -323,24 +323,24 @@ jobs:
             --source-uri github.com/Polar-Team/diffusion \
             --source-tag v$VERSION
           ```
-          
+
           ### What's Changed
-          
+
           See [CHANGELOG](https://github.com/Polar-Team/diffusion/blob/main/docs/changelog.md) for details.
-          
+
           ### Documentation
-          
+
           - [Installation Guide](https://github.com/Polar-Team/diffusion#-installation)
           - [Building from Source](https://github.com/Polar-Team/diffusion/blob/main/docs/building.md)
           - [Verification Guide](https://github.com/Polar-Team/diffusion/blob/main/docs/verification.md)
-          
+
           ---
-          
+
           **Full Changelog**: https://github.com/Polar-Team/diffusion/compare/v$PREVIOUS_VERSION...v$VERSION
           EOF
-          
+
           sed -i "s/\$VERSION/$VERSION/g" release-notes.md
-      
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -356,7 +356,7 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Summary
         run: |
           {
