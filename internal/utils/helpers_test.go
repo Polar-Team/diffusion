@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -403,5 +404,177 @@ func TestGetContainerHomePath(t *testing.T) {
 	// Main molecule container always runs as root (for DinD), so always uses /root
 	if homePath != "/root" {
 		t.Errorf("expected '/root', got %q", homePath)
+	}
+}
+
+// TestCopyFile tests the CopyFile function
+func TestCopyFile(t *testing.T) {
+	// Create a temporary source file
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "source.txt")
+	dstPath := filepath.Join(tmpDir, "dest.txt")
+
+	content := []byte("test content")
+	if err := os.WriteFile(srcPath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test copying
+	if err := CopyFile(srcPath, dstPath); err != nil {
+		t.Fatalf("CopyFile failed: %v", err)
+	}
+
+	// Verify destination file exists and has correct content
+	dstContent, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+
+	if string(dstContent) != string(content) {
+		t.Errorf("content mismatch: got %q, want %q", dstContent, content)
+	}
+}
+
+// TestCopyDir tests the CopyDir function
+func TestCopyDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "source")
+	dstDir := filepath.Join(tmpDir, "dest")
+
+	// Create source directory structure
+	if err := os.MkdirAll(filepath.Join(srcDir, "subdir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	files := map[string]string{
+		"file1.txt":        "content1",
+		"subdir/file2.txt": "content2",
+	}
+
+	for path, content := range files {
+		fullPath := filepath.Join(srcDir, path)
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Test copying directory
+	if err := CopyDir(srcDir, dstDir); err != nil {
+		t.Fatalf("CopyDir failed: %v", err)
+	}
+
+	// Verify all files were copied
+	for path, expectedContent := range files {
+		dstPath := filepath.Join(dstDir, path)
+		content, err := os.ReadFile(dstPath)
+		if err != nil {
+			t.Errorf("failed to read %s: %v", dstPath, err)
+			continue
+		}
+		if string(content) != expectedContent {
+			t.Errorf("content mismatch for %s: got %q, want %q", path, content, expectedContent)
+		}
+	}
+}
+
+// TestCopyRoleData tests the CopyRoleData function
+func TestCopyRoleData(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "role")
+	roleMoleculePath := filepath.Join(tmpDir, "molecule", "org.role")
+
+	// Create minimal required directory structure
+	scenariosDir := filepath.Join(basePath, "scenarios", "default")
+	if err := os.MkdirAll(scenariosDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create molecule.yml (required)
+	moleculeYml := filepath.Join(scenariosDir, "molecule.yml")
+	if err := os.WriteFile(moleculeYml, []byte("---\ndriver:\n  name: docker\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create some role directories
+	for _, dir := range []string{"tasks", "defaults", "meta"} {
+		dirPath := filepath.Join(basePath, dir)
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			t.Fatal(err)
+		}
+		testFile := filepath.Join(dirPath, "main.yml")
+		if err := os.WriteFile(testFile, []byte("---\n# "+dir), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Run CopyRoleData
+	if err := CopyRoleData(basePath, roleMoleculePath, false); err != nil {
+		t.Fatalf("CopyRoleData failed: %v", err)
+	}
+
+	// Verify directories were copied
+	for _, dir := range []string{"tasks", "defaults", "meta"} {
+		copiedFile := filepath.Join(roleMoleculePath, dir, "main.yml")
+		if !Exists(copiedFile) {
+			t.Errorf("expected %s to be copied", copiedFile)
+		}
+	}
+
+	// Verify molecule.yml was copied via scenarios -> molecule mapping
+	copiedMoleculeYml := filepath.Join(roleMoleculePath, "molecule", "default", "molecule.yml")
+	if !Exists(copiedMoleculeYml) {
+		t.Errorf("expected molecule.yml to be copied to %s", copiedMoleculeYml)
+	}
+}
+
+// TestCopyRoleDataMissingScenarios tests that CopyRoleData returns an error when scenarios/ is missing
+func TestCopyRoleDataMissingScenarios(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "role")
+	roleMoleculePath := filepath.Join(tmpDir, "molecule", "org.role")
+
+	// Create basePath without scenarios directory
+	if err := os.MkdirAll(basePath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CopyRoleData(basePath, roleMoleculePath, false)
+	if err == nil {
+		t.Error("expected error when scenarios/default directory is missing")
+	}
+}
+
+// BenchmarkCopyFile benchmarks the CopyFile function
+func BenchmarkCopyFile(b *testing.B) {
+	tmpDir := b.TempDir()
+	srcPath := filepath.Join(tmpDir, "source.txt")
+
+	// Create a 1MB test file
+	content := make([]byte, 1024*1024)
+	if err := os.WriteFile(srcPath, content, 0644); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dstPath := filepath.Join(tmpDir, fmt.Sprintf("dest%d.txt", i))
+		if err := CopyFile(srcPath, dstPath); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkExists benchmarks the Exists function
+func BenchmarkExists(b *testing.B) {
+	tmpFile, err := os.CreateTemp("", "bench-*.txt")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = Exists(tmpFile.Name())
 	}
 }

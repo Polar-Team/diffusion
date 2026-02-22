@@ -1,11 +1,12 @@
 package utils
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -14,6 +15,8 @@ import (
 	"strings"
 
 	"diffusion/internal/config"
+
+	"gopkg.in/yaml.v3"
 )
 
 // exists checks if a file or directory exists
@@ -368,4 +371,148 @@ func FixContainerPermissions(role string, path string, ciMode bool) error {
 	gid := os.Getgid()
 	chownCmd := fmt.Sprintf("chown -R %d:%d %s", uid, gid, path)
 	return DockerExecInteractiveHide(role, "/bin/sh", ciMode, "-c", chownCmd)
+}
+
+// CopyIfExists copies file/directory if it exists (recursively when directory)
+// Performance optimization: cache os.Stat result to avoid duplicate calls
+func CopyIfExists(src, dst string) {
+	fi, err := os.Stat(src)
+	if os.IsNotExist(err) {
+		log.Printf("\033[38;2;127;255;212mnote: %s does not exist, skipping\033[0m", src)
+		return
+	}
+	if err != nil {
+		log.Printf("copy stat error: %v", err)
+		return
+	}
+	if fi.IsDir() {
+		if err := CopyDir(src, dst); err != nil {
+			log.Printf("copy dir error %s -> %s: %v", src, dst, err)
+		}
+	} else {
+		// file
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			log.Printf("mkdir for file: %v", err)
+		}
+		if err := CopyFile(src, dst); err != nil {
+			log.Printf("copy file error %v", err)
+		}
+	}
+}
+
+// CopyFile copies a single file with buffered I/O
+func CopyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := in.Close(); cerr != nil {
+			log.Printf("Failed to close source file: %v", cerr)
+		}
+	}()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := out.Close(); cerr != nil {
+			log.Printf("Failed to close destination file: %v", cerr)
+		}
+	}()
+
+	// Use buffered I/O for better performance
+	bufIn := bufio.NewReaderSize(in, config.BufferSize)
+	bufOut := bufio.NewWriterSize(out, config.BufferSize)
+
+	if _, err := io.Copy(bufOut, bufIn); err != nil {
+		return err
+	}
+
+	if err := bufOut.Flush(); err != nil {
+		return err
+	}
+
+	return out.Sync()
+}
+
+// CopyDir recursively copies a directory
+func CopyDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		// file
+		return CopyFile(path, target)
+	})
+}
+
+// CopyRoleData copies tasks, handlers, templates, files, vars, defaults, meta, scenarios, .ansible-lint, .yamllint
+func CopyRoleData(basePath, roleMoleculePath string, ciMode bool) error {
+	// Validate that scenarios/default directory exists
+	scenariosPath := filepath.Join(basePath, config.ScenariosDir, config.DefaultScenario)
+	if _, err := os.Stat(scenariosPath); os.IsNotExist(err) {
+		return fmt.Errorf("\033[31mscenarios/default directory not found in %s\n\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create the directory structure manually:\n   mkdir -p scenarios/default\n   # Add molecule.yml, converge.yml, verify.yml to scenarios/default/\033[0m", basePath)
+	}
+
+	// Validate that molecule.yml exists
+	moleculeYml := filepath.Join(scenariosPath, "molecule.yml")
+	if _, err := os.Stat(moleculeYml); os.IsNotExist(err) {
+		return fmt.Errorf("\033[31mscenarios/default/molecule.yml not found in %s\n\nThis file is required for Molecule testing.\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create molecule.yml manually in scenarios/default/\033[0m", basePath)
+	}
+
+	if !ciMode {
+		log.Printf("\033[38;2;127;255;212mCopying role data from %s to %s\033[0m", basePath, roleMoleculePath)
+	}
+
+	// create role dir base
+	if err := os.MkdirAll(roleMoleculePath, 0o755); err != nil {
+		return err
+	}
+	// helper copy pairs
+	pairs := []struct{ src, dst string }{
+		{"tasks", "tasks"},
+		{"handlers", "handlers"},
+		{"templates", "templates"},
+		{"files", "files"},
+		{"vars", "vars"},
+		{"defaults", "defaults"},
+		{"meta", "meta"},
+		{config.ScenariosDir, config.MoleculeDir}, // copy scenarios into molecule/<role>/molecule/
+	}
+	for _, p := range pairs {
+		src := filepath.Join(basePath, p.src)
+		dst := filepath.Join(roleMoleculePath, p.dst)
+		if p.src == config.ScenariosDir {
+			dst = filepath.Join(roleMoleculePath, config.MoleculeDir)
+		}
+		if ciMode {
+			log.Printf("Copying %s -> %s", src, dst)
+		}
+		CopyIfExists(src, dst)
+	}
+
+	// Verify that molecule.yml was copied successfully
+	copiedMoleculeYml := filepath.Join(roleMoleculePath, config.MoleculeDir, config.DefaultScenario, "molecule.yml")
+	if ciMode {
+		log.Printf("Checking if molecule.yml exists at: %s", copiedMoleculeYml)
+	}
+	if _, err := os.Stat(copiedMoleculeYml); os.IsNotExist(err) {
+		// List what's actually in the molecule directory for debugging
+		moleculeDir := filepath.Join(roleMoleculePath, config.MoleculeDir)
+		if entries, err := os.ReadDir(moleculeDir); err == nil {
+			log.Printf("\033[33mContents of %s:\033[0m", moleculeDir)
+			for _, entry := range entries {
+				log.Printf("  - %s (isDir: %v)", entry.Name(), entry.IsDir())
+			}
+		}
+		return fmt.Errorf("\033[31mFailed to copy molecule.yml to container.\nSource: %s\nDestination: %s\n\nThis may be a permission or file system issue in CI/CD.\nTry running with --ci flag: diffusion molecule --ci --converge\033[0m", moleculeYml, copiedMoleculeYml)
+	}
+
+	return nil
 }
