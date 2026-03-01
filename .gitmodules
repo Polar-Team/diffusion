@@ -1,0 +1,6 @@
+[submodule "diffusion_tests"]
+	path = diffusion_tests
+	url = https://github.com/Polar-Team/diffusion-ansible-tests-role.git
+[submodule "diffusion-molecule-container"]
+	path = diffusion-molecule-container
+	url = https://github.com/Polar-Team/diffusion-molecule-container.git
