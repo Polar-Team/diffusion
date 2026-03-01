@@ -65,6 +65,8 @@ const (
 	ContainerRolesCachePath       = "/root/.ansible/roles"       // Ansible roles inside the container
 	ContainerCollectionsCachePath = "/root/.ansible/collections" // Ansible collections inside the container
 	ContainerUVCachePath          = "/root/.cache/uv"            // UV cache location inside the container
+	ContainerUVPrecachePath       = "/root/.precache/uv"         // UV staging path for Windows (NTFS mount point)
+	UVCacheTarball                = "uv-cache.tar"               // Filename for packed UV cache tarball (Windows precache)
 	ContainerDockerCachePath      = "/root/.cache/docker"        // Docker image tarballs inside the container
 	DockerImageTarball            = "images.tar"                 // Filename for cached Docker image tarball (multi-image)
 )

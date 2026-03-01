@@ -154,7 +154,7 @@ The Makefile uses optimized build flags:
 
 - `-s`: Strip symbol table
 - `-w`: Strip DWARF debugging information
-- `-X main.Version`: Inject version information
+- `-X diffusion/internal/cli.Version`: Inject version information
 
 These flags reduce binary size significantly.
 

@@ -3,12 +3,14 @@ package molecule
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"diffusion/internal/cache"
 	"diffusion/internal/config"
@@ -89,6 +91,11 @@ func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMole
 		saveDinDImages(opts)
 	}
 
+	// Windows: save UV cache back to precache (NTFS mount) before container removal
+	if !opts.CIMode && runtime.GOOS == "windows" && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.UVCache {
+		saveUVCacheToPrecache(opts)
+	}
+
 	// CI mode: copy cache from container back to host before docker rm
 	if opts.CIMode {
 		copyCacheFromContainer(opts, cfg)
@@ -118,7 +125,10 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		linters = fmt.Sprintf("%s.%s", opts.OrgFlag, opts.RoleFlag)
 	}
 
-	utils.ExportLinters(cfg, linters, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+	err := utils.ExportLinters(cfg, linters, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+	if err != nil {
+		log.Printf("\033[33mwarning exporting linters: %v\033[0m", err)
+	}
 
 	// Determine scenario name for tests directory
 	scenario := config.DefaultScenario
@@ -222,7 +232,11 @@ func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, rol
 	}
 
 	// run molecule verify
-	cmdStr := fmt.Sprintf("cd ./%s && molecule verify", roleDirName)
+	tagEnv := ""
+	if opts.TagFlag != "" {
+		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
+	}
+	cmdStr := fmt.Sprintf("cd ./%s && %smolecule verify", roleDirName, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mVerify failed: %v\033[0m", err)
 		os.Exit(1)
@@ -408,6 +422,11 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		copyCacheIntoContainer(opts, cfg)
 	}
 
+	// Windows: copy UV precache into native container cache (non-CI only, CI uses docker cp)
+	if !opts.CIMode && runtime.GOOS == "windows" && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.UVCache {
+		loadUVPrecache(opts)
+	}
+
 	// Load DinD images from cached tarball (both modes)
 	if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache {
 		loadDinDImages(opts)
@@ -433,7 +452,10 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		if err := utils.CopyRoleData(path, roleMoleculePath, opts.CIMode); err != nil {
 			log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
 		}
-		utils.ExportLinters(cfg, roleMoleculePath, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+		err := utils.ExportLinters(cfg, roleMoleculePath, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+		if err != nil {
+			log.Printf("\033[33mexport linters warning: %v\033[0m", err)
+		}
 	}
 
 	// finally create/converge
@@ -632,8 +654,16 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 				if err != nil {
 					log.Printf("\033[33mwarning: failed to create UV cache directory: %v\033[0m", err)
 				} else {
-					args = append(args, "-v", fmt.Sprintf("%s:%s", uvDir, config.ContainerUVCachePath))
-					log.Printf("\033[32mUV cache enabled: mounting %s -> %s\033[0m", uvDir, config.ContainerUVCachePath)
+					// On Windows, mount to a staging path (precache) instead of the real
+					// cache path. NTFS-mounted volumes are too slow for UV operations.
+					// The precache contents are copied to the native ext4 cache on start
+					// and saved back on wipe.
+					uvContainerPath := config.ContainerUVCachePath
+					if runtime.GOOS == "windows" {
+						uvContainerPath = config.ContainerUVPrecachePath
+					}
+					args = append(args, "-v", fmt.Sprintf("%s:%s", uvDir, uvContainerPath))
+					log.Printf("\033[32mUV cache enabled: mounting %s -> %s\033[0m", uvDir, uvContainerPath)
 				}
 			}
 
@@ -891,10 +921,39 @@ func loadDinDImages(opts *MoleculeOptions) {
 		return
 	}
 
-	// Load the images into the inner Docker daemon
+	// Wait for the inner DinD Docker daemon to be ready.
+	// The container may have just started and dockerd needs time to initialize.
+	containerName := fmt.Sprintf("molecule-%s", opts.RoleFlag)
+	const maxRetries = 30
+	dockerReady := false
+	for i := range maxRetries {
+		checkDocker := exec.Command("docker", "exec", containerName, "docker", "info")
+		checkDocker.Stdout = io.Discard
+		checkDocker.Stderr = io.Discard
+		if err := checkDocker.Run(); err == nil {
+			dockerReady = true
+			break
+		}
+		log.Printf("\033[33mWaiting for DinD daemon to start... (%d/%d)\033[0m", i+1, maxRetries)
+		time.Sleep(2 * time.Second)
+	}
+	if !dockerReady {
+		log.Printf("\033[33mwarning: DinD daemon did not start in time, skipping image load\033[0m")
+		return
+	}
 
-	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", fmt.Sprintf("docker load -i %s", tarballPath)); err != nil {
+	// Load the images into the inner Docker daemon.
+	// Never use -ti here: shell redirection (< file) conflicts with TTY allocation,
+	// and we don't need interactive terminal for this operation.
+	loadCmd := fmt.Sprintf("docker load < %s", tarballPath)
+	execFlags := []string{"exec", containerName, "sh", "-c", loadCmd}
+	cmd := exec.Command("docker", execFlags...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
 		log.Printf("\033[33mwarning: failed to load DinD images from cache (%s): %v\033[0m", tarballPath, err)
+		if len(output) > 0 {
+			log.Printf("\033[33mDocker load output: %s\033[0m", strings.TrimSpace(string(output)))
+		}
 	} else {
 		log.Printf("\033[32mDinD images loaded from cache\033[0m")
 	}
@@ -916,12 +975,10 @@ func saveDinDImages(opts *MoleculeOptions) {
 	// Discover images inside the DinD daemon.
 	// We need to capture stdout, so we use exec.Command directly here.
 	// Build flags the same way DockerExecInteractiveHide does.
-	execFlags := []string{"exec"}
-	if !opts.CIMode {
-		execFlags = append(execFlags, "-ti")
-	}
-	execFlags = append(execFlags, containerName, "sh", "-c",
-		`docker images --format '{{.Repository}}:{{.Tag}}'`)
+	// Never use -ti here: we need to capture stdout programmatically via .Output(),
+	// and -t (TTY allocation) fails when stdout is not a real terminal.
+	execFlags := []string{"exec", containerName, "sh", "-c",
+		`docker images --format '{{.Repository}}:{{.Tag}}'`}
 	out, err := exec.Command("docker", execFlags...).Output()
 	if err != nil {
 		log.Printf("\033[33mwarning: failed to list DinD images: %v\033[0m", err)
@@ -951,10 +1008,62 @@ func saveDinDImages(opts *MoleculeOptions) {
 
 	// Container paths are always Linux — use forward slashes, never filepath.Join.
 	tarballPath := fmt.Sprintf("%s/%s", config.ContainerDockerCachePath, config.DockerImageTarball)
-	saveCmd := fmt.Sprintf("docker save -o %s %s", tarballPath, strings.Join(images, " "))
+	saveCmd := fmt.Sprintf("docker save %s > %s", strings.Join(images, " "), tarballPath)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", saveCmd); err != nil {
 		log.Printf("\033[33mwarning: failed to save DinD images to cache: %v\033[0m", err)
 	} else {
 		log.Printf("\033[32mDinD images saved to %s\033[0m", tarballPath)
+	}
+}
+
+// loadUVPrecache extracts the cached UV tarball from the NTFS-mounted staging
+// path (/root/.precache/uv/uv-cache.tar) into the native ext4 cache path
+// (/root/.cache/uv). Using a single tarball instead of copying thousands of
+// tiny files is significantly faster across the NTFS filesystem boundary.
+// This is only needed on Windows where direct NTFS volume mounts are too slow
+// for UV operations. On Linux/macOS the cache is mounted directly.
+func loadUVPrecache(opts *MoleculeOptions) {
+	tarball := fmt.Sprintf("%s/%s", config.ContainerUVPrecachePath, config.UVCacheTarball)
+	cachePath := config.ContainerUVCachePath
+
+	// Check if tarball exists
+	checkCmd := fmt.Sprintf("test -f %s", tarball)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
+		log.Printf("\033[33mNo UV cache tarball found at %s, skipping\033[0m", tarball)
+		return
+	}
+
+	// Extract tarball into native cache path
+	extractCmd := fmt.Sprintf("mkdir -p %s && tar xf %s -C %s", cachePath, tarball, cachePath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", extractCmd); err != nil {
+		log.Printf("\033[33mwarning: failed to extract UV cache tarball: %v\033[0m", err)
+	} else {
+		log.Printf("\033[32mUV cache extracted from tarball into native cache\033[0m")
+	}
+}
+
+// saveUVCacheToPrecache archives the UV cache from the native ext4 path
+// (/root/.cache/uv) into a single tarball at the NTFS-mounted staging path
+// (/root/.precache/uv/uv-cache.tar). Writing one large file to NTFS is much
+// faster than copying many small files. The volume mount syncs the tarball
+// back to the Windows host automatically.
+// Called during --wipe before the container is removed.
+func saveUVCacheToPrecache(opts *MoleculeOptions) {
+	tarball := fmt.Sprintf("%s/%s", config.ContainerUVPrecachePath, config.UVCacheTarball)
+	cachePath := config.ContainerUVCachePath
+
+	// Check if cache has any content
+	checkCmd := fmt.Sprintf("test -d %s && [ \"$(ls -A %s 2>/dev/null)\" ]", cachePath, cachePath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
+		log.Printf("\033[33mUV cache is empty, skipping save\033[0m")
+		return
+	}
+
+	// Archive cache into a single tarball on the NTFS mount
+	archiveCmd := fmt.Sprintf("tar cf %s -C %s .", tarball, cachePath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", archiveCmd); err != nil {
+		log.Printf("\033[33mwarning: failed to archive UV cache to tarball: %v\033[0m", err)
+	} else {
+		log.Printf("\033[32mUV cache archived to %s (synced to host)\033[0m", tarball)
 	}
 }

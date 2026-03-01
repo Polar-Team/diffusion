@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"runtime"
 
 	"diffusion/internal/config"
 	"github.com/spf13/cobra"
@@ -113,19 +112,4 @@ func NewShowCmd(cli *CLI) *cobra.Command {
 	}
 
 	return showCmd
-}
-
-// NewVersionCmd creates the version command
-func NewVersionCmd(cli *CLI) *cobra.Command {
-	versionCmd := &cobra.Command{
-		Use:   "version",
-		Short: "Show version information",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("Diffusion version %s\n", Version)
-			fmt.Printf("Go version: %s\n", runtime.Version())
-			fmt.Printf("OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-		},
-	}
-
-	return versionCmd
 }

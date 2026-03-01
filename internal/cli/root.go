@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"fmt"
+	"runtime"
+
 	"github.com/spf13/cobra"
 )
 
@@ -38,9 +41,12 @@ type CLI struct {
 func Execute() {
 	cli := &CLI{}
 
+	versionInfo := fmt.Sprintf("%s\nGo version: %s\nOS/Arch: %s/%s", Version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+
 	rootCmd := &cobra.Command{
-		Use:   "diffusion",
-		Short: "Molecule workflow helper (cross-platform)",
+		Use:     "diffusion",
+		Short:   "Molecule workflow helper (cross-platform)",
+		Version: versionInfo,
 	}
 
 	// Add all commands using factory functions
@@ -50,7 +56,6 @@ func Execute() {
 	rootCmd.AddCommand(NewMoleculeCmd(cli))
 	rootCmd.AddCommand(NewShowCmd(cli))
 	rootCmd.AddCommand(NewDepsCmd(cli))
-	rootCmd.AddCommand(NewVersionCmd(cli))
 
 	if err := rootCmd.Execute(); err != nil {
 		panic(err)
