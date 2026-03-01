@@ -1,52 +1,52 @@
 ---
-name: 'Diffusion Molecule Test'
-description: 'Run Molecule tests for Ansible roles using Diffusion'
-author: 'Polar-Team'
+name: "Diffusion Molecule Test"
+description: "Run Molecule tests for Ansible roles using Diffusion"
+author: "Polar-Team"
 
 branding:
-  icon: 'check-circle'
-  color: 'green'
+  icon: "check-circle"
+  color: "green"
 
 inputs:
   diffusion-version:
-    description: 'Diffusion version to use (e.g., latest, v0.3.13)'
+    description: "Diffusion version to use (e.g., latest, v0.3.13)"
     required: false
-    default: 'latest'
+    default: "latest"
   run-lint:
-    description: 'Run lint tests'
+    description: "Run lint tests"
     required: false
-    default: 'true'
+    default: "true"
   run-verify:
-    description: 'Run verify tests'
+    description: "Run verify tests"
     required: false
-    default: 'true'
+    default: "true"
   run-idempotence:
-    description: 'Run idempotence tests'
+    description: "Run idempotence tests"
     required: false
-    default: 'true'
+    default: "true"
   run-converge:
-    description: 'Run converge (always runs before other tests)'
+    description: "Run converge (always runs before other tests)"
     required: false
-    default: 'true'
+    default: "true"
   working-directory:
-    description: 'Working directory for the role'
+    description: "Working directory for the role"
     required: false
-    default: '.'
+    default: "."
   cache-enabled:
-    description: 'Enable caching for Ansible roles, collections, and optionally UV/Docker'
+    description: "Enable caching for Ansible roles, collections, and optionally UV/Docker"
     required: false
-    default: 'false'
+    default: "false"
   cache-uv:
-    description: 'Cache UV/Python packages (requires cache-enabled: true)'
+    description: "Cache UV/Python packages (requires cache-enabled: true)"
     required: false
-    default: 'false'
+    default: "false"
   cache-docker:
-    description: 'Cache DinD Docker images as tarballs (requires cache-enabled: true)'
+    description: "Cache DinD Docker images as tarballs (requires cache-enabled: true)"
     required: false
-    default: 'false'
+    default: "false"
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Install Cosign
       uses: sigstore/cosign-installer@v3
@@ -131,7 +131,7 @@ runs:
            /tmp/SHA256SUMS /tmp/multiple.intoto.jsonl
 
         echo "Verifying installation..."
-        diffusion version
+        diffusion --version
 
     # --- Cache setup ---
     - name: Configure Diffusion cache
