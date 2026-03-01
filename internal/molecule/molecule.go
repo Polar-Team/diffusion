@@ -3,12 +3,14 @@ package molecule
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"diffusion/internal/cache"
 	"diffusion/internal/config"
@@ -62,7 +64,7 @@ func RunMolecule(opts *MoleculeOptions) error {
 
 	// handle wipe
 	if opts.WipeFlag {
-		return handleWipe(opts, roleDirName, roleMoleculePath)
+		return handleWipe(opts, cfg, roleDirName, roleMoleculePath)
 	}
 
 	// handle converge/lint/verify/idempotence/destroy
@@ -75,12 +77,29 @@ func RunMolecule(opts *MoleculeOptions) error {
 }
 
 // handleWipe destroys the molecule container and removes the role folder.
-func handleWipe(opts *MoleculeOptions, roleDirName, roleMoleculePath string) error {
+// Before removing the container, it saves DinD images and (in CI mode) copies
+// the cache out of the container back to the host.
+func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMoleculePath string) error {
 	log.Printf("\033[38;2;127;255;212mWiping: running molecule destroy, removing container molecule-%s and folder %s\n\033[0m", opts.RoleFlag, roleMoleculePath)
 
 	// Run molecule destroy inside the container first
 	roleDir := utils.GetRoleDirName(opts.OrgFlag, opts.RoleFlag)
 	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "bash", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule destroy", roleDir))
+
+	// Save DinD images before removing the container
+	if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache {
+		saveDinDImages(opts)
+	}
+
+	// Windows: save UV cache back to precache (NTFS mount) before container removal
+	if !opts.CIMode && runtime.GOOS == "windows" && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.UVCache {
+		saveUVCacheToPrecache(opts)
+	}
+
+	// CI mode: copy cache from container back to host before docker rm
+	if opts.CIMode {
+		copyCacheFromContainer(opts, cfg)
+	}
 
 	// Remove the container
 	_ = utils.RunCommandHide("docker", "rm", fmt.Sprintf("molecule-%s", opts.RoleFlag), "-f")
@@ -106,7 +125,10 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		linters = fmt.Sprintf("%s.%s", opts.OrgFlag, opts.RoleFlag)
 	}
 
-	utils.ExportLinters(cfg, linters, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+	err := utils.ExportLinters(cfg, linters, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+	if err != nil {
+		log.Printf("\033[33mwarning exporting linters: %v\033[0m", err)
+	}
 
 	// Determine scenario name for tests directory
 	scenario := config.DefaultScenario
@@ -210,7 +232,11 @@ func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, rol
 	}
 
 	// run molecule verify
-	cmdStr := fmt.Sprintf("cd ./%s && molecule verify", roleDirName)
+	tagEnv := ""
+	if opts.TagFlag != "" {
+		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
+	}
+	cmdStr := fmt.Sprintf("cd ./%s && %smolecule verify", roleDirName, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mVerify failed: %v\033[0m", err)
 		os.Exit(1)
@@ -386,28 +412,24 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 
 		setupRegistryAuth(cfg)
 
-		// Docker image cache: try to load cached image before running container
-		dockerCacheLoaded := false
-		if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache && cfg.CacheConfig.CacheID != "" {
-			loaded, err := cache.LoadDockerImage(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
-			if err != nil {
-				log.Printf("\033[33mwarning: failed to load Docker image from cache: %v\033[0m", err)
-			} else if loaded {
-				dockerCacheLoaded = true
-			}
-		}
-
-		if err := runContainer(opts, cfg, path, roleDirName, dockerCacheLoaded); err != nil {
+		if err := runContainer(opts, cfg, path, roleDirName); err != nil {
 			return err
 		}
+	}
 
-		// Docker image cache: save image after successful container creation
-		if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache && cfg.CacheConfig.CacheID != "" && !dockerCacheLoaded {
-			image := utils.GetImageURL(cfg.ContainerRegistry)
-			if err := cache.SaveDockerImage(image, cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath); err != nil {
-				log.Printf("\033[33mwarning: failed to save Docker image to cache: %v\033[0m", err)
-			}
-		}
+	// CI Mode: copy cache into container (replaces volume mounts)
+	if opts.CIMode {
+		copyCacheIntoContainer(opts, cfg)
+	}
+
+	// Windows: copy UV precache into native container cache (non-CI only, CI uses docker cp)
+	if !opts.CIMode && runtime.GOOS == "windows" && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.UVCache {
+		loadUVPrecache(opts)
+	}
+
+	// Load DinD images from cached tarball (both modes)
+	if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache {
+		loadDinDImages(opts)
 	}
 
 	// CI Mode: Clone repository and setup files inside container
@@ -430,7 +452,10 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		if err := utils.CopyRoleData(path, roleMoleculePath, opts.CIMode); err != nil {
 			log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
 		}
-		utils.ExportLinters(cfg, roleMoleculePath, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+		err := utils.ExportLinters(cfg, roleMoleculePath, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
+		if err != nil {
+			log.Printf("\033[33mexport linters warning: %v\033[0m", err)
+		}
 	}
 
 	// finally create/converge
@@ -529,9 +554,7 @@ func setupRegistryAuth(cfg *config.Config) {
 }
 
 // runContainer builds docker run arguments and starts the molecule container.
-// If dockerCacheLoaded is true, the pull policy is set to "missing" instead of "always"
-// since the image was already loaded from cache.
-func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName string, dockerCacheLoaded bool) error {
+func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName string) error {
 	image := utils.GetImageURL(cfg.ContainerRegistry)
 	args := []string{
 		"run", "--rm", "-d", "--name=" + fmt.Sprintf("molecule-%s", opts.RoleFlag),
@@ -604,8 +627,8 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		args = append(args, "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw")
 	}
 
-	// Add cache volume mounts if enabled
-	if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
+	// Add cache volume mounts if enabled (non-CI mode only; CI mode uses docker cp)
+	if !opts.CIMode && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
 		cacheDir, err := cache.EnsureCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 		if err != nil {
 			log.Printf("\033[33mwarning: failed to create cache directory: %v\033[0m", err)
@@ -621,9 +644,8 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 				log.Printf("\033[33mwarning: failed to create collections cache directory: %v\033[0m", err)
 			}
 
-			containerHome := utils.GetContainerHomePath()
-			args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/roles", rolesDir, containerHome))
-			args = append(args, "-v", fmt.Sprintf("%s:%s/.ansible/collections", collectionsDir, containerHome))
+			args = append(args, "-v", fmt.Sprintf("%s:%s", rolesDir, config.ContainerRolesCachePath))
+			args = append(args, "-v", fmt.Sprintf("%s:%s", collectionsDir, config.ContainerCollectionsCachePath))
 			log.Printf("\033[32mCache enabled: mounting roles and collections from %s\033[0m", cacheDir)
 
 			// UV/Python package cache mount
@@ -632,8 +654,27 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 				if err != nil {
 					log.Printf("\033[33mwarning: failed to create UV cache directory: %v\033[0m", err)
 				} else {
-					args = append(args, "-v", fmt.Sprintf("%s:%s", uvDir, config.ContainerUVCachePath))
-					log.Printf("\033[32mUV cache enabled: mounting %s -> %s\033[0m", uvDir, config.ContainerUVCachePath)
+					// On Windows, mount to a staging path (precache) instead of the real
+					// cache path. NTFS-mounted volumes are too slow for UV operations.
+					// The precache contents are copied to the native ext4 cache on start
+					// and saved back on wipe.
+					uvContainerPath := config.ContainerUVCachePath
+					if runtime.GOOS == "windows" {
+						uvContainerPath = config.ContainerUVPrecachePath
+					}
+					args = append(args, "-v", fmt.Sprintf("%s:%s", uvDir, uvContainerPath))
+					log.Printf("\033[32mUV cache enabled: mounting %s -> %s\033[0m", uvDir, uvContainerPath)
+				}
+			}
+
+			// Docker/DinD image cache mount
+			if cfg.CacheConfig.DockerCache {
+				dockerDir, err := cache.EnsureDockerCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
+				if err != nil {
+					log.Printf("\033[33mwarning: failed to create Docker cache directory: %v\033[0m", err)
+				} else {
+					args = append(args, "-v", fmt.Sprintf("%s:%s", dockerDir, config.ContainerDockerCachePath))
+					log.Printf("\033[32mDocker cache enabled: mounting %s -> %s\033[0m", dockerDir, config.ContainerDockerCachePath)
 				}
 			}
 		}
@@ -652,14 +693,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		}
 	}
 
-	// Set pull policy: skip pull if image was loaded from Docker cache
-	pullPolicy := "always"
-	if dockerCacheLoaded {
-		pullPolicy = "missing"
-		log.Printf("\033[32mDocker cache hit: using --pull missing (image already loaded)\033[0m")
-	}
-
-	args = append(args, "--cgroupns", "host", "--privileged", "--pull", pullPolicy, image)
+	args = append(args, "--cgroupns", "host", "--privileged", "--pull", "always", image)
 
 	// Run docker with error capture for better debugging
 	cmd := exec.Command("docker", args...)
@@ -767,5 +801,269 @@ func loginInsideContainer(opts *MoleculeOptions, cfg *config.Config) {
 		log.Printf("\033[35mUsing public registry, skipping authentication\033[0m")
 	default:
 		log.Printf("\033[33mUnknown registry provider '%s', skipping authentication\033[0m", cfg.ContainerRegistry.RegistryProvider)
+	}
+}
+
+// copyCacheIntoContainer copies cached roles, collections, UV packages, and Docker
+// image tarballs FROM the host cache directory INTO the running container using
+// "docker cp". This is used in CI mode where volume mounts (-v) are unavailable.
+func copyCacheIntoContainer(opts *MoleculeOptions, cfg *config.Config) {
+	if cfg.CacheConfig == nil || !cfg.CacheConfig.Enabled || cfg.CacheConfig.CacheID == "" {
+		return
+	}
+
+	cacheDir, err := cache.GetCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
+	if err != nil {
+		log.Printf("\033[33mwarning: failed to resolve cache directory: %v\033[0m", err)
+		return
+	}
+
+	containerName := fmt.Sprintf("molecule-%s", opts.RoleFlag)
+
+	// Helper: docker cp <hostPath>/. <container>:<containerPath>
+	// The "/." suffix copies the directory *contents* (not the directory itself).
+	copyDir := func(hostSubdir, containerPath, label string) {
+		hostPath := filepath.Join(cacheDir, hostSubdir)
+		if info, err := os.Stat(hostPath); err != nil || !info.IsDir() {
+			return // nothing to copy
+		}
+		// Ensure target directory exists inside container
+		mkdirCmd := fmt.Sprintf("mkdir -p %s", containerPath)
+		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", mkdirCmd)
+
+		src := hostPath + string(os.PathSeparator) + "."
+		if err := exec.Command("docker", "cp", src, containerName+":"+containerPath).Run(); err != nil {
+			log.Printf("\033[33mwarning: failed to copy %s cache into container: %v\033[0m", label, err)
+		} else {
+			log.Printf("\033[32mCI cache: copied %s into container\033[0m", label)
+		}
+	}
+
+	// Roles & collections (always when cache is enabled)
+	copyDir(config.CacheRolesDir, config.ContainerRolesCachePath, "roles")
+	copyDir(config.CacheCollectionsDir, config.ContainerCollectionsCachePath, "collections")
+
+	// UV cache
+	if cfg.CacheConfig.UVCache {
+		copyDir(config.CacheUVDir, config.ContainerUVCachePath, "uv")
+	}
+
+	// Docker image tarball — copy the whole docker/ directory so that
+	// loadDinDImages can find images.tar at /root/.cache/docker/images.tar
+	if cfg.CacheConfig.DockerCache {
+		copyDir(config.CacheDockerDir, config.ContainerDockerCachePath, "docker")
+	}
+}
+
+// copyCacheFromContainer copies cached roles, collections, UV packages, and
+// Docker image tarballs FROM the running container back to the host cache
+// directory using "docker cp". Called in CI mode during --wipe, before the
+// container is removed.
+func copyCacheFromContainer(opts *MoleculeOptions, cfg *config.Config) {
+	if cfg.CacheConfig == nil || !cfg.CacheConfig.Enabled || cfg.CacheConfig.CacheID == "" {
+		return
+	}
+
+	cacheDir, err := cache.EnsureCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
+	if err != nil {
+		log.Printf("\033[33mwarning: failed to ensure cache directory: %v\033[0m", err)
+		return
+	}
+
+	containerName := fmt.Sprintf("molecule-%s", opts.RoleFlag)
+
+	// Helper: docker cp <container>:<containerPath>/. <hostPath>
+	copyDir := func(containerPath, hostSubdir, label string) {
+		hostPath := filepath.Join(cacheDir, hostSubdir)
+		if err := os.MkdirAll(hostPath, 0755); err != nil {
+			log.Printf("\033[33mwarning: failed to create host cache dir for %s: %v\033[0m", label, err)
+			return
+		}
+
+		src := containerName + ":" + containerPath + "/."
+		if err := exec.Command("docker", "cp", src, hostPath).Run(); err != nil {
+			log.Printf("\033[33mwarning: failed to copy %s cache from container: %v\033[0m", label, err)
+		} else {
+			log.Printf("\033[32mCI cache: saved %s from container\033[0m", label)
+		}
+	}
+
+	// Roles & collections
+	copyDir(config.ContainerRolesCachePath, config.CacheRolesDir, "roles")
+	copyDir(config.ContainerCollectionsCachePath, config.CacheCollectionsDir, "collections")
+
+	// UV cache
+	if cfg.CacheConfig.UVCache {
+		copyDir(config.ContainerUVCachePath, config.CacheUVDir, "uv")
+	}
+
+	// Docker image tarball directory
+	if cfg.CacheConfig.DockerCache {
+		copyDir(config.ContainerDockerCachePath, config.CacheDockerDir, "docker")
+	}
+}
+
+// loadDinDImages loads cached Docker images into the DinD daemon running
+// inside the molecule container. It runs:
+//
+//	docker exec <container> docker load -i /root/.cache/docker/images.tar
+//
+// This works in both CI and non-CI modes — the tarball is either volume-mounted
+// (non-CI) or copied in via copyCacheIntoContainer (CI).
+func loadDinDImages(opts *MoleculeOptions) {
+	// Container paths are always Linux — use forward slashes, never filepath.Join.
+	tarballPath := fmt.Sprintf("%s/%s", config.ContainerDockerCachePath, config.DockerImageTarball)
+
+	// Check if the tarball exists inside the container
+	checkCmd := fmt.Sprintf("test -f %s", tarballPath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
+		log.Printf("\033[33mNo cached Docker images found at %s, skipping load\033[0m", tarballPath)
+		return
+	}
+
+	// Wait for the inner DinD Docker daemon to be ready.
+	// The container may have just started and dockerd needs time to initialize.
+	containerName := fmt.Sprintf("molecule-%s", opts.RoleFlag)
+	const maxRetries = 30
+	dockerReady := false
+	for i := range maxRetries {
+		checkDocker := exec.Command("docker", "exec", containerName, "docker", "info")
+		checkDocker.Stdout = io.Discard
+		checkDocker.Stderr = io.Discard
+		if err := checkDocker.Run(); err == nil {
+			dockerReady = true
+			break
+		}
+		log.Printf("\033[33mWaiting for DinD daemon to start... (%d/%d)\033[0m", i+1, maxRetries)
+		time.Sleep(2 * time.Second)
+	}
+	if !dockerReady {
+		log.Printf("\033[33mwarning: DinD daemon did not start in time, skipping image load\033[0m")
+		return
+	}
+
+	// Load the images into the inner Docker daemon.
+	// Never use -ti here: shell redirection (< file) conflicts with TTY allocation,
+	// and we don't need interactive terminal for this operation.
+	loadCmd := fmt.Sprintf("docker load < %s", tarballPath)
+	execFlags := []string{"exec", containerName, "sh", "-c", loadCmd}
+	cmd := exec.Command("docker", execFlags...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("\033[33mwarning: failed to load DinD images from cache (%s): %v\033[0m", tarballPath, err)
+		if len(output) > 0 {
+			log.Printf("\033[33mDocker load output: %s\033[0m", strings.TrimSpace(string(output)))
+		}
+	} else {
+		log.Printf("\033[32mDinD images loaded from cache\033[0m")
+	}
+}
+
+// saveDinDImages discovers all Docker images inside the DinD daemon running in
+// the molecule container and saves them to a single tarball at
+// /root/.cache/docker/images.tar.  It runs:
+//
+//	docker exec <container> docker images --format '{{.Repository}}:{{.Tag}}'
+//	docker exec <container> docker save -o /root/.cache/docker/images.tar <image1> <image2> ...
+//
+// This works in both CI and non-CI modes. In non-CI mode the tarball persists
+// on the host automatically via the volume mount. In CI mode the caller must
+// follow up with copyCacheFromContainer to pull it out.
+func saveDinDImages(opts *MoleculeOptions) {
+	containerName := fmt.Sprintf("molecule-%s", opts.RoleFlag)
+
+	// Discover images inside the DinD daemon.
+	// We need to capture stdout, so we use exec.Command directly here.
+	// Build flags the same way DockerExecInteractiveHide does.
+	// Never use -ti here: we need to capture stdout programmatically via .Output(),
+	// and -t (TTY allocation) fails when stdout is not a real terminal.
+	execFlags := []string{"exec", containerName, "sh", "-c",
+		`docker images --format '{{.Repository}}:{{.Tag}}'`}
+	out, err := exec.Command("docker", execFlags...).Output()
+	if err != nil {
+		log.Printf("\033[33mwarning: failed to list DinD images: %v\033[0m", err)
+		return
+	}
+
+	// Parse and filter out <none>:<none> entries
+	var images []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "<none>:<none>" {
+			continue
+		}
+		images = append(images, line)
+	}
+
+	if len(images) == 0 {
+		log.Printf("\033[33mNo DinD images to cache\033[0m")
+		return
+	}
+
+	log.Printf("\033[32mSaving %d DinD image(s) to cache: %s\033[0m", len(images), strings.Join(images, ", "))
+
+	// Ensure the cache directory exists inside the container
+	mkdirCmd := fmt.Sprintf("mkdir -p %s", config.ContainerDockerCachePath)
+	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", mkdirCmd)
+
+	// Container paths are always Linux — use forward slashes, never filepath.Join.
+	tarballPath := fmt.Sprintf("%s/%s", config.ContainerDockerCachePath, config.DockerImageTarball)
+	saveCmd := fmt.Sprintf("docker save %s > %s", strings.Join(images, " "), tarballPath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", saveCmd); err != nil {
+		log.Printf("\033[33mwarning: failed to save DinD images to cache: %v\033[0m", err)
+	} else {
+		log.Printf("\033[32mDinD images saved to %s\033[0m", tarballPath)
+	}
+}
+
+// loadUVPrecache extracts the cached UV tarball from the NTFS-mounted staging
+// path (/root/.precache/uv/uv-cache.tar) into the native ext4 cache path
+// (/root/.cache/uv). Using a single tarball instead of copying thousands of
+// tiny files is significantly faster across the NTFS filesystem boundary.
+// This is only needed on Windows where direct NTFS volume mounts are too slow
+// for UV operations. On Linux/macOS the cache is mounted directly.
+func loadUVPrecache(opts *MoleculeOptions) {
+	tarball := fmt.Sprintf("%s/%s", config.ContainerUVPrecachePath, config.UVCacheTarball)
+	cachePath := config.ContainerUVCachePath
+
+	// Check if tarball exists
+	checkCmd := fmt.Sprintf("test -f %s", tarball)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
+		log.Printf("\033[33mNo UV cache tarball found at %s, skipping\033[0m", tarball)
+		return
+	}
+
+	// Extract tarball into native cache path
+	extractCmd := fmt.Sprintf("mkdir -p %s && tar xf %s -C %s", cachePath, tarball, cachePath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", extractCmd); err != nil {
+		log.Printf("\033[33mwarning: failed to extract UV cache tarball: %v\033[0m", err)
+	} else {
+		log.Printf("\033[32mUV cache extracted from tarball into native cache\033[0m")
+	}
+}
+
+// saveUVCacheToPrecache archives the UV cache from the native ext4 path
+// (/root/.cache/uv) into a single tarball at the NTFS-mounted staging path
+// (/root/.precache/uv/uv-cache.tar). Writing one large file to NTFS is much
+// faster than copying many small files. The volume mount syncs the tarball
+// back to the Windows host automatically.
+// Called during --wipe before the container is removed.
+func saveUVCacheToPrecache(opts *MoleculeOptions) {
+	tarball := fmt.Sprintf("%s/%s", config.ContainerUVPrecachePath, config.UVCacheTarball)
+	cachePath := config.ContainerUVCachePath
+
+	// Check if cache has any content
+	checkCmd := fmt.Sprintf("test -d %s && [ \"$(ls -A %s 2>/dev/null)\" ]", cachePath, cachePath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
+		log.Printf("\033[33mUV cache is empty, skipping save\033[0m")
+		return
+	}
+
+	// Archive cache into a single tarball on the NTFS mount
+	archiveCmd := fmt.Sprintf("tar cf %s -C %s .", tarball, cachePath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", archiveCmd); err != nil {
+		log.Printf("\033[33mwarning: failed to archive UV cache to tarball: %v\033[0m", err)
+	} else {
+		log.Printf("\033[32mUV cache archived to %s (synced to host)\033[0m", tarball)
 	}
 }

@@ -1,0 +1,33 @@
+---
+# Example: Diffusion Testing with Caching
+# Caches Ansible roles/collections, UV packages, and DinD Docker images
+# across CI runs for faster repeat executions.
+
+name: Test (Cached)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Molecule Tests (cached)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Diffusion Tests
+        uses: Polar-Team/diffusion/diffusion-test@main
+        with:
+          diffusion-version: 'latest'
+          cache-enabled: 'true'
+          cache-uv: 'true'
+          cache-docker: 'true'
+          run-lint: 'true'
+          run-verify: 'true'
+          run-idempotence: 'true'

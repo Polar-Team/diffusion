@@ -9,7 +9,7 @@ BINARY_NAME=diffusion
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null | sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/' || echo "0.0.0")
 
 # Build flags
-LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
+LDFLAGS=-ldflags "-s -w -X diffusion/internal/cli.Version=$(VERSION)"
 
 # Output directory
 BIN_DIR=./bin

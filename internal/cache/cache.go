@@ -4,11 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"diffusion/internal/config"
 )
@@ -165,48 +162,6 @@ func GetDockerImageTarballPath(cacheID, customPath string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(cacheDir, config.CacheDockerDir, config.DockerImageTarball), nil
-}
-
-// SaveDockerImage saves a Docker image to a tarball in the cache directory.
-// It runs "docker save -o <path> <image>" to persist the image.
-func SaveDockerImage(image, cacheID, customPath string) error {
-	dockerDir, err := EnsureDockerCacheDir(cacheID, customPath)
-	if err != nil {
-		return err
-	}
-	tarballPath := filepath.Join(dockerDir, config.DockerImageTarball)
-
-	log.Printf("\033[32mSaving Docker image to cache: %s\033[0m", tarballPath)
-	cmd := exec.Command("docker", "save", "-o", tarballPath, image)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("docker save failed: %w (%s)", err, strings.TrimSpace(string(output)))
-	}
-	log.Printf("\033[32mDocker image cached successfully\033[0m")
-	return nil
-}
-
-// LoadDockerImage loads a Docker image from a cached tarball.
-// It runs "docker load -i <path>" to restore the image.
-// Returns true if the image was loaded, false if no cached tarball exists.
-func LoadDockerImage(cacheID, customPath string) (bool, error) {
-	tarballPath, err := GetDockerImageTarballPath(cacheID, customPath)
-	if err != nil {
-		return false, err
-	}
-
-	if _, err := os.Stat(tarballPath); os.IsNotExist(err) {
-		return false, nil
-	}
-
-	log.Printf("\033[32mLoading Docker image from cache: %s\033[0m", tarballPath)
-	cmd := exec.Command("docker", "load", "-i", tarballPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return false, fmt.Errorf("docker load failed: %w (%s)", err, strings.TrimSpace(string(output)))
-	}
-	log.Printf("\033[32mDocker image loaded from cache\033[0m")
-	return true, nil
 }
 
 // HasCachedDockerImage checks whether a cached Docker image tarball exists.
