@@ -80,10 +80,12 @@ runs:
       shell: bash
       run: |
         cd /tmp
-        # Rename the downloaded archive to match the filename in SHA256SUMS so sha256sum --check can locate it
-        cp diffusion.tar.gz "${DIFFUSION_ARCHIVE}"
+        # Rename downloaded files to match the filenames in SHA256SUMS
+        cp diffusion.tar.gz        "${DIFFUSION_ARCHIVE}"
+        cp diffusion.tar.gz.sig    "${DIFFUSION_ARCHIVE}.sig"
+        cp diffusion.tar.gz.pem    "${DIFFUSION_ARCHIVE}.pem"
         grep "${DIFFUSION_ARCHIVE}" SHA256SUMS | sha256sum --check
-        rm "${DIFFUSION_ARCHIVE}"
+        rm "${DIFFUSION_ARCHIVE}" "${DIFFUSION_ARCHIVE}.sig" "${DIFFUSION_ARCHIVE}.pem"
         echo "Checksum verified."
 
     - name: Verify Cosign signature
