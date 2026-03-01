@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  DIFFUSION_TESTS_REPO: https://github.com/Polar-Team/diffusion-ansible-tests-role.git
+
 jobs:
   e2e-linux:
     name: E2E Tests (${{ matrix.box }})
@@ -66,7 +69,7 @@ jobs:
   e2e-windows:
     name: E2E Tests (windows-latest)
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -85,39 +88,120 @@ jobs:
       - name: Run unit tests
         run: go test -v ./...
 
-      - name: Run E2E smoke tests
+      - name: Start Docker (Linux containers)
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name docker -ErrorAction SilentlyContinue
+          if ($svc -and $svc.Status -ne 'Running') {
+            Start-Service docker
+            Start-Sleep -Seconds 10
+          }
+          docker version
+          docker info
+
+      - name: Clone diffusion_tests repo
+        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
+
+      - name: Run deps smoke tests
+        working-directory: diffusion_tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $diffusion = "$env:GITHUB_WORKSPACE\bin\diffusion.exe"
+
+          Write-Host "=========================================="
+          Write-Host "Running deps smoke tests on Windows..."
+          Write-Host "=========================================="
+
+          # Initial check (informational; lock may be ahead of manifests)
+          Write-Host "deps check (initial)..."
+          & $diffusion deps check
+          Write-Host "Initial check exit code: $LASTEXITCODE (non-zero is OK here)"
+
+          # Regenerate lock file from manifests
+          Write-Host "deps lock..."
+          & $diffusion deps lock
+          if ($LASTEXITCODE -ne 0) { Write-Error "deps lock failed"; exit 1 }
+
+          # Sync lock back to requirements.yml / meta.yml
+          Write-Host "deps sync..."
+          & $diffusion deps sync
+          if ($LASTEXITCODE -ne 0) { Write-Error "deps sync failed"; exit 1 }
+
+          # Final check - must pass without warnings
+          Write-Host "deps check (final)..."
+          & $diffusion deps check
+          if ($LASTEXITCODE -ne 0) { Write-Error "deps check failed after lock+sync"; exit 1 }
+
+          Write-Host "=========================================="
+          Write-Host "All deps smoke tests passed on Windows!"
+          Write-Host "=========================================="
+
+      - name: Run molecule smoke tests
+        working-directory: diffusion_tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $diffusion = "$env:GITHUB_WORKSPACE\bin\diffusion.exe"
+
+          Write-Host "=========================================="
+          Write-Host "Running molecule smoke tests on Windows..."
+          Write-Host "=========================================="
+
+          Write-Host "molecule (full test cycle)..."
+          & $diffusion molecule --ci
+          if ($LASTEXITCODE -ne 0) { Write-Error "molecule failed"; exit 1 }
+
+          Write-Host "molecule --verify..."
+          & $diffusion molecule --verify --ci
+          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --verify failed"; exit 1 }
+
+          Write-Host "molecule --idempotence..."
+          & $diffusion molecule --idempotence --ci
+          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --idempotence failed"; exit 1 }
+
+          Write-Host "molecule --lint..."
+          & $diffusion molecule --lint --ci
+          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --lint failed"; exit 1 }
+
+          Write-Host "molecule --verify --tag ports..."
+          & $diffusion molecule --verify --tag ports --ci
+          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --verify --tag ports failed"; exit 1 }
+
+          Write-Host "=========================================="
+          Write-Host "All molecule smoke tests passed on Windows!"
+          Write-Host "=========================================="
+
+      - name: Run cache and artifact smoke tests
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $diffusion = ".\bin\diffusion.exe"
 
           Write-Host "=========================================="
-          Write-Host "Running E2E smoke tests on Windows..."
+          Write-Host "Running cache/artifact smoke tests on Windows..."
           Write-Host "=========================================="
 
-          # Test 1: cache enable
-          Write-Host "Test 1: Cache enable..."
+          Write-Host "cache enable..."
           & $diffusion cache enable
           if ($LASTEXITCODE -ne 0) { Write-Error "cache enable failed"; exit 1 }
 
-          # Test 2: cache status
-          Write-Host "Test 2: Cache status..."
+          Write-Host "cache status..."
           & $diffusion cache status
           if ($LASTEXITCODE -ne 0) { Write-Error "cache status failed"; exit 1 }
 
-          # Test 3: artifact list
-          Write-Host "Test 3: Artifact list..."
+          Write-Host "artifact list..."
           & $diffusion artifact list
           if ($LASTEXITCODE -ne 0) { Write-Error "artifact list failed"; exit 1 }
 
           Write-Host "=========================================="
-          Write-Host "All E2E smoke tests passed on Windows!"
+          Write-Host "All cache/artifact smoke tests passed on Windows!"
           Write-Host "=========================================="
 
   e2e-macos:
     name: E2E Tests (macos-latest)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -136,27 +220,88 @@ jobs:
       - name: Run unit tests
         run: go test -v ./...
 
-      - name: Run E2E smoke tests
+      - name: Install and start Docker (via colima)
+        run: |
+          brew install colima docker
+          colima start --memory 4 --disk 60
+          docker version
+          docker info
+
+      - name: Clone diffusion_tests repo
+        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
+
+      - name: Run deps smoke tests
+        working-directory: diffusion_tests
+        run: |
+          set -e
+          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
+
+          echo "=========================================="
+          echo "Running deps smoke tests on macOS..."
+          echo "=========================================="
+
+          # Initial check (informational; lock may be ahead of manifests)
+          echo "deps check (initial)..."
+          $DIFFUSION deps check || true
+
+          # Regenerate lock file from manifests
+          echo "deps lock..."
+          $DIFFUSION deps lock
+
+          # Sync lock back to requirements.yml / meta.yml
+          echo "deps sync..."
+          $DIFFUSION deps sync
+
+          # Final check - must pass without warnings
+          echo "deps check (final)..."
+          $DIFFUSION deps check
+
+          echo "=========================================="
+          echo "All deps smoke tests passed on macOS!"
+          echo "=========================================="
+
+      - name: Run molecule smoke tests
+        working-directory: diffusion_tests
+        run: |
+          set -e
+          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
+
+          echo "=========================================="
+          echo "Running molecule smoke tests on macOS..."
+          echo "=========================================="
+
+          echo "molecule (full test cycle)..."
+          $DIFFUSION molecule --ci
+
+          echo "molecule --verify..."
+          $DIFFUSION molecule --verify --ci
+
+          echo "molecule --idempotence..."
+          $DIFFUSION molecule --idempotence --ci
+
+          echo "molecule --lint..."
+          $DIFFUSION molecule --lint --ci
+
+          echo "molecule --verify --tag ports..."
+          $DIFFUSION molecule --verify --tag ports --ci
+
+          echo "=========================================="
+          echo "All molecule smoke tests passed on macOS!"
+          echo "=========================================="
+
+      - name: Run cache and artifact smoke tests
         run: |
           set -e
           DIFFUSION="./bin/diffusion"
 
           echo "=========================================="
-          echo "Running E2E smoke tests on macOS..."
+          echo "Running cache/artifact smoke tests on macOS..."
           echo "=========================================="
 
-          # Test 1: cache enable
-          echo "Test 1: Cache enable..."
           $DIFFUSION cache enable
-
-          # Test 2: cache status
-          echo "Test 2: Cache status..."
           $DIFFUSION cache status
-
-          # Test 3: artifact list
-          echo "Test 3: Artifact list..."
           $DIFFUSION artifact list
 
           echo "=========================================="
-          echo "All E2E smoke tests passed on macOS!"
+          echo "All cache/artifact smoke tests passed on macOS!"
           echo "=========================================="
