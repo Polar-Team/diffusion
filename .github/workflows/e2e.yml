@@ -62,3 +62,101 @@ jobs:
         env:
           BOX_NAME: ${{ matrix.box }}
         run: vagrant destroy -f
+
+  e2e-windows:
+    name: E2E Tests (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Build diffusion
+        run: make build
+
+      - name: Run unit tests
+        run: go test -v ./...
+
+      - name: Run E2E smoke tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $diffusion = ".\bin\diffusion.exe"
+
+          Write-Host "=========================================="
+          Write-Host "Running E2E smoke tests on Windows..."
+          Write-Host "=========================================="
+
+          # Test 1: cache enable
+          Write-Host "Test 1: Cache enable..."
+          & $diffusion cache enable
+          if ($LASTEXITCODE -ne 0) { Write-Error "cache enable failed"; exit 1 }
+
+          # Test 2: cache status
+          Write-Host "Test 2: Cache status..."
+          & $diffusion cache status
+          if ($LASTEXITCODE -ne 0) { Write-Error "cache status failed"; exit 1 }
+
+          # Test 3: artifact list
+          Write-Host "Test 3: Artifact list..."
+          & $diffusion artifact list
+          if ($LASTEXITCODE -ne 0) { Write-Error "artifact list failed"; exit 1 }
+
+          Write-Host "=========================================="
+          Write-Host "All E2E smoke tests passed on Windows!"
+          Write-Host "=========================================="
+
+  e2e-macos:
+    name: E2E Tests (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Build diffusion
+        run: make build
+
+      - name: Run unit tests
+        run: go test -v ./...
+
+      - name: Run E2E smoke tests
+        run: |
+          set -e
+          DIFFUSION="./bin/diffusion"
+
+          echo "=========================================="
+          echo "Running E2E smoke tests on macOS..."
+          echo "=========================================="
+
+          # Test 1: cache enable
+          echo "Test 1: Cache enable..."
+          $DIFFUSION cache enable
+
+          # Test 2: cache status
+          echo "Test 2: Cache status..."
+          $DIFFUSION cache status
+
+          # Test 3: artifact list
+          echo "Test 3: Artifact list..."
+          $DIFFUSION artifact list
+
+          echo "=========================================="
+          echo "All E2E smoke tests passed on macOS!"
+          echo "=========================================="

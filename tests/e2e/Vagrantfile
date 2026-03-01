@@ -572,7 +572,7 @@ expect eof
       echo "Running tests..."
       echo "=========================================="
 
-      go test -v
+      go test -v ./...
 
       echo "=========================================="
       echo "All tests passed on macOS!"
