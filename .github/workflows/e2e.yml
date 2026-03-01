@@ -1,0 +1,64 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  e2e-linux:
+    name: E2E Tests (${{ matrix.box }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        box:
+          - ubuntu2204
+          - ubuntu2404
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # GitHub Actions "Vagrant hack": enable KVM access on the Ubuntu runner
+      # so that libvirt/QEMU can create hardware-accelerated VMs.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Vagrant and libvirt
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            vagrant \
+            libvirt-daemon-system \
+            libvirt-dev \
+            qemu-kvm \
+            ruby-dev \
+            build-essential
+          sudo systemctl start libvirtd
+          sudo usermod -aG kvm,libvirt $USER
+
+      - name: Install vagrant-libvirt plugin
+        run: vagrant plugin install vagrant-libvirt
+
+      - name: Run E2E tests
+        working-directory: tests/e2e
+        env:
+          BOX_NAME: ${{ matrix.box }}
+          VAGRANT_DEFAULT_PROVIDER: libvirt
+        run: vagrant up --provider=libvirt
+
+      - name: Destroy VM
+        if: always()
+        working-directory: tests/e2e
+        env:
+          BOX_NAME: ${{ matrix.box }}
+        run: vagrant destroy -f
