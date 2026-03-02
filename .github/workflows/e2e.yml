@@ -23,83 +23,36 @@ jobs:
         include:
           - os: ubuntu2204
             runner: ubuntu-latest
-            use_vagrant: true
           - os: ubuntu2404
             runner: ubuntu-latest
-            use_vagrant: true
           - os: windows
             runner: windows-latest
-            use_vagrant: false
           - os: macos
             runner: macos-latest
-            use_vagrant: false
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── Linux/Vagrant steps ──────────────────────────────────────────────
-
-      # GitHub Actions "Vagrant hack": enable KVM access on the Ubuntu runner
-      # so that libvirt/QEMU can create hardware-accelerated VMs.
-      - name: Enable KVM
-        if: matrix.use_vagrant == true
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Install Vagrant and libvirt
-        if: matrix.use_vagrant == true
-        run: |
-          # Add HashiCorp apt repo (vagrant is not in Ubuntu's default repos)
-          wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-          sudo apt-get update -q
-          sudo apt-get install -y -q \
-            vagrant \
-            libvirt-daemon-system \
-            libvirt-dev \
-            qemu-kvm \
-            ruby-dev \
-            build-essential
-          sudo systemctl start libvirtd
-          sudo usermod -aG kvm,libvirt $USER
-
-      - name: Install vagrant-libvirt plugin
-        if: matrix.use_vagrant == true
-        run: vagrant plugin install vagrant-libvirt
-
-      - name: Run E2E tests (Vagrant)
-        if: matrix.use_vagrant == true
-        working-directory: tests/e2e
-        env:
-          BOX_NAME: ${{ matrix.os }}
-          VAGRANT_DEFAULT_PROVIDER: libvirt
-        run: vagrant up --provider=libvirt
-
-      - name: Destroy VM
-        if: always() && matrix.use_vagrant == true
-        working-directory: tests/e2e
-        env:
-          BOX_NAME: ${{ matrix.os }}
-        run: vagrant destroy -f
-
-      # ── Windows & macOS native steps ─────────────────────────────────────
-
       - name: Set up Go
-        if: matrix.use_vagrant == false
         uses: actions/setup-go@v5
         with:
           go-version: "1.21"
 
       - name: Build diffusion
-        if: matrix.use_vagrant == false
         run: make build
 
       - name: Run unit tests
-        if: matrix.use_vagrant == false
         run: go test -v ./...
+
+      # ── Docker setup ─────────────────────────────────────────────────────
+
+      - name: Start Docker (Linux)
+        if: matrix.os == 'ubuntu2204' || matrix.os == 'ubuntu2404'
+        run: |
+          sudo systemctl start docker
+          docker version
+          docker info
 
       - name: Start Docker (Windows)
         if: matrix.os == 'windows'
@@ -121,8 +74,9 @@ jobs:
           docker version
           docker info
 
+      # ── Smoke tests ───────────────────────────────────────────────────────
+
       - name: Clone diffusion_tests repo
-        if: matrix.use_vagrant == false
         run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
 
       - name: Run deps smoke tests (Windows)
@@ -161,15 +115,15 @@ jobs:
           Write-Host "All deps smoke tests passed on Windows!"
           Write-Host "=========================================="
 
-      - name: Run deps smoke tests (macOS)
-        if: matrix.os == 'macos'
+      - name: Run deps smoke tests (Linux/macOS)
+        if: matrix.os != 'windows'
         working-directory: diffusion_tests
         run: |
           set -e
           DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
 
           echo "=========================================="
-          echo "Running deps smoke tests on macOS..."
+          echo "Running deps smoke tests on ${{ matrix.os }}..."
           echo "=========================================="
 
           # Initial check (informational; lock may be ahead of manifests)
@@ -189,7 +143,7 @@ jobs:
           $DIFFUSION deps check
 
           echo "=========================================="
-          echo "All deps smoke tests passed on macOS!"
+          echo "All deps smoke tests passed on ${{ matrix.os }}!"
           echo "=========================================="
 
       - name: Run molecule smoke tests (Windows)
@@ -228,15 +182,15 @@ jobs:
           Write-Host "All molecule smoke tests passed on Windows!"
           Write-Host "=========================================="
 
-      - name: Run molecule smoke tests (macOS)
-        if: matrix.os == 'macos'
+      - name: Run molecule smoke tests (Linux/macOS)
+        if: matrix.os != 'windows'
         working-directory: diffusion_tests
         run: |
           set -e
           DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
 
           echo "=========================================="
-          echo "Running molecule smoke tests on macOS..."
+          echo "Running molecule smoke tests on ${{ matrix.os }}..."
           echo "=========================================="
 
           echo "molecule (full test cycle)..."
@@ -251,7 +205,7 @@ jobs:
           $DIFFUSION molecule --verify --tag ports --ci
 
           echo "=========================================="
-          echo "All molecule smoke tests passed on macOS!"
+          echo "All molecule smoke tests passed on ${{ matrix.os }}!"
           echo "=========================================="
 
       - name: Run cache and artifact smoke tests (Windows)
@@ -281,14 +235,14 @@ jobs:
           Write-Host "All cache/artifact smoke tests passed on Windows!"
           Write-Host "=========================================="
 
-      - name: Run cache and artifact smoke tests (macOS)
-        if: matrix.os == 'macos'
+      - name: Run cache and artifact smoke tests (Linux/macOS)
+        if: matrix.os != 'windows'
         run: |
           set -e
           DIFFUSION="./bin/diffusion"
 
           echo "=========================================="
-          echo "Running cache/artifact smoke tests on macOS..."
+          echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
           echo "=========================================="
 
           echo "cache enable..."
@@ -299,6 +253,6 @@ jobs:
           $DIFFUSION artifact list
 
           echo "=========================================="
-          echo "All cache/artifact smoke tests passed on macOS!"
+          echo "All cache/artifact smoke tests passed on ${{ matrix.os }}!"
           echo "=========================================="
 
