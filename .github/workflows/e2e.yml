@@ -11,32 +11,46 @@ env:
   DIFFUSION_TESTS_REPO: https://github.com/Polar-Team/diffusion-ansible-tests-role.git
 
 jobs:
-  e2e-linux:
-    name: E2E Tests (${{ matrix.box }})
-    runs-on: ubuntu-latest
+  e2e:
+    name: E2E Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        box:
-          - ubuntu2204
-          - ubuntu2404
+        include:
+          - os: ubuntu2204
+            runner: ubuntu-latest
+            use_vagrant: true
+          - os: ubuntu2404
+            runner: ubuntu-latest
+            use_vagrant: true
+          - os: windows
+            runner: windows-latest
+            use_vagrant: false
+          - os: macos
+            runner: macos-latest
+            use_vagrant: false
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ── Linux/Vagrant steps ──────────────────────────────────────────────
+
       # GitHub Actions "Vagrant hack": enable KVM access on the Ubuntu runner
       # so that libvirt/QEMU can create hardware-accelerated VMs.
       - name: Enable KVM
+        if: matrix.use_vagrant == true
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
       - name: Install Vagrant and libvirt
+        if: matrix.use_vagrant == true
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q \
@@ -50,45 +64,42 @@ jobs:
           sudo usermod -aG kvm,libvirt $USER
 
       - name: Install vagrant-libvirt plugin
+        if: matrix.use_vagrant == true
         run: vagrant plugin install vagrant-libvirt
 
-      - name: Run E2E tests
+      - name: Run E2E tests (Vagrant)
+        if: matrix.use_vagrant == true
         working-directory: tests/e2e
         env:
-          BOX_NAME: ${{ matrix.box }}
+          BOX_NAME: ${{ matrix.os }}
           VAGRANT_DEFAULT_PROVIDER: libvirt
         run: vagrant up --provider=libvirt
 
       - name: Destroy VM
-        if: always()
+        if: always() && matrix.use_vagrant == true
         working-directory: tests/e2e
         env:
-          BOX_NAME: ${{ matrix.box }}
+          BOX_NAME: ${{ matrix.os }}
         run: vagrant destroy -f
 
-  e2e-windows:
-    name: E2E Tests (windows-latest)
-    runs-on: windows-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      # ── Windows & macOS native steps ─────────────────────────────────────
 
       - name: Set up Go
+        if: matrix.use_vagrant == false
         uses: actions/setup-go@v5
         with:
           go-version: "1.21"
 
       - name: Build diffusion
+        if: matrix.use_vagrant == false
         run: make build
 
       - name: Run unit tests
+        if: matrix.use_vagrant == false
         run: go test -v ./...
 
-      - name: Start Docker (Linux containers)
+      - name: Start Docker (Windows)
+        if: matrix.os == 'windows'
         shell: pwsh
         run: |
           $svc = Get-Service -Name docker -ErrorAction SilentlyContinue
@@ -99,10 +110,20 @@ jobs:
           docker version
           docker info
 
+      - name: Install and start Docker (macOS via colima)
+        if: matrix.os == 'macos'
+        run: |
+          brew install colima docker
+          colima start --memory 4 --disk 60
+          docker version
+          docker info
+
       - name: Clone diffusion_tests repo
+        if: matrix.use_vagrant == false
         run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
 
-      - name: Run deps smoke tests
+      - name: Run deps smoke tests (Windows)
+        if: matrix.os == 'windows'
         working-directory: diffusion_tests
         shell: pwsh
         run: |
@@ -137,7 +158,39 @@ jobs:
           Write-Host "All deps smoke tests passed on Windows!"
           Write-Host "=========================================="
 
-      - name: Run molecule smoke tests
+      - name: Run deps smoke tests (macOS)
+        if: matrix.os == 'macos'
+        working-directory: diffusion_tests
+        run: |
+          set -e
+          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
+
+          echo "=========================================="
+          echo "Running deps smoke tests on macOS..."
+          echo "=========================================="
+
+          # Initial check (informational; lock may be ahead of manifests)
+          echo "deps check (initial)..."
+          $DIFFUSION deps check || true
+
+          # Regenerate lock file from manifests
+          echo "deps lock..."
+          $DIFFUSION deps lock
+
+          # Sync lock back to requirements.yml / meta.yml
+          echo "deps sync..."
+          $DIFFUSION deps sync
+
+          # Final check - must pass without warnings
+          echo "deps check (final)..."
+          $DIFFUSION deps check
+
+          echo "=========================================="
+          echo "All deps smoke tests passed on macOS!"
+          echo "=========================================="
+
+      - name: Run molecule smoke tests (Windows)
+        if: matrix.os == 'windows'
         working-directory: diffusion_tests
         shell: pwsh
         run: |
@@ -172,7 +225,34 @@ jobs:
           Write-Host "All molecule smoke tests passed on Windows!"
           Write-Host "=========================================="
 
-      - name: Run cache and artifact smoke tests
+      - name: Run molecule smoke tests (macOS)
+        if: matrix.os == 'macos'
+        working-directory: diffusion_tests
+        run: |
+          set -e
+          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
+
+          echo "=========================================="
+          echo "Running molecule smoke tests on macOS..."
+          echo "=========================================="
+
+          echo "molecule (full test cycle)..."
+          $DIFFUSION molecule --ci
+          echo "molecule --verify..."
+          $DIFFUSION molecule --verify --ci
+          echo "molecule --idempotence..."
+          $DIFFUSION molecule --idempotence --ci
+          echo "molecule --lint..."
+          $DIFFUSION molecule --lint --ci
+          echo "molecule --verify --tag ports..."
+          $DIFFUSION molecule --verify --tag ports --ci
+
+          echo "=========================================="
+          echo "All molecule smoke tests passed on macOS!"
+          echo "=========================================="
+
+      - name: Run cache and artifact smoke tests (Windows)
+        if: matrix.os == 'windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -198,98 +278,8 @@ jobs:
           Write-Host "All cache/artifact smoke tests passed on Windows!"
           Write-Host "=========================================="
 
-  e2e-macos:
-    name: E2E Tests (macos-latest)
-    runs-on: macos-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.21"
-
-      - name: Build diffusion
-        run: make build
-
-      - name: Run unit tests
-        run: go test -v ./...
-
-      - name: Install and start Docker (via colima)
-        run: |
-          brew install colima docker
-          colima start --memory 4 --disk 60
-          docker version
-          docker info
-
-      - name: Clone diffusion_tests repo
-        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
-
-      - name: Run deps smoke tests
-        working-directory: diffusion_tests
-        run: |
-          set -e
-          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
-
-          echo "=========================================="
-          echo "Running deps smoke tests on macOS..."
-          echo "=========================================="
-
-          # Initial check (informational; lock may be ahead of manifests)
-          echo "deps check (initial)..."
-          $DIFFUSION deps check || true
-
-          # Regenerate lock file from manifests
-          echo "deps lock..."
-          $DIFFUSION deps lock
-
-          # Sync lock back to requirements.yml / meta.yml
-          echo "deps sync..."
-          $DIFFUSION deps sync
-
-          # Final check - must pass without warnings
-          echo "deps check (final)..."
-          $DIFFUSION deps check
-
-          echo "=========================================="
-          echo "All deps smoke tests passed on macOS!"
-          echo "=========================================="
-
-      - name: Run molecule smoke tests
-        working-directory: diffusion_tests
-        run: |
-          set -e
-          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
-
-          echo "=========================================="
-          echo "Running molecule smoke tests on macOS..."
-          echo "=========================================="
-
-          echo "molecule (full test cycle)..."
-          $DIFFUSION molecule --ci
-
-          echo "molecule --verify..."
-          $DIFFUSION molecule --verify --ci
-
-          echo "molecule --idempotence..."
-          $DIFFUSION molecule --idempotence --ci
-
-          echo "molecule --lint..."
-          $DIFFUSION molecule --lint --ci
-
-          echo "molecule --verify --tag ports..."
-          $DIFFUSION molecule --verify --tag ports --ci
-
-          echo "=========================================="
-          echo "All molecule smoke tests passed on macOS!"
-          echo "=========================================="
-
-      - name: Run cache and artifact smoke tests
+      - name: Run cache and artifact smoke tests (macOS)
+        if: matrix.os == 'macos'
         run: |
           set -e
           DIFFUSION="./bin/diffusion"
@@ -298,10 +288,14 @@ jobs:
           echo "Running cache/artifact smoke tests on macOS..."
           echo "=========================================="
 
+          echo "cache enable..."
           $DIFFUSION cache enable
+          echo "cache status..."
           $DIFFUSION cache status
+          echo "artifact list..."
           $DIFFUSION artifact list
 
           echo "=========================================="
           echo "All cache/artifact smoke tests passed on macOS!"
           echo "=========================================="
+
