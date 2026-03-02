@@ -21,10 +21,36 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu2204
+          # Linux distros – run on ubuntu-latest; smoke tests execute inside
+          # a Docker container of the target distro via docker run
+          - os: ubuntu2304
             runner: ubuntu-latest
+            container: ubuntu:23.04
           - os: ubuntu2404
             runner: ubuntu-latest
+            container: ubuntu:24.04
+          - os: debian12
+            runner: ubuntu-latest
+            container: debian:12
+          - os: debian13
+            runner: ubuntu-latest
+            container: debian:trixie
+          - os: fedora43
+            runner: ubuntu-latest
+            container: fedora:43
+          - os: fedora42
+            runner: ubuntu-latest
+            container: fedora:42
+          - os: almalinux9
+            runner: ubuntu-latest
+            container: almalinux:9
+          - os: almalinux10
+            runner: ubuntu-latest
+            container: almalinux:10
+          - os: archlinux
+            runner: ubuntu-latest
+            container: archlinux:latest
+          # Native runners
           - os: windows
             runner: windows-latest
           - os: macos
@@ -48,7 +74,7 @@ jobs:
       # ── Docker setup ─────────────────────────────────────────────────────
 
       - name: Start Docker (Linux)
-        if: matrix.os == 'ubuntu2204' || matrix.os == 'ubuntu2404'
+        if: matrix.runner == 'ubuntu-latest'
         run: |
           sudo systemctl start docker
           docker version
@@ -79,7 +105,90 @@ jobs:
       - name: Clone diffusion_tests repo
         run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
 
-      - name: Run deps smoke tests (Windows)
+      - name: Run smoke tests (Linux)
+        if: matrix.runner == 'ubuntu-latest'
+        # Run the diffusion binary (static Go binary) inside the target distro's
+        # container. The workspace is mounted at the same host path so that any
+        # Docker volume mounts created by molecule resolve correctly on the host
+        # Docker daemon (which owns the mounted socket).
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -w "$GITHUB_WORKSPACE/diffusion_tests" \
+            -e WORKSPACE="$GITHUB_WORKSPACE" \
+            "${{ matrix.container }}" \
+            sh -c '
+              set -e
+              DIFFUSION="$WORKSPACE/bin/diffusion"
+
+              echo "=========================================="
+              echo "Running deps smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+              $DIFFUSION deps check || true
+              $DIFFUSION deps lock
+              $DIFFUSION deps sync
+              $DIFFUSION deps check
+
+              echo "=========================================="
+              echo "Running molecule smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+              $DIFFUSION molecule --ci
+              $DIFFUSION molecule --verify --ci
+              $DIFFUSION molecule --idempotence --ci
+              $DIFFUSION molecule --lint --ci
+              $DIFFUSION molecule --verify --tag ports --ci
+
+              echo "=========================================="
+              echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+              cd "$WORKSPACE"
+              $DIFFUSION cache enable
+              $DIFFUSION cache status
+              $DIFFUSION artifact list
+
+              echo "=========================================="
+              echo "All smoke tests passed on ${{ matrix.os }}!"
+              echo "=========================================="
+            '
+
+      - name: Run smoke tests (macOS)
+        if: matrix.os == 'macos'
+        working-directory: diffusion_tests
+        run: |
+          set -e
+          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
+
+          echo "=========================================="
+          echo "Running deps smoke tests on macOS..."
+          echo "=========================================="
+          $DIFFUSION deps check || true
+          $DIFFUSION deps lock
+          $DIFFUSION deps sync
+          $DIFFUSION deps check
+
+          echo "=========================================="
+          echo "Running molecule smoke tests on macOS..."
+          echo "=========================================="
+          $DIFFUSION molecule --ci
+          $DIFFUSION molecule --verify --ci
+          $DIFFUSION molecule --idempotence --ci
+          $DIFFUSION molecule --lint --ci
+          $DIFFUSION molecule --verify --tag ports --ci
+
+          echo "=========================================="
+          echo "Running cache/artifact smoke tests on macOS..."
+          echo "=========================================="
+          cd "$GITHUB_WORKSPACE"
+          $DIFFUSION cache enable
+          $DIFFUSION cache status
+          $DIFFUSION artifact list
+
+          echo "=========================================="
+          echo "All smoke tests passed on macOS!"
+          echo "=========================================="
+
+      - name: Run smoke tests (Windows)
         if: matrix.os == 'windows'
         working-directory: diffusion_tests
         shell: pwsh
@@ -90,169 +199,42 @@ jobs:
           Write-Host "=========================================="
           Write-Host "Running deps smoke tests on Windows..."
           Write-Host "=========================================="
-
-          # Initial check (informational; lock may be ahead of manifests)
-          Write-Host "deps check (initial)..."
           & $diffusion deps check
           Write-Host "Initial check exit code: $LASTEXITCODE (non-zero is OK here)"
-
-          # Regenerate lock file from manifests
-          Write-Host "deps lock..."
           & $diffusion deps lock
           if ($LASTEXITCODE -ne 0) { Write-Error "deps lock failed"; exit 1 }
-
-          # Sync lock back to requirements.yml / meta.yml
-          Write-Host "deps sync..."
           & $diffusion deps sync
           if ($LASTEXITCODE -ne 0) { Write-Error "deps sync failed"; exit 1 }
-
-          # Final check - must pass without warnings
-          Write-Host "deps check (final)..."
           & $diffusion deps check
           if ($LASTEXITCODE -ne 0) { Write-Error "deps check failed after lock+sync"; exit 1 }
 
           Write-Host "=========================================="
-          Write-Host "All deps smoke tests passed on Windows!"
-          Write-Host "=========================================="
-
-      - name: Run deps smoke tests (Linux/macOS)
-        if: matrix.os != 'windows'
-        working-directory: diffusion_tests
-        run: |
-          set -e
-          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
-
-          echo "=========================================="
-          echo "Running deps smoke tests on ${{ matrix.os }}..."
-          echo "=========================================="
-
-          # Initial check (informational; lock may be ahead of manifests)
-          echo "deps check (initial)..."
-          $DIFFUSION deps check || true
-
-          # Regenerate lock file from manifests
-          echo "deps lock..."
-          $DIFFUSION deps lock
-
-          # Sync lock back to requirements.yml / meta.yml
-          echo "deps sync..."
-          $DIFFUSION deps sync
-
-          # Final check - must pass without warnings
-          echo "deps check (final)..."
-          $DIFFUSION deps check
-
-          echo "=========================================="
-          echo "All deps smoke tests passed on ${{ matrix.os }}!"
-          echo "=========================================="
-
-      - name: Run molecule smoke tests (Windows)
-        if: matrix.os == 'windows'
-        working-directory: diffusion_tests
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $diffusion = "$env:GITHUB_WORKSPACE\bin\diffusion.exe"
-
-          Write-Host "=========================================="
           Write-Host "Running molecule smoke tests on Windows..."
           Write-Host "=========================================="
-
-          Write-Host "molecule (full test cycle)..."
           & $diffusion molecule --ci
           if ($LASTEXITCODE -ne 0) { Write-Error "molecule failed"; exit 1 }
-
-          Write-Host "molecule --verify..."
           & $diffusion molecule --verify --ci
           if ($LASTEXITCODE -ne 0) { Write-Error "molecule --verify failed"; exit 1 }
-
-          Write-Host "molecule --idempotence..."
           & $diffusion molecule --idempotence --ci
           if ($LASTEXITCODE -ne 0) { Write-Error "molecule --idempotence failed"; exit 1 }
-
-          Write-Host "molecule --lint..."
           & $diffusion molecule --lint --ci
           if ($LASTEXITCODE -ne 0) { Write-Error "molecule --lint failed"; exit 1 }
-
-          Write-Host "molecule --verify --tag ports..."
           & $diffusion molecule --verify --tag ports --ci
           if ($LASTEXITCODE -ne 0) { Write-Error "molecule --verify --tag ports failed"; exit 1 }
 
           Write-Host "=========================================="
-          Write-Host "All molecule smoke tests passed on Windows!"
-          Write-Host "=========================================="
-
-      - name: Run molecule smoke tests (Linux/macOS)
-        if: matrix.os != 'windows'
-        working-directory: diffusion_tests
-        run: |
-          set -e
-          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
-
-          echo "=========================================="
-          echo "Running molecule smoke tests on ${{ matrix.os }}..."
-          echo "=========================================="
-
-          echo "molecule (full test cycle)..."
-          $DIFFUSION molecule --ci
-          echo "molecule --verify..."
-          $DIFFUSION molecule --verify --ci
-          echo "molecule --idempotence..."
-          $DIFFUSION molecule --idempotence --ci
-          echo "molecule --lint..."
-          $DIFFUSION molecule --lint --ci
-          echo "molecule --verify --tag ports..."
-          $DIFFUSION molecule --verify --tag ports --ci
-
-          echo "=========================================="
-          echo "All molecule smoke tests passed on ${{ matrix.os }}!"
-          echo "=========================================="
-
-      - name: Run cache and artifact smoke tests (Windows)
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $diffusion = ".\bin\diffusion.exe"
-
-          Write-Host "=========================================="
           Write-Host "Running cache/artifact smoke tests on Windows..."
           Write-Host "=========================================="
-
-          Write-Host "cache enable..."
+          $diffusion = "$env:GITHUB_WORKSPACE\bin\diffusion.exe"
+          Set-Location "$env:GITHUB_WORKSPACE"
           & $diffusion cache enable
           if ($LASTEXITCODE -ne 0) { Write-Error "cache enable failed"; exit 1 }
-
-          Write-Host "cache status..."
           & $diffusion cache status
           if ($LASTEXITCODE -ne 0) { Write-Error "cache status failed"; exit 1 }
-
-          Write-Host "artifact list..."
           & $diffusion artifact list
           if ($LASTEXITCODE -ne 0) { Write-Error "artifact list failed"; exit 1 }
 
           Write-Host "=========================================="
-          Write-Host "All cache/artifact smoke tests passed on Windows!"
+          Write-Host "All smoke tests passed on Windows!"
           Write-Host "=========================================="
-
-      - name: Run cache and artifact smoke tests (Linux/macOS)
-        if: matrix.os != 'windows'
-        run: |
-          set -e
-          DIFFUSION="./bin/diffusion"
-
-          echo "=========================================="
-          echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
-          echo "=========================================="
-
-          echo "cache enable..."
-          $DIFFUSION cache enable
-          echo "cache status..."
-          $DIFFUSION cache status
-          echo "artifact list..."
-          $DIFFUSION artifact list
-
-          echo "=========================================="
-          echo "All cache/artifact smoke tests passed on ${{ matrix.os }}!"
-          echo "=========================================="
 
