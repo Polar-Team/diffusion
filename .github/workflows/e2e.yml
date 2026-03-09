@@ -17,6 +17,13 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    # AWS credentials: automatically picked up by the aws CLI from env vars.
+    # GCP service-account key: used by the explicit gcloud auth steps below.
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +66,28 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # ── Cloud CLI authentication (from GitHub secrets) ────────────────────
+      # AWS CLI picks up AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION
+      # from the job-level env block above — no extra step required.
+      # gcloud requires an explicit `auth activate-service-account` call.
+
+      - name: Authenticate gcloud CLI (Linux)
+        if: matrix.runner == 'ubuntu-latest' && env.GCP_SA_KEY != ''
+        run: echo "$GCP_SA_KEY" | gcloud auth activate-service-account --key-file=-
+
+      - name: Authenticate gcloud CLI (macOS)
+        if: matrix.os == 'macos' && env.GCP_SA_KEY != ''
+        run: |
+          if ! command -v gcloud &>/dev/null; then
+            brew install --cask google-cloud-sdk
+          fi
+          echo "$GCP_SA_KEY" | gcloud auth activate-service-account --key-file=-
+
+      - name: Authenticate gcloud CLI (Windows)
+        if: matrix.os == 'windows' && env.GCP_SA_KEY != ''
+        shell: pwsh
+        run: $env:GCP_SA_KEY | gcloud auth activate-service-account --key-file=-
 
       - name: Set up Go
         uses: actions/setup-go@v5
