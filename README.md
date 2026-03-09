@@ -34,6 +34,7 @@ We kept this in mind when creating Diffusion, to make Molecule testing more fun 
 - 🔍 **Built-in Linting**: Integrated YAML and Ansible linting with customizable rules
 - ✅ **Comprehensive Testing**: Support for convergence, verification, idempotence, and lint testing
 - 🎯 **Interactive Configuration**: User-friendly prompts for project setup
+- 🔒 **Dependency Management**: Lock file system for reproducible Python, Ansible, and collection versions
 
 ## 🛠️ Prerequisites
 
@@ -111,7 +112,7 @@ This creates binaries for Linux, macOS, and Windows (AMD64, ARM64, ARM). See [Bu
 ### Using Go Install
 
 ```bash
-go install github. com/Polar-Team/diffusion@latest
+go install github.com/Polar-Team/diffusion@latest
 ```
 
 ## 🚀 Quick Start
@@ -122,7 +123,7 @@ go install github. com/Polar-Team/diffusion@latest
 diffusion role --init
 ```
 
-This will guide you through creating a new Ansible role with the proper structure. 
+This will guide you through creating a new Ansible role with the proper structure.
 
 ### 2. Configure Diffusion
 
@@ -140,7 +141,19 @@ Configuration is stored in `diffusion.toml` in your project directory.
 - Container Name: `polar-team/diffusion-molecule-container`
 - Container Tag: `latest-amd64` or `latest-arm64` (auto-detected based on your system architecture)
 
-### 3. Run Molecule Tests
+### 3. Initialize and Lock Dependencies
+
+```bash
+# Initialize dependency configuration in diffusion.toml
+diffusion deps init
+
+# Resolve and lock all dependency versions
+diffusion deps lock
+```
+
+This creates a `diffusion.lock` file that pins Python, Ansible, Molecule, and collection versions for reproducible builds.
+
+### 4. Run Molecule Tests
 
 Diffusion automatically detects role name and namespace from `meta/main.yml`:
 
@@ -191,6 +204,9 @@ Manage Ansible role and collection caching for faster builds.
 # Enable cache for current role
 diffusion cache enable
 
+# Enable cache with Docker image and UV/Python package caching
+diffusion cache enable --docker --uv
+
 # Disable cache
 diffusion cache disable
 
@@ -199,9 +215,12 @@ diffusion cache clean
 
 # Show cache status
 diffusion cache status
+
+# List all cache directories
+diffusion cache list
 ```
 
-**Benefits**: Caches downloaded roles and collections between runs, significantly speeding up repeated molecule tests. See [Cache Feature Documentation](docs/cache-feature.md) for details.
+**Benefits**: Caches downloaded roles, collections, Docker images, and Python packages between runs, significantly speeding up repeated molecule tests. See [Cache Feature Documentation](docs/cache-feature.md) for details.
 
 ### `diffusion artifact`
 Manage private artifact repository credentials with encrypted storage.
@@ -355,13 +374,6 @@ diffusion molecule --destroy
 diffusion molecule --wipe
 ```
 
-# 4. Test idempotence
-diffusion molecule --idempotence
-
-# 5. Clean up
-diffusion molecule --wipe
-```
-
 **Testing Resources:**
 - [diffusion-ansible-tests-role](https://github.com/Polar-Team/diffusion-ansible-tests-role) - Comprehensive testing role for verify.yml automation. Validates Docker containers, network ports, shell commands, HTTP endpoints, and PostgreSQL databases in your Molecule tests.
 - [diffusion-molecule-container](https://github.com/Polar-Team/diffusion-molecule-container) - Official Docker container for Diffusion with Molecule, Ansible, and all required testing tools pre-installed. Use this as a base to create your own custom Diffusion container with additional tools or configurations.
@@ -372,6 +384,44 @@ Display all Diffusion configuration in a readable format.
 ```bash
 diffusion show
 ```
+
+### `diffusion deps`
+Manage project dependencies including Python versions, Ansible tools, collections, and roles. Generates a `diffusion.lock` file for reproducible builds.
+
+```bash
+# Initialize dependency configuration in diffusion.toml
+diffusion deps init
+
+# Generate or update the diffusion.lock file
+diffusion deps lock
+
+# Check if lock file is up-to-date with current dependencies
+diffusion deps check
+
+# Display all resolved dependencies with actual versions
+diffusion deps resolve
+
+# Sync dependencies from lock file back to requirements.yml and meta.yml
+diffusion deps sync
+```
+
+**Subcommands:**
+- `init` - Creates a `[dependencies]` section in `diffusion.toml` with defaults and imports existing `requirements.yml` entries
+- `lock` - Queries PyPI and Ansible Galaxy to resolve version constraints, then writes `diffusion.lock`
+- `check` - Compares current dependency hash against `diffusion.lock`; exits `1` if out of date (useful in CI)
+- `resolve` - Reads `diffusion.lock` and pretty-prints Python, tool, collection, and role versions
+- `sync` - Writes resolved versions from `diffusion.lock` back to `requirements.yml` and `meta/main.yml` (rollback / migration helper)
+
+**CI/CD example:**
+```yaml
+- name: Validate lock file
+  run: diffusion deps check
+
+- name: Run tests
+  run: diffusion molecule --ci --converge
+```
+
+See [Dependency Management Documentation](docs/DEPENDENCY_MANAGEMENT.md) for complete details.
 
 ## ⚙️ Configuration
 
@@ -434,6 +484,18 @@ type = "local"
 # Cache Configuration
 [cache]
 enabled = false
+
+# Dependency Management
+[dependencies]
+ansible = ">=10.0.0"
+molecule = ">=24.0.0"
+ansible_lint = ">=24.0.0"
+yamllint = ">=1.35.0"
+
+[dependencies.python]
+min = "3.11"
+max = "3.13"
+pinned = "3.13"
 ```
 
 ### Example 2: Yandex Cloud Registry with Vault Integration
@@ -501,6 +563,18 @@ type = "diffusion"
 # Cache Configuration
 [cache]
 enabled = true
+
+# Dependency Management
+[dependencies]
+ansible = ">=10.0.0"
+molecule = ">=24.0.0"
+ansible_lint = ">=24.0.0"
+yamllint = ">=1.35.0"
+
+[dependencies.python]
+min = "3.11"
+max = "3.13"
+pinned = "3.13"
 ```
 
 ### Example 3: GCP Artifact Registry
@@ -555,6 +629,18 @@ type = "local"
 # Cache Configuration
 [cache]
 enabled = false
+
+# Dependency Management
+[dependencies]
+ansible = ">=10.0.0"
+molecule = ">=24.0.0"
+ansible_lint = ">=24.0.0"
+yamllint = ">=1.35.0"
+
+[dependencies.python]
+min = "3.11"
+max = "3.13"
+pinned = "3.13"
 ```
 
 ### Configuration Options
@@ -638,7 +724,18 @@ Diffusion supports three test types for Molecule verify stage:
 **Cache:**
 - `enabled = true`: Cache Ansible roles and collections between runs
 - `cache_id` is auto-generated when cache is enabled
+- `docker_cache = true`: Also cache Docker images as tarballs
+- `uv_cache = true`: Also cache UV/Python packages
 - See [Cache Feature](docs/cache-feature.md) for details
+
+**Dependencies:**
+- `ansible`, `molecule`, `ansible_lint`, `yamllint`: Tool version constraints (e.g., `">=10.0.0"`)
+- `[dependencies.python]`: Python version configuration for the container
+  - `pinned`: Exact Python version used inside the container (allowed: `3.13`, `3.12`, `3.11`)
+  - `min` / `max`: Acceptable Python version range
+- Collections and roles can be declared under `[[dependencies.collections]]` and `[[dependencies.roles]]`
+- Run `diffusion deps lock` to resolve constraints to a `diffusion.lock` file
+- See [Dependency Management](docs/DEPENDENCY_MANAGEMENT.md) for complete details
 
 ### Managing Configuration
 
@@ -670,11 +767,13 @@ role-name/
 ├── vars/
 ├── scenarios/
 │   └── default/
-│       ├── converge.yml   # Convergence playbook
-│       ├── verify.yml     # Verification tests
-│       ├── molecule.yml   # Molecule configuration
+│       ├── converge.yml      # Convergence playbook
+│       ├── verify.yml        # Verification tests
+│       ├── molecule.yml      # Molecule configuration
 │       └── requirements.yml  # Role dependencies
-└── . gitignore
+├── diffusion.toml            # Diffusion configuration
+├── diffusion.lock            # Locked dependency versions
+└── .gitignore
 ```
 
 ## 🔐 HashiCorp Vault Integration
@@ -754,14 +853,14 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📚 Documentation
 
-- **[Dependency Management](dev-new-features/docs/DEPENDENCY_MANAGEMENT.md)** - Complete guide to Python, tool, and collection dependency management
+- **[Dependency Management](docs/DEPENDENCY_MANAGEMENT.md)** - Complete guide to Python, tool, and collection dependency management
 - **[Building from Source](docs/building.md)** - Complete build guide with cross-compilation
 - **[Verification Guide](docs/verification.md)** - Verify binary signatures and SLSA provenance
 - **[Cache Feature](docs/cache-feature.md)** - Ansible role and collection caching for faster builds
 - **[Artifact Management](docs/artifact-management.md)** - Managing private repository credentials
 - **[Unix Permissions](docs/unix-permissions.md)** - How Diffusion handles permissions on Unix systems
 - **[Migration Guide](docs/migration-guide.md)** - Upgrading from older versions
-- **[Changelog](dev-new-features/docs/CHANGELOG.md)** - Version history and changes
+- **[Changelog](docs/changelog.md)** - Version history and changes
 - **[E2E Testing](tests/e2e/README.md)** - End-to-end testing with Vagrant
 
 ### Technical Archives
