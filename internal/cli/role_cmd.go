@@ -99,13 +99,24 @@ func newRoleAddRoleCmd(cli *CLI) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			roleName := args[0]
 
+			if strings.HasSuffix(cli.RoleSrcFlag, ".git") {
+				cli.RoleScmFlag = "git"
+
+			} else {
+				cli.RoleScmFlag = "galaxy"
+			}
+
 			// Resolve the actual version from Galaxy API or Git if no version provided
 			resolvedVersion := cli.RoleVersionFlag
 			if resolvedVersion == "" || resolvedVersion == "latest" || resolvedVersion == "main" || resolvedVersion == "master" {
 				fmt.Printf("Resolving version for role %s...\n", roleName)
 
 				// If src is provided and it's a git URL, try to resolve from git
-				if cli.RoleSrcFlag != "" && (strings.HasSuffix(cli.RoleSrcFlag, ".git")) {
+				switch cli.RoleScmFlag {
+				case "git":
+					if resolvedVersion == "" {
+						resolvedVersion = "main"
+					}
 					resolved, err := galaxy.ResolveVersionFromGit(cli.RoleSrcFlag, resolvedVersion)
 					if err != nil {
 						fmt.Printf("\033[33mWarning: Failed to resolve role version from git: %v\033[0m\n", err)
@@ -114,10 +125,9 @@ func newRoleAddRoleCmd(cli *CLI) *cobra.Command {
 						if err != nil {
 							fmt.Printf("\033[33mWarning: Failed to resolve role version from Galaxy: %v\033[0m\n", err)
 							fmt.Printf("\033[33mUsing 'main' as default version\033[0m\n")
-							// try to resolve version from git repository
 							resolved, err = galaxy.ResolveVersionFromGit(cli.RoleSrcFlag, resolvedVersion)
 							if err == nil {
-								resolvedVersion = resolved
+								resolvedVersion = galaxy.NormalizeVersion(resolved)
 							} else {
 								resolvedVersion = "not-defined"
 							}
@@ -129,7 +139,7 @@ func newRoleAddRoleCmd(cli *CLI) *cobra.Command {
 						resolvedVersion = resolved
 						fmt.Printf("Resolved %s to version %s from git\n", roleName, resolvedVersion)
 					}
-				} else {
+				case "galaxy":
 					// Try Galaxy API
 					resolved, err := galaxy.GetRoleVersion(roleName, resolvedVersion)
 					if err != nil {
@@ -141,11 +151,6 @@ func newRoleAddRoleCmd(cli *CLI) *cobra.Command {
 						fmt.Printf("Resolved %s to version %s\n", roleName, resolvedVersion)
 					}
 				}
-			}
-
-			// Normalize version (add 'v' prefix if needed for git tags)
-			if cli.RoleSrcFlag != "" && (strings.HasSuffix(cli.RoleSrcFlag, ".git")) {
-				resolvedVersion = galaxy.NormalizeVersion(resolvedVersion)
 			}
 
 			// Add to diffusion.toml dependencies
@@ -161,15 +166,30 @@ func newRoleAddRoleCmd(cli *CLI) *cobra.Command {
 
 			// Determine version constraint for diffusion.toml
 			// If no constraint was provided, use >=<resolved_version>
-			configVersionConstraint, err := galaxy.GetRoleVersion(roleName, cli.RoleVersionFlag)
-			if err != nil {
-				// If GetRoleVersion from galaxy failed trying git
-				log.Printf("Warning: Failed to get role version from Galaxy: %v\n", err)
-				configVersionConstraint, err = galaxy.ResolveVersionFromGit(cli.RoleSrcFlag, cli.RoleVersionFlag)
-				if err != nil {
-					log.Printf("Warning: Failed to get role version from git: %v\n", err)
-					configVersionConstraint = "1.0.0"
+			configVersionConstraint := cli.RoleVersionFlag
+			if strings.Contains(cli.RoleVersionFlag, "<") ||
+				strings.Contains(cli.RoleVersionFlag, ">") ||
+				strings.Contains(cli.RoleVersionFlag, "==") ||
+				strings.Contains(cli.RoleVersionFlag, "=") ||
+				strings.Contains(cli.RoleVersionFlag, ">=") ||
+				strings.Contains(cli.RoleVersionFlag, "<=") {
+				configVersionConstraint = cli.RoleVersionFlag
+			} else {
+				switch cli.RoleScmFlag {
+				case "git":
+					configVersionConstraint, err = galaxy.ResolveVersionFromGit(cli.RoleSrcFlag, cli.RoleVersionFlag)
+					if err != nil {
+						log.Printf("Warning: Failed to get role version from Galaxy: %v\n", err)
+						configVersionConstraint = "1.0.0"
+					}
+				case "galaxy":
+					configVersionConstraint, err = galaxy.GetRoleVersion(roleName, cli.RoleVersionFlag)
+					if err != nil {
+						log.Printf("Warning: Failed to get role version from git: %v\n", err)
+						configVersionConstraint = "1.0.0"
+					}
 				}
+
 			}
 			if cli.RoleVersionFlag == "" || cli.RoleVersionFlag == "latest" || cli.RoleVersionFlag == "main" || cli.RoleVersionFlag == "master" {
 				// Strip 'v' prefix for constraint if present

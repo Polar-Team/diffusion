@@ -172,33 +172,43 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 		// Determine resolution strategy based on source
 		resolved := false
 
-		// Priority 1: If git URL is provided, resolve from git
-		if role.Src != "" && (strings.Contains(role.Src, "github.com") || strings.Contains(role.Src, "gitlab.com") || strings.HasSuffix(role.Src, ".git")) {
-			resolvedVersion, err := galaxy.ResolveVersionFromGit(role.Src, role.Version)
-			if err != nil {
-				fmt.Printf("Warning: Failed to resolve version for role %s from git: %v\n", role.Name, err)
-				// If resolution fails but we have a version constraint, use it
-				if role.Version != "" && role.Version != "latest" {
-					entry.ResolvedVersion = role.Version
-					resolved = true
-				}
-			} else {
-				entry.ResolvedVersion = resolvedVersion
-				resolved = true
-			}
-		}
+		maxAttempts := 3
 
-		// Priority 2: If not resolved and has namespace, try Galaxy API
-		if !resolved {
-			parts := strings.Split(role.Name, ".")
-			if len(parts) == 2 {
-				resolvedVersion, err := galaxyAPI.ResolveRoleVersion(parts[0], parts[1], role.Version)
+		for attempt := range maxAttempts {
+			// Priority 1: If git URL is provided, resolve from git
+			if role.Src != "" && (strings.Contains(role.Src, "github.com") || strings.Contains(role.Src, "gitlab.com") || strings.HasSuffix(role.Src, ".git")) {
+				resolvedVersion, err := galaxy.ResolveVersionFromGit(role.Src, role.Version)
 				if err != nil {
-					fmt.Printf("Warning: Failed to resolve version for role %s from Galaxy: %v\n", role.Name, err)
+					fmt.Printf("Warning: Failed to resolve version for role %s from git (attempt %d/%d): %v\n", role.Name, attempt+1, maxAttempts, err)
 				} else {
 					entry.ResolvedVersion = resolvedVersion
 					resolved = true
 				}
+			}
+
+			// Priority 2: If not resolved and has namespace, try Galaxy API
+			if !resolved && role.Scm == "galaxy" {
+				parts := strings.Split(role.Name, ".")
+				if len(parts) == 2 {
+					resolvedVersion, err := galaxyAPI.ResolveRoleVersion(parts[0], parts[1], role.Version)
+					if err != nil {
+						fmt.Printf("Warning: Failed to resolve version for role %s from Galaxy (attempt %d/%d): %v\n", role.Name, attempt+1, maxAttempts, err)
+					} else {
+						entry.ResolvedVersion = resolvedVersion
+						resolved = true
+					}
+				}
+			}
+
+			if resolved {
+				break
+			}
+
+			// Wait before retrying (exponential backoff)
+			if attempt < maxAttempts-1 {
+				backoff := time.Duration(1<<uint(attempt)) * time.Second
+				fmt.Printf("Retrying role %s in %v...\n", role.Name, backoff)
+				time.Sleep(backoff)
 			}
 		}
 

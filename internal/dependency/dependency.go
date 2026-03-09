@@ -383,18 +383,8 @@ func LoadDependencyConfig() (*config.DependencyConfig, error) {
 			// Extract actual role name from scenario prefix (e.g., "default.rolename" -> "rolename")
 			// Roles in diffusion.toml are stored as "scenario.rolename" or "scenario.namespace.rolename"
 
-			// Role names in config are prefixed with scenario (e.g., "default.rolename")
-			// Extract the actual role name
-			parts := strings.SplitN(role.Name, ".", 2)
-			var roleName string
-			if len(parts) == 2 {
-				roleName = parts[1]
-			} else {
-				roleName = role.Name
-			}
-
 			// Store the cleaned role name
-			cfg.DependencyConfig.Roles[i].Name = roleName
+			cfg.DependencyConfig.Roles[i].Name = role.Name
 
 			if role.Scm == "git" && role.Src != "" {
 				cfg.DependencyConfig.Roles[i].Src = role.Src
@@ -406,7 +396,7 @@ func LoadDependencyConfig() (*config.DependencyConfig, error) {
 				cfg.DependencyConfig.Roles[i].Version = role.Version
 			}
 
-			if roleName == "" {
+			if role.Name == "" {
 				return nil, fmt.Errorf("role name cannot be empty")
 			}
 		}
