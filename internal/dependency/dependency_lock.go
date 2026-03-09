@@ -17,6 +17,7 @@ import (
 // LockFileEntry represents a single dependency entry in the lock file
 type LockFileEntry struct {
 	Name            string            `yaml:"name"`
+	Namespace       string            `yaml:"namespace,omitempty"` // Galaxy namespace (e.g., "community", "geerlingguy")
 	Version         string            `yaml:"version"`
 	ResolvedVersion string            `yaml:"resolved_version,omitempty"` // Actual version (e.g., "7.5.0" for ">=7.4.0")
 	Type            string            `yaml:"type"`                       // "collection", "role", "tool"
@@ -98,11 +99,12 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 			col.Source = "galaxy"
 		}
 		entry := LockFileEntry{
-			Name:    col.Name,
-			Version: col.Version,
-			Type:    "collection",
-			Source:  col.Source,
-			Src:     col.SourceURL,
+			Name:      col.Name,
+			Namespace: col.Namespace,
+			Version:   col.Version,
+			Type:      "collection",
+			Source:    col.Source,
+			Src:       col.SourceURL,
 		}
 
 		if col.Source != "galaxy" {
@@ -125,10 +127,24 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 				entry.ResolvedVersion = resolvedVersion
 			}
 		} else {
-			// Resolve version from Galaxy
-			resolvedVersion, err := galaxyAPI.ResolveVersion(col.Name, "collection", col.Version)
+			// Resolve version from Galaxy using Namespace field
+			// Collection Name in config is "scenario.collectionname", Namespace is separate
+			namespace := col.Namespace
+			collectionName := col.Name
+
+			// Strip scenario prefix from collection name for Galaxy resolution
+			if parts := strings.SplitN(collectionName, ".", 2); len(parts) == 2 {
+				collectionName = parts[1]
+			}
+
+			resolvedVersion, err := galaxyAPI.ResolveVersion(namespace, collectionName, "collection", col.Version)
 			if err != nil {
-				fmt.Printf("Warning: Failed to resolve version for %s: %v\n", col.Name, err)
+				// Display as namespace.name for clarity in warning
+				displayName := col.Name
+				if namespace != "" {
+					displayName = namespace + "." + collectionName
+				}
+				fmt.Printf("Warning: Failed to resolve version for %s: %v\n", displayName, err)
 				// Use the version constraint if resolution fails
 				if col.Version != "" && col.Version != "latest" {
 					entry.ResolvedVersion = col.Version
@@ -141,7 +157,17 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 		}
 
 		// Get Python dependencies for this collection
-		pythonDeps := getCollectionPythonDependencies(col.Name)
+		// Use namespace.name format for lookup (e.g., "community.general")
+		pythonDepsKey := col.Name
+		if col.Namespace != "" {
+			// Strip scenario prefix and reconstruct as namespace.name
+			colName := col.Name
+			if parts := strings.SplitN(colName, ".", 2); len(parts) == 2 {
+				colName = parts[1]
+			}
+			pythonDepsKey = col.Namespace + "." + colName
+		}
+		pythonDeps := getCollectionPythonDependencies(pythonDepsKey)
 		if len(pythonDeps) > 0 {
 			// Resolve Python package versions
 			resolved, err := galaxy.ResolvePythonDependencies(pythonDeps)
@@ -162,11 +188,12 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 		}
 
 		entry := LockFileEntry{
-			Name:    role.Name,
-			Version: role.Version, // This is the constraint from diffusion.toml
-			Type:    "role",
-			Src:     role.Src, // Store git URL
-			Source:  role.Scm, // Store SCM type (git, hg, etc.) - yaml tag is "scm"
+			Name:      role.Name,
+			Namespace: role.Namespace,
+			Version:   role.Version, // This is the constraint from diffusion.toml
+			Type:      "role",
+			Src:       role.Src, // Store git URL
+			Source:    role.Scm, // Store SCM type (git, hg, etc.) - yaml tag is "scm"
 		}
 
 		// Determine resolution strategy based on source
@@ -186,17 +213,20 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 				}
 			}
 
-			// Priority 2: If not resolved and has namespace, try Galaxy API
-			if !resolved && role.Scm == "galaxy" {
-				parts := strings.Split(role.Name, ".")
-				if len(parts) == 2 {
-					resolvedVersion, err := galaxyAPI.ResolveRoleVersion(parts[0], parts[1], role.Version)
-					if err != nil {
-						fmt.Printf("Warning: Failed to resolve version for role %s from Galaxy (attempt %d/%d): %v\n", role.Name, attempt+1, maxAttempts, err)
-					} else {
-						entry.ResolvedVersion = resolvedVersion
-						resolved = true
-					}
+			// Priority 2: If not resolved and has Namespace, try Galaxy API
+			if !resolved && role.Namespace != "" && role.Scm != "git" {
+				// Role Name in config is "scenario.rolename", Namespace is separate
+				roleName := fmt.Sprintf("%s.%s", role.Namespace, role.Name)
+				// Strip scenario prefix for Galaxy resolution
+				if parts := strings.SplitN(roleName, ".", 2); len(parts) == 2 {
+					roleName = parts[1]
+				}
+				resolvedVersion, err := galaxyAPI.ResolveRoleVersion(role.Namespace, roleName, role.Version)
+				if err != nil {
+					fmt.Printf("Warning: Failed to resolve version for role %s from Galaxy (attempt %d/%d): %v\n", role.Name, attempt+1, maxAttempts, err)
+				} else {
+					entry.ResolvedVersion = resolvedVersion
+					resolved = true
 				}
 			}
 
@@ -214,7 +244,7 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 
 		// Fallback: Use constraint or default to "main"
 		if !resolved {
-			if role.Version == "" || role.Version == "latest" || role.Version == "main" {
+			if entry.ResolvedVersion == "" || entry.ResolvedVersion == "latest" || entry.ResolvedVersion == "main" {
 				entry.ResolvedVersion = "main"
 			} else {
 				// Use the version constraint as resolved version
@@ -338,7 +368,8 @@ func UpdateLockFile() error {
 	return nil
 }
 
-// CheckLockFileStatus checks if lock file is up-to-date
+// CheckLockFileStatus checks if YAML manifests (requirements.yml, meta.yml)
+// are in sync with the lock file. It compares names and resolved versions.
 func CheckLockFileStatus() (bool, error) {
 	lockFile, err := LoadLockFile()
 	if err != nil {
@@ -349,65 +380,141 @@ func CheckLockFileStatus() (bool, error) {
 		return false, nil // No lock file exists
 	}
 
-	depsConfig, err := LoadDependencyConfig()
-	if err != nil {
-		return false, fmt.Errorf("failed to load dependency config: %w", err)
-	}
-
+	// Discover scenarios from scenarios/ directory
 	scenarios := []string{}
-	for _, role := range depsConfig.Roles {
-		// Normalize role source if missing
-
-		parts := strings.SplitN(role.Name, ".", 2)
-		var scenarioName string
-		if len(parts) == 2 {
-			scenarioName = parts[0]
-		} else if scenarioName == "default" || scenarioName == "" {
-			scenarioName = "default"
+	scenariosDir := "scenarios"
+	if info, err := os.Stat(scenariosDir); err == nil && info.IsDir() {
+		entries, err := os.ReadDir(scenariosDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					scenarios = append(scenarios, entry.Name())
+				}
+			}
 		}
-		scenarios = append(scenarios, scenarioName)
+	}
+	if len(scenarios) == 0 {
+		scenarios = append(scenarios, "default")
 	}
 
-	roles := []config.RoleRequirement{}
-	// Load requirements for each scenario
+	// Check requirements.yml for each scenario
 	for _, scenario := range scenarios {
-		meta, req, err := role.LoadRoleConfig(scenario)
+		_, req, err := role.LoadRoleConfig(scenario)
 		if err != nil {
 			return false, fmt.Errorf("failed to load role config for scenario %s: %w", scenario, err)
 		}
 
-		for role := range req.Roles {
-			roles = append(roles, config.RoleRequirement{
-				Name:    fmt.Sprintf("%s.%s", scenario, req.Roles[role].Name),
-				Src:     req.Roles[role].Src,
-				Scm:     req.Roles[role].Scm,
-				Version: req.Roles[role].Version,
-			})
+		// Build expected collections from lock file for this scenario
+		// Lock file: Name="default.general", Namespace="community", ResolvedVersion="9.0.0"
+		// YAML after sync: Name="community.general", Version="9.0.0"
+		prefix := scenario + "."
+		expectedCols := map[string]string{} // yamlName -> resolvedVersion
+		for _, col := range lockFile.Collections {
+			if !strings.HasPrefix(col.Name, prefix) {
+				continue
+			}
+			colName := strings.TrimPrefix(col.Name, prefix)
+			yamlName := colName
+			if col.Namespace != "" {
+				yamlName = col.Namespace + "." + colName
+			}
+			version := col.ResolvedVersion
+			if version == "" {
+				version = col.Version
+			}
+			expectedCols[yamlName] = version
 		}
-		_ = meta // Currently not used
+
+		// Compare collections
+		if len(req.Collections) != len(expectedCols) {
+			return false, nil
+		}
+		for _, col := range req.Collections {
+			expected, ok := expectedCols[col.Name]
+			if !ok {
+				return false, nil
+			}
+			if col.Version != expected {
+				return false, nil
+			}
+		}
+
+		// Build expected roles from lock file for this scenario
+		// Lock file: Name="default.docker", Namespace="geerlingguy", ResolvedVersion="7.4.1"
+		// YAML after sync: Name="geerlingguy.docker" (galaxy) or Name="rolename" with Src (git), Version="7.4.1"
+		expectedRoles := map[string]string{} // yamlName -> resolvedVersion
+		for _, lockRole := range lockFile.Roles {
+			if !strings.HasPrefix(lockRole.Name, prefix) {
+				continue
+			}
+			roleName := strings.TrimPrefix(lockRole.Name, prefix)
+			yamlRoleName := roleName
+			if lockRole.Namespace != "" && lockRole.Src == "" {
+				yamlRoleName = lockRole.Namespace + "." + roleName
+			}
+			version := lockRole.ResolvedVersion
+			if version == "" {
+				version = lockRole.Version
+			}
+			if version == "" || version == "latest" {
+				version = "main"
+			}
+			expectedRoles[yamlRoleName] = version
+		}
+
+		// Compare roles
+		if len(req.Roles) != len(expectedRoles) {
+			return false, nil
+		}
+		for _, r := range req.Roles {
+			expected, ok := expectedRoles[r.Name]
+			if !ok {
+				return false, nil
+			}
+			if r.Version != expected {
+				return false, nil
+			}
+		}
 	}
 
-	collections := []config.CollectionRequirement{}
-	_, req, err := role.LoadRoleConfig("")
+	// Check meta.yml — only default scenario collections
+	meta, _, err := role.LoadRoleConfig("")
 	if err != nil {
-		return false, fmt.Errorf("failed to load default role config: %w", err)
-	}
-	for collection := range req.Collections {
-		collections = append(collections, config.CollectionRequirement{
-			Name:      req.Collections[collection].Name,
-			Source:    req.Collections[collection].Source,
-			SourceURL: req.Collections[collection].SourceURL,
-			Version:   req.Collections[collection].Version,
-		})
+		return false, fmt.Errorf("failed to load meta config: %w", err)
 	}
 
-	toolVersions := map[string]string{
-		"ansible":      depsConfig.Ansible,
-		"molecule":     depsConfig.Molecule,
-		"ansible-lint": depsConfig.AnsibleLint,
-		"yamllint":     depsConfig.YamlLint,
+	// Build expected meta collections from lock file (default scenario only, namespace.name, no versions)
+	defaultPrefix := "default."
+	expectedMeta := map[string]bool{}
+	for _, col := range lockFile.Collections {
+		if !strings.HasPrefix(col.Name, defaultPrefix) {
+			continue
+		}
+		colName := strings.TrimPrefix(col.Name, defaultPrefix)
+		metaName := colName
+		if col.Namespace != "" {
+			metaName = col.Namespace + "." + colName
+		}
+		expectedMeta[metaName] = true
 	}
 
-	// Validate lock file
-	return ValidateLockFile(lockFile, collections, roles, toolVersions, depsConfig.Python)
+	if len(meta.Collections) != len(expectedMeta) {
+		return false, nil
+	}
+	for _, metaCol := range meta.Collections {
+		// meta.yml entries may have version constraints appended (e.g., "community.general>=7.4.0")
+		// Strip the version part to get just the name
+		metaName := metaCol
+		for _, op := range []string{">=", "<=", "==", "!=", ">", "<"} {
+			if idx := strings.Index(metaName, op); idx > 0 {
+				metaName = metaName[:idx]
+				break
+			}
+		}
+		if !expectedMeta[metaName] {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }

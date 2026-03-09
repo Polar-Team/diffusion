@@ -151,15 +151,11 @@ func (g *GalaxyAPI) GetRoleLatestVersion(namespace, name string) (string, error)
 	return result.Results[0].SummaryFields.Versions[0].Name, nil
 }
 
-// ResolveCollectionVersion resolves a collection version constraint to an actual version
-func (g *GalaxyAPI) ResolveVersion(objectName, objectType, versionConstraint string) (string, error) {
-	// Parse collection name (namespace.name)
-	parts := strings.Split(objectName, ".")
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid collection name format: %s (expected namespace.name)", objectName)
+// ResolveVersion resolves a version constraint to an actual version using Galaxy API
+func (g *GalaxyAPI) ResolveVersion(namespace, name, objectType, versionConstraint string) (string, error) {
+	if namespace == "" || name == "" {
+		return "", fmt.Errorf("namespace and name are required for Galaxy resolution (got namespace=%q, name=%q)", namespace, name)
 	}
-
-	namespace, name := parts[0], parts[1]
 
 	// If version is "latest" or empty, fetch latest
 	if versionConstraint == "" || versionConstraint == "latest" {
@@ -241,7 +237,7 @@ func (g *GalaxyAPI) ResolveVersion(objectName, objectType, versionConstraint str
 
 		// Validate that latest version satisfies the constraint
 		latestVersion := versions[0]
-		cmp := CompareVersions(latestVersion, objectName)
+		cmp := CompareVersions(latestVersion, constraintVersion)
 
 		switch operand {
 		case ">=":
@@ -701,9 +697,9 @@ func ResolvePythonDependencies(packages []string) (map[string]string, error) {
 }
 
 // GetCollectionVersion is a convenience function to resolve collection version
-func GetCollectionVersion(collectionName, versionConstraint string) (string, error) {
+func GetCollectionVersion(namespace, collectionName, versionConstraint string) (string, error) {
 	api := NewGalaxyAPI()
-	return api.ResolveVersion(collectionName, "collection", versionConstraint)
+	return api.ResolveVersion(namespace, collectionName, "collection", versionConstraint)
 }
 
 // CaclcVersion extracts the numeric part of a version string at a given index
@@ -726,7 +722,7 @@ func CalcVersion(index int, parts []string) int {
 }
 
 // GetRoleVersion is a convenience function to resolve role version
-func GetRoleVersion(roleName, versionConstraint string) (string, error) {
+func GetRoleVersion(namespace, roleName, versionConstraint string) (string, error) {
 	api := NewGalaxyAPI()
-	return api.ResolveVersion(roleName, "role", versionConstraint)
+	return api.ResolveVersion(namespace, roleName, "role", versionConstraint)
 }

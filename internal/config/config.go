@@ -11,6 +11,7 @@ import (
 // CollectionRequirement represents a collection with version constraints
 type CollectionRequirement struct {
 	Name      string `toml:"Name" yaml:"name"`
+	Namespace string `toml:"Namespace,omitempty" yaml:"namespace,omitempty"`  // Galaxy namespace (e.g., "community" for community.general)
 	Version   string `toml:"Version,omitempty" yaml:"version,omitempty"`      // e.g., ">=1.0.0", "1.2.3", "latest"
 	Source    string `toml:"Source,omitempty" yaml:"source,omitempty"`        // Optional type of source (e.g., "galaxy", "git") default is galaxy
 	SourceURL string `toml:"SourceURL,omitempty" yaml:"source_url,omitempty"` // Optional URL of the source (e.g., git repo URL)
@@ -37,10 +38,11 @@ type DependencyConfig struct {
 
 // RoleRequirement represents a role with version constraints
 type RoleRequirement struct {
-	Name    string `toml:"Name" yaml:"name"`
-	Src     string `toml:"Src,omitempty" yaml:"src,omitempty"`
-	Scm     string `toml:"Scm,omitempty" yaml:"scm,omitempty"`
-	Version string `toml:"Version,omitempty" yaml:"version,omitempty"` // e.g., ">=1.0.0", "1.2.3", "main"
+	Name      string `toml:"Name" yaml:"name"`
+	Namespace string `toml:"Namespace,omitempty" yaml:"namespace,omitempty"` // Galaxy namespace (e.g., "geerlingguy" for geerlingguy.docker)
+	Src       string `toml:"Src,omitempty" yaml:"src,omitempty"`
+	Scm       string `toml:"Scm,omitempty" yaml:"scm,omitempty"`
+	Version   string `toml:"Version,omitempty" yaml:"version,omitempty"` // e.g., ">=1.0.0", "1.2.3", "main"
 }
 
 // HashicorpVault configuration

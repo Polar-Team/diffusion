@@ -46,7 +46,7 @@ Version = ">=7.4.0"
 	}
 
 	// Check role (simple role with scenario prefix stripped)
-	if depConfig.Roles[0].Name != "simple_role" {
+	if depConfig.Roles[0].Name != "default.simple_role" {
 		t.Errorf("Expected role name 'simple_role', got '%s'", depConfig.Roles[0].Name)
 	}
 
@@ -105,7 +105,7 @@ Version = ">=7.4.0"
 		t.Errorf("Expected 1 role in lock file, got %d", len(lockFile.Roles))
 	}
 
-	if lockFile.Roles[0].Name != "test_role" {
+	if lockFile.Roles[0].Name != "default.test_role" {
 		t.Errorf("Expected role name 'test_role' in lock file, got '%s'", lockFile.Roles[0].Name)
 	}
 
@@ -132,7 +132,8 @@ func TestRoleNamespacePreservation(t *testing.T) {
 ansible = ">=10.0.0"
 
 [[dependencies.roles]]
-Name = "default.geerlingguy.docker"
+Name = "default.docker"
+Namespace = "geerlingguy"
 Version = ">=6.0.0"
 `
 
@@ -153,8 +154,8 @@ Version = ">=6.0.0"
 		t.Errorf("Expected 1 role, got %d", len(depConfig.Roles))
 	}
 
-	// Should strip "default." and keep "geerlingguy.docker"
-	if depConfig.Roles[0].Name != "geerlingguy.docker" {
-		t.Errorf("Expected role name 'geerlingguy.docker', got '%s'", depConfig.Roles[0].Name)
+	// Should strip "default." and keep docker"
+	if depConfig.Roles[0].Name != "default.docker" {
+		t.Errorf("Expected role name 'docker', got '%s'", depConfig.Roles[0].Name)
 	}
 }
