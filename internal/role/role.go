@@ -1,8 +1,9 @@
 package role
 
 import (
-	// "fmt"
+	"bytes"
 	"os"
+	"strings"
 
 	"diffusion/internal/utils"
 
@@ -119,15 +120,13 @@ func LoadRoleConfig(scenarios string) (*Meta, *Requirement, error) {
 }
 
 func SaveMetaFile(meta *Meta) error {
-	data, err := yaml.Marshal(meta)
+	data, err := marshalYaml4Indent(meta)
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile("meta/main.yml", data, 0644)
-	if err != nil {
-		return err
-	}
-	return nil
+	// Prepend YAML document header for correct formatting
+	output := append([]byte("---\n"), data...)
+	return os.WriteFile("meta/main.yml", output, 0644)
 }
 
 func SaveRequirementFile(req *Requirement, scenarios string) error {
@@ -135,13 +134,78 @@ func SaveRequirementFile(req *Requirement, scenarios string) error {
 	if scenarios != "" {
 		path = "scenarios/" + scenarios + "/requirements.yml"
 	}
-	data, err := yaml.Marshal(req)
+	data, err := marshalYaml4Indent(req)
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(path, data, 0644)
-	if err != nil {
-		return err
+	// Prepend YAML document header for correct formatting
+	output := append([]byte("---\n"), data...)
+	return os.WriteFile(path, output, 0644)
+}
+
+// marshalYaml4Indent encodes a value as YAML with consistent 4-space indentation.
+// gopkg.in/yaml.v3's Encoder with SetIndent(4) produces only 2-space indent for
+// sequence items nested inside a mapping within a sequence item. This function
+// post-processes the output to ensure all nesting uses 4-space indent.
+func marshalYaml4Indent(v interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(4)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
 	}
-	return nil
+	return []byte(fixYamlIndent(buf.String())), nil
+}
+
+// fixYamlIndent fixes nested sequence items inside sequence-item mappings
+// where the YAML library only indents 2 spaces instead of 4.
+//
+// Example input (broken):
+//
+//	versions:
+//	  - focal       <- only 2 spaces deeper than "versions:"
+//
+// Example output (fixed):
+//
+//	versions:
+//	    - focal     <- 4 spaces deeper than "versions:"
+func fixYamlIndent(input string) string {
+	lines := strings.Split(input, "\n")
+	result := make([]string, len(lines))
+	copy(result, lines)
+
+	lastKeyIndent := -1   // indent level of the most recent "key:" line
+	adjustingIndent := -1 // when >= 0, we're adjusting consecutive items at this indent
+
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " ")
+		if trimmed == "" {
+			continue
+		}
+		indent := len(line) - len(trimmed)
+
+		if strings.HasPrefix(trimmed, "- ") {
+			// This is a sequence item
+			if adjustingIndent >= 0 && indent == adjustingIndent {
+				// Continuation of an adjusted sequence
+				result[i] = "  " + line
+			} else if lastKeyIndent >= 0 && indent == lastKeyIndent+2 {
+				// First item: only 2 more spaces than parent key — should be 4 more
+				result[i] = "  " + line
+				adjustingIndent = indent
+			} else {
+				adjustingIndent = -1
+			}
+			lastKeyIndent = -1 // reset key tracking (but keep adjustingIndent)
+		} else if strings.Contains(trimmed, ":") && !strings.HasPrefix(trimmed, "#") {
+			// This is a mapping key
+			lastKeyIndent = indent
+			adjustingIndent = -1
+		} else {
+			lastKeyIndent = -1
+			adjustingIndent = -1
+		}
+	}
+
+	return strings.Join(result, "\n")
 }

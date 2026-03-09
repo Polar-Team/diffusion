@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"diffusion/internal/config"
 	"diffusion/internal/dependency"
@@ -23,16 +24,27 @@ func NewRoleAddCollectionCmd(cli *CLI) *cobra.Command {
 			// Parse collection name and version constraint
 			name, versionConstraint := utils.ParseCollectionString(collectionName)
 
+			// Validate: dots are forbidden in collection names (dots are reserved as scenario name prefixes)
+			if strings.Contains(name, ".") {
+				return fmt.Errorf("dots are not allowed in collection names (dots are reserved as scenario prefixes). Use --namespace/-n to specify the Galaxy namespace separately.\nExample: diffusion role add-collection %s --namespace %s",
+					strings.SplitN(name, ".", 2)[1], strings.SplitN(name, ".", 2)[0])
+			}
+
+			// Require --namespace for Galaxy collections
+			if cli.NamespaceFlag == "" {
+				return fmt.Errorf("--namespace/-n is required for collections.\nExample: diffusion role add-collection %s --namespace <namespace>", name)
+			}
+
 			// Resolve the actual version from Galaxy API if no constraint provided
 			var resolvedVersion string
 			if versionConstraint == "" || versionConstraint == "latest" {
-				fmt.Printf("Resolving version for %s...\n", name)
+				fmt.Printf("Resolving version for %s.%s...\n", cli.NamespaceFlag, name)
 				var err error
-				resolvedVersion, err = galaxy.GetCollectionVersion(name, versionConstraint)
+				resolvedVersion, err = galaxy.GetCollectionVersion(cli.NamespaceFlag, name, versionConstraint)
 				if err != nil {
 					return fmt.Errorf("failed to resolve collection version: %w", err)
 				}
-				fmt.Printf("Resolved %s to version %s\n", name, resolvedVersion)
+				fmt.Printf("Resolved %s.%s to version %s\n", cli.NamespaceFlag, name, resolvedVersion)
 			}
 
 			// Add to diffusion.toml dependencies
@@ -53,17 +65,28 @@ func NewRoleAddCollectionCmd(cli *CLI) *cobra.Command {
 				configVersionConstraint = ">=" + resolvedVersion
 			}
 
+			// Collection name in config is prefixed with scenario (e.g., "default.general")
+			configName := cli.RoleScenario + "." + name
+
 			// Check if collection already exists in config
 			configCollExists := false
 			for i, coll := range cfg.DependencyConfig.Collections {
-				if coll.Name == name {
-					cfg.DependencyConfig.Collections[i] = config.CollectionRequirement{Name: name, Version: configVersionConstraint}
+				if coll.Name == configName {
+					cfg.DependencyConfig.Collections[i] = config.CollectionRequirement{
+						Name:      configName,
+						Namespace: cli.NamespaceFlag,
+						Version:   configVersionConstraint,
+					}
 					configCollExists = true
 					break
 				}
 			}
 			if !configCollExists {
-				cfg.DependencyConfig.Collections = append(cfg.DependencyConfig.Collections, config.CollectionRequirement{Name: name, Version: configVersionConstraint})
+				cfg.DependencyConfig.Collections = append(cfg.DependencyConfig.Collections, config.CollectionRequirement{
+					Name:      configName,
+					Namespace: cli.NamespaceFlag,
+					Version:   configVersionConstraint,
+				})
 			}
 
 			// Save diffusion.toml
@@ -74,13 +97,14 @@ func NewRoleAddCollectionCmd(cli *CLI) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to update lock file: %w", err)
 			}
-			fmt.Printf("\033[32mCollection '%s' (version %s) added successfully to diffusion.toml and diffusion.lock\n\033[0m", name, configVersionConstraint)
+			fmt.Printf("\033[32mCollection '%s' (namespace: %s, version %s) added successfully to diffusion.toml and diffusion.lock\n\033[0m", configName, cli.NamespaceFlag, configVersionConstraint)
 
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVarP(&cli.RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
+	cmd.Flags().StringVarP(&cli.NamespaceFlag, "namespace", "n", "", "Namespace for the collection (e.g., 'community' for community.general)")
 	return cmd
 }
 
@@ -94,7 +118,15 @@ func NewRoleRemoveCollectionCmd(cli *CLI) *cobra.Command {
 			collectionName := args[0]
 
 			// Parse collection name (ignore version for removal)
-			name, _ := dependency.ParseCollectionString(collectionName)
+			name, _ := utils.ParseCollectionString(collectionName)
+
+			// Validate: dots are forbidden in collection names
+			if strings.Contains(name, ".") {
+				return fmt.Errorf("dots are not allowed in collection names (dots are reserved as scenario prefixes)")
+			}
+
+			// Collection name in config is prefixed with scenario (e.g., "default.general")
+			configName := cli.RoleScenario + "." + name
 
 			// Remove from diffusion.toml
 			cfg, err := config.LoadConfig()
@@ -108,7 +140,7 @@ func NewRoleRemoveCollectionCmd(cli *CLI) *cobra.Command {
 
 			found := false
 			for i, coll := range cfg.DependencyConfig.Collections {
-				if coll.Name == name {
+				if coll.Name == configName {
 					cfg.DependencyConfig.Collections = append(cfg.DependencyConfig.Collections[:i], cfg.DependencyConfig.Collections[i+1:]...)
 					found = true
 					break
@@ -116,7 +148,7 @@ func NewRoleRemoveCollectionCmd(cli *CLI) *cobra.Command {
 			}
 
 			if !found {
-				return fmt.Errorf("collection '%s' not found in diffusion.toml", name)
+				return fmt.Errorf("collection '%s' not found in diffusion.toml", configName)
 			}
 
 			// Save diffusion.toml
@@ -127,7 +159,7 @@ func NewRoleRemoveCollectionCmd(cli *CLI) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to update lock file: %w", err)
 			}
-			fmt.Printf("\033[32mCollection '%s' removed successfully from diffusion.toml and diffusion.lock\n\033[0m", name)
+			fmt.Printf("\033[32mCollection '%s' removed successfully from diffusion.toml and diffusion.lock\n\033[0m", configName)
 			fmt.Printf("\033[33mRun 'diffusion deps sync' to update requirements.yml and meta/main.yml\n\033[0m")
 
 			return nil
@@ -135,5 +167,6 @@ func NewRoleRemoveCollectionCmd(cli *CLI) *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&cli.RoleScenario, "scenario", "s", "default", "Molecule scenarios folder to use")
+	cmd.Flags().StringVarP(&cli.NamespaceFlag, "namespace", "n", "", "Namespace for the collection")
 	return cmd
 }

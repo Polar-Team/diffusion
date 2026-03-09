@@ -153,7 +153,7 @@ func TestComputeDependencyHash(t *testing.T) {
 	}
 
 	roles := []config.RoleRequirement{
-		{Name: "geerlingguy.docker", Version: "6.0.0"},
+		{Name: "docker", Version: "6.0.0"},
 	}
 
 	toolVersions := map[string]string{
@@ -190,7 +190,7 @@ func TestGenerateLockFile(t *testing.T) {
 	}
 
 	roles := []config.RoleRequirement{
-		{Name: "geerlingguy.docker", Version: "6.0.0"},
+		{Name: "docker", Version: "6.0.0"},
 	}
 
 	toolVersions := map[string]string{

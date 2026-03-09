@@ -22,6 +22,9 @@ type CLI struct {
 	RoleScmFlag     string
 	RoleVersionFlag string
 
+	// Namespace flag (shared by role and collection commands)
+	NamespaceFlag string
+
 	// Collection flags
 	AddCollectionFlag string
 

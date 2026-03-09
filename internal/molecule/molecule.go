@@ -333,25 +333,27 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario string) error {
 	log.Printf("\033[32mUsing diffusion-managed test files\033[0m")
 
-	diffusionTestsPath := filepath.Join(os.TempDir(), "diffusion-tests-repo")
+	diffusionTestsPath := "/tmp/diffusion-tests-repo"
 	if !opts.TestsOverWrite {
-		if _, err := os.Stat(diffusionTestsPath); os.IsNotExist(err) {
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf(`ls %s`, diffusionTestsPath)); err != nil {
 			log.Printf("\033[32mCloning diffusion tests repository...\033[0m")
-			if err := exec.Command("git", "clone", "https://github.com/your-org/diffusion-tests", diffusionTestsPath).Run(); err != nil {
+			if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "git", opts.CIMode, "clone", "https://github.com/Polar-Team/diffusion-ansible-tests-role.git", diffusionTestsPath); err != nil {
 				return fmt.Errorf("\033[31mfailed to clone diffusion tests repository: %w\033[0m", err)
 			}
 		} else {
 			log.Printf("\033[32mUpdating diffusion tests repository...\033[0m")
-			gitPullCmd := exec.Command("git", "pull")
-			gitPullCmd.Dir = diffusionTestsPath
-			if err := gitPullCmd.Run(); err != nil {
+			cmdPullCommand := fmt.Sprintf(`cd %s && git pull`, diffusionTestsPath)
+			if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdPullCommand); err != nil {
 				log.Printf("\033[33mwarning: failed to update diffusion tests repository: %v\033[0m", err)
 			}
 		}
 	} else {
-		_ = os.RemoveAll(diffusionTestsPath)
+		cmdRemove := fmt.Sprintf("rm -rf %s", diffusionTestsPath)
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemove); err != nil {
+			return fmt.Errorf("\033[33mwarning: failed to remove existing diffusion tests repository: %v\033[0m", err)
+		}
 		log.Printf("\033[32mCloning diffusion tests repository (overwrite mode)...\033[0m")
-		if err := exec.Command("git", "clone", "https://github.com/your-org/diffusion-tests", diffusionTestsPath).Run(); err != nil {
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "git", opts.CIMode, "clone", "https://github.com/Polar-Team/diffusion-ansible-tests-role.git", diffusionTestsPath); err != nil {
 			return fmt.Errorf("\033[31mfailed to clone diffusion tests repository: %w\033[0m", err)
 		}
 	}
@@ -359,14 +361,17 @@ func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario stri
 	// Copy tests from diffusion repo to role tests directory
 	if opts.CIMode {
 		cmdCopy := fmt.Sprintf(`
-			cp -rf %s /opt/molecule/%s.%s/molecule/%s/tests
+			cp -rf %s /opt/molecule/%s.%s/molecule/%s/roles/diffusion_tests
 		`, diffusionTestsPath, opts.OrgFlag, opts.RoleFlag, scenario)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
 			log.Printf("\033[33mwarning: failed to copy diffusion tests in CI mode: %v\033[0m", err)
 		}
 	} else {
-		testsDst := filepath.Join(roleMoleculePath, config.MoleculeDir, scenario, config.TestsDir)
-		utils.CopyIfExists(diffusionTestsPath, testsDst)
+
+		cmdCopy := fmt.Sprintf(`cp -rf %s %s`, diffusionTestsPath, fmt.Sprintf("/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag, config.MoleculeDir, scenario, config.TestsDir))
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
+			log.Printf("\033[33mwarning: failed to copy diffusion tests: %v\033[0m", err)
+		}
 	}
 
 	return nil
