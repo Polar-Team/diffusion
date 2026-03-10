@@ -111,6 +111,13 @@ func IsValidGcpRegistry(registryServer string) bool {
 // Sets TOKEN environment variable for Docker authentication
 // Supports both gcr.io and Artifact Registry (pkg.dev) formats
 func GcpCliInit(registryServer string) error {
+	// Validate GCP registry format first (before checking if gcloud is installed)
+	// so that callers always get a format error for invalid inputs, regardless of
+	// whether the gcloud binary is present on the current machine.
+	if !IsValidGcpRegistry(registryServer) {
+		return fmt.Errorf("invalid GCP registry server format: %s (expected format: gcr.io or <region>-docker.pkg.dev)", registryServer)
+	}
+
 	// Check if gcloud CLI is installed
 	if _, err := exec.LookPath("gcloud"); err != nil {
 		return fmt.Errorf("gcloud CLI is not installed or not in PATH. Please install gcloud CLI to use GCP authentication. Visit: https://cloud.google.com/sdk/docs/install")
@@ -118,11 +125,6 @@ func GcpCliInit(registryServer string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	// Validate GCP registry format
-	if !IsValidGcpRegistry(registryServer) {
-		return fmt.Errorf("invalid GCP registry server format: %s (expected format: gcr.io or <region>-docker.pkg.dev)", registryServer)
-	}
 
 	// Get GCP access token using gcloud CLI
 	// This returns an OAuth2 access token that can be used for Docker authentication
