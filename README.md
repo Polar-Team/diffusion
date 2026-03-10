@@ -204,7 +204,13 @@ Manage Ansible role and collection caching for faster builds.
 # Enable cache for current role
 diffusion cache enable
 
-# Enable cache with Docker image and UV/Python package caching
+# Enable cache with Docker image caching
+diffusion cache enable --docker
+
+# Enable cache with UV/Python package caching
+diffusion cache enable --uv
+
+# Enable cache with both Docker image and UV/Python package caching
 diffusion cache enable --docker --uv
 
 # Disable cache
@@ -411,15 +417,6 @@ diffusion deps sync
 - `check` - Compares current dependency hash against `diffusion.lock`; exits `1` if out of date (useful in CI)
 - `resolve` - Reads `diffusion.lock` and pretty-prints Python, tool, collection, and role versions
 - `sync` - Writes resolved versions from `diffusion.lock` back to `requirements.yml` and `meta/main.yml` (rollback / migration helper)
-
-**CI/CD example:**
-```yaml
-- name: Validate lock file
-  run: diffusion deps check
-
-- name: Run tests
-  run: diffusion molecule --ci --converge
-```
 
 See [Dependency Management Documentation](docs/DEPENDENCY_MANAGEMENT.md) for complete details.
 
@@ -770,7 +767,7 @@ role-name/
 │       ├── converge.yml      # Convergence playbook
 │       ├── verify.yml        # Verification tests
 │       ├── molecule.yml      # Molecule configuration
-│       └── requirements.yml  # Role dependencies
+│       └── requirements.yml  # Role and collection dependencies
 ├── diffusion.toml            # Diffusion configuration
 ├── diffusion.lock            # Locked dependency versions
 └── .gitignore
