@@ -105,22 +105,22 @@ func TestGcpCliInit(t *testing.T) {
 
 			err := GcpCliInit(tt.registryServer)
 
-			if tt.wantErr {
-				// Invalid format: we require a specific error
-				if err == nil {
-					t.Errorf("GcpCliInit() error = nil, wantErr true")
-					return
-				}
-				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GcpCliInit() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if err != nil && tt.errContains != "" {
+				if !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("GcpCliInit() error = %v, should contain %q", err, tt.errContains)
 				}
-			} else if err != nil {
-				// Valid format: accept errors from missing/unconfigured gcloud CLI
-				// but fail if the error is a format validation error (our own logic)
-				if strings.Contains(err.Error(), "invalid GCP registry server format") {
-					t.Errorf("GcpCliInit() unexpected format validation error for valid registry %q: %v", tt.registryServer, err)
+			}
+
+			// For invalid format tests, check that error message contains expected text
+			if tt.errContains == "invalid GCP registry server format" {
+				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("GcpCliInit() expected error containing %q, got: %v", tt.errContains, err)
 				}
-				t.Logf("gcloud CLI not configured (expected in CI): %v", err)
 			}
 		})
 	}
