@@ -17,13 +17,14 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-    # AWS credentials: automatically picked up by the aws CLI from env vars.
-    # GCP service-account key: used by the explicit gcloud auth steps below.
+      id-token: write  # Required for OIDC token exchange with AWS, GCP, and Yandex Cloud
+    # OIDC secret references evaluated at step level; empty string → step is skipped.
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      YC_SA_ID: ${{ secrets.YC_SA_ID }}
     strategy:
       fail-fast: false
       matrix:
@@ -67,27 +68,45 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── Cloud CLI authentication (from GitHub secrets) ────────────────────
-      # AWS CLI picks up AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION
-      # from the job-level env block above — no extra step required.
-      # gcloud requires an explicit `auth activate-service-account` call.
+      # ── Cloud CLI authentication (OIDC) ──────────────────────────────────
+      # OIDC eliminates long-lived static credentials. GitHub's identity
+      # provider token is exchanged for short-lived cloud tokens at runtime.
+      # Required GitHub secrets:
+      #   AWS:  AWS_ROLE_ARN, AWS_DEFAULT_REGION
+      #   GCP:  GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT
+      #   YC:   YC_SA_ID
+      # Each step is skipped when its secret is absent (forks / unconfigured).
 
-      - name: Authenticate gcloud CLI (Linux)
-        if: matrix.runner == 'ubuntu-latest' && env.GCP_SA_KEY != ''
-        run: echo "$GCP_SA_KEY" | gcloud auth activate-service-account --key-file=-
+      - name: Configure AWS credentials (OIDC)
+        if: env.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
 
-      - name: Authenticate gcloud CLI (macOS)
-        if: matrix.os == 'macos' && env.GCP_SA_KEY != ''
-        run: |
-          if ! command -v gcloud &>/dev/null; then
-            brew install --cask google-cloud-sdk
-          fi
-          echo "$GCP_SA_KEY" | gcloud auth activate-service-account --key-file=-
+      - name: Authenticate to Google Cloud (OIDC)
+        id: gcp-auth
+        if: env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Authenticate gcloud CLI (Windows)
-        if: matrix.os == 'windows' && env.GCP_SA_KEY != ''
+      - name: Authenticate to Yandex Cloud (OIDC)
+        id: yc-iam
+        if: env.YC_SA_ID != ''
+        uses: yc-actions/yc-iam-token@v1
+        with:
+          yc-sa-id: ${{ secrets.YC_SA_ID }}
+
+      - name: Export Yandex Cloud IAM token (Linux / macOS)
+        if: steps.yc-iam.outputs.token != '' && runner.os != 'Windows'
+        run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
+
+      - name: Export Yandex Cloud IAM token (Windows)
+        if: steps.yc-iam.outputs.token != '' && runner.os == 'Windows'
         shell: pwsh
-        run: $env:GCP_SA_KEY | gcloud auth activate-service-account --key-file=-
+        run: '"YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -144,8 +163,15 @@ jobs:
           docker run --rm \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -v /var/run/docker.sock:/var/run/docker.sock \
+            ${GOOGLE_APPLICATION_CREDENTIALS:+-v "$GOOGLE_APPLICATION_CREDENTIALS:$GOOGLE_APPLICATION_CREDENTIALS"} \
             -w "$GITHUB_WORKSPACE/diffusion_tests" \
             -e WORKSPACE="$GITHUB_WORKSPACE" \
+            -e AWS_ACCESS_KEY_ID \
+            -e AWS_SECRET_ACCESS_KEY \
+            -e AWS_SESSION_TOKEN \
+            -e AWS_DEFAULT_REGION \
+            ${GOOGLE_APPLICATION_CREDENTIALS:+-e GOOGLE_APPLICATION_CREDENTIALS} \
+            ${YC_IAM_TOKEN:+-e YC_IAM_TOKEN} \
             "${{ matrix.container }}" \
             sh -c '
               set -e
