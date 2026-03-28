@@ -266,7 +266,7 @@ jobs:
         id: notes
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          cat > release-notes.md << EOF
+          cat > release-notes.md << 'EOF'
           ## Diffusion $VERSION
 
           ### Installation
@@ -347,7 +347,8 @@ jobs:
           - [Verification Guide](https://github.com/Polar-Team/diffusion/blob/main/docs/verification.md)
 
           ---
-          EOF
+          'EOF'
+          sed -i "s/\$VERSION/$VERSION/g" release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
