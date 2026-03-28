@@ -142,6 +142,8 @@ jobs:
             Start-Service docker
             Start-Sleep -Seconds 10
           }
+          & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchLinuxEngine
+          Start-Sleep -Seconds 10
           docker version
           docker info
 
