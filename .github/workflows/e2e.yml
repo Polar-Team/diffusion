@@ -164,6 +164,20 @@ jobs:
               $DIFFUSION deps check
 
               echo "=========================================="
+              echo "Running role subcommand smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+              $DIFFUSION role
+              $DIFFUSION role add-collection community.general
+              $DIFFUSION role add-collection ansible.posix
+              $DIFFUSION deps sync
+              $DIFFUSION role remove-collection ansible.posix
+              $DIFFUSION deps sync
+              $DIFFUSION role add-role geerlingguy.git --src https://github.com/geerlingguy/ansible-role-git.git --version main
+              $DIFFUSION deps sync
+              $DIFFUSION role remove-role geerlingguy.git
+              $DIFFUSION deps sync
+
+              echo "=========================================="
               echo "Running molecule smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
               $DIFFUSION molecule --ci
@@ -175,7 +189,7 @@ jobs:
               echo "=========================================="
               echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
-              cd "$WORKSPACE"
+
               $DIFFUSION cache enable
               $DIFFUSION cache status
               $DIFFUSION artifact list
