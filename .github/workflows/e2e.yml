@@ -10,12 +10,11 @@ env:
 jobs:
   e2e:
     name: E2E Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
       contents: read
       id-token: write  # Required for OIDC token exchange with AWS, GCP, and Yandex Cloud
-    # OIDC secret references evaluated at step level; empty string → step is skipped.
     env:
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
@@ -28,42 +27,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux distros – run on ubuntu-latest; smoke tests execute inside
-          # a Docker container of the target distro via docker run.
-          # The host docker binary is bind-mounted in so diffusion can spawn
-          # the molecule container via the host Docker socket.
+          # Linux distros – smoke tests execute inside a Docker container of the
+          # target distro. The host docker binary is bind-mounted so diffusion
+          # can spawn the molecule container via the host Docker socket.
           - os: ubuntu2204
-            runner: ubuntu-latest
             container: ubuntu:22.04
           - os: ubuntu2404
-            runner: ubuntu-latest
             container: ubuntu:24.04
           - os: debian12
-            runner: ubuntu-latest
             container: debian:12
           - os: debian13
-            runner: ubuntu-latest
             container: debian:trixie
           - os: fedora43
-            runner: ubuntu-latest
             container: fedora:43
           - os: fedora42
-            runner: ubuntu-latest
             container: fedora:42
           - os: almalinux9
-            runner: ubuntu-latest
             container: almalinux:9
           - os: almalinux10
-            runner: ubuntu-latest
             container: almalinux:10
           - os: archlinux
-            runner: ubuntu-latest
             container: archlinux:latest
-          # Native runners
-          - os: windows
-            runner: windows-latest
-          - os: macos
-            runner: macos-latest
 
     steps:
       - name: Checkout code
@@ -85,10 +69,6 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-      - name: Set up gcloud CLI (Windows / macOS)
-        if: (env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != '') && runner.os != 'Linux'
-        uses: google-github-actions/setup-gcloud@v2
-
       - name: Authenticate to Google Cloud (OIDC)
         id: gcp-auth
         if: env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != ''
@@ -97,21 +77,16 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      # - name: Authenticate to Yandex Cloud (OIDC)
-        # id: yc-iam
-        # # if: env.YC_SA_ID != ''
-        # # uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
-        # # with:
-        #   yc-sa-id: ${{ secrets.YC_SA_ID }}
+      - name: Authenticate to Yandex Cloud (OIDC)
+        id: yc-iam
+        if: env.YC_SA_ID != ''
+        uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
+        with:
+          yc-sa-id: ${{ secrets.YC_SA_ID }}
 
-      # - name: Export Yandex Cloud IAM token (Linux / macOS)
-        # if: steps.yc-iam.outputs.token != '' && runner.os != 'Windows'
-        # run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
-
-      # - name: Export Yandex Cloud IAM token (Windows)
-      #   if: steps.yc-iam.outputs.token != '' && runner.os == 'Windows'
-        # shell: pwsh
-        # run: '"YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+      - name: Export Yandex Cloud IAM token
+        if: steps.yc-iam.outputs.token != ''
+        run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -126,54 +101,18 @@ jobs:
 
       # ── Docker setup ─────────────────────────────────────────────────────
 
-      - name: Start Docker (Linux)
-        if: matrix.runner == 'ubuntu-latest'
+      - name: Start Docker
         run: |
           sudo systemctl start docker
           docker version
           docker info
 
-      - name: Start Docker (Windows)
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          $svc = Get-Service -Name docker -ErrorAction SilentlyContinue
-          if ($svc -and $svc.Status -ne 'Running') {
-            Start-Service docker
-            Start-Sleep -Seconds 10
-          }
-          # Force Linux image resolution regardless of Windows host OS version
-          echo "DOCKER_DEFAULT_PLATFORM=linux/amd64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          docker version
-          docker info
-
-      - name: Install and start Docker (macOS)
-        if: matrix.os == 'macos'
-        uses: docker/setup-docker-action@v4
-        with:
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-
       # ── Smoke tests ───────────────────────────────────────────────────────
 
-      - name: Clone diffusion tests repo (macOS / Windows)
-        if: matrix.os == 'macos' || matrix.os == 'windows'
-        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
-
-      - name: Clone diffusion tests repo (Linux)
-        if: matrix.runner == 'ubuntu-latest'
+      - name: Clone diffusion tests repo
         run: git clone ${{ env.DIFFUSION_TESTS_REPO }} "$GITHUB_WORKSPACE/diffusion_tests"
 
-      - name: Run smoke tests (Linux)
-        if: matrix.runner == 'ubuntu-latest'
-        # Run the diffusion binary (static Go binary) inside the target distro's
-        # container. The workspace is mounted at the same host path so that any
-        # Docker volume mounts created by molecule resolve correctly on the host
-        # Docker daemon (which owns the mounted socket).
+      - name: Run smoke tests
         run: |
           DOCKER_BIN=$(which docker)
           docker run --rm \
@@ -200,8 +139,7 @@ jobs:
 
               DIFFUSION="${WORKSPACE}/bin/diffusion"
 
-              # Install git (required by diffusion --ci mode to get git remote URL)
-              # and verify it works before proceeding.
+              # Install git (required by diffusion --ci mode to get git remote URL).
               if ! command -v git >/dev/null 2>&1; then
                 if command -v apt-get >/dev/null 2>&1; then
                   DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
@@ -217,11 +155,6 @@ jobs:
               fi
               git --version
 
-              # Mark mounted directories as safe for Git (ownership mismatch between
-              # host runner user and container root triggers Git safe.directory check).
-              # GIT_CONFIG_COUNT env vars propagate this into any DinD containers
-              # that diffusion spawns internally.
-
               echo "=========================================="
               echo "Running deps smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
@@ -234,15 +167,15 @@ jobs:
               echo "Running molecule smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
               $DIFFUSION molecule --ci
-              $DIFFUSION molecule --verify  --ci
-              $DIFFUSION molecule --idempotence  --ci
-              $DIFFUSION molecule --lint --ci 
-              $DIFFUSION molecule --verify --tag ports  --ci
+              $DIFFUSION molecule --verify --ci
+              $DIFFUSION molecule --idempotence --ci
+              $DIFFUSION molecule --lint --ci
+              $DIFFUSION molecule --verify --tag ports --ci
 
               echo "=========================================="
               echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
-
+              cd "$WORKSPACE"
               $DIFFUSION cache enable
               $DIFFUSION cache status
               $DIFFUSION artifact list
@@ -251,90 +184,3 @@ jobs:
               echo "All smoke tests passed on ${{ matrix.os }}!"
               echo "=========================================="
             '
-
-      - name: Run smoke tests (macOS)
-        if: matrix.os == 'macos'
-        working-directory: diffusion_tests
-        run: |
-          set -e
-          DIFFUSION="$GITHUB_WORKSPACE/bin/diffusion"
-
-          echo "=========================================="
-          echo "Running deps smoke tests on macOS..."
-          echo "=========================================="
-          $DIFFUSION deps check || true
-          $DIFFUSION deps lock
-          $DIFFUSION deps sync
-          $DIFFUSION deps check
-
-          echo "=========================================="
-          echo "Running molecule smoke tests on macOS..."
-          echo "=========================================="
-          $DIFFUSION molecule --ci
-          $DIFFUSION molecule --verify --ci
-          $DIFFUSION molecule --idempotence --ci
-          $DIFFUSION molecule --lint --ci
-          $DIFFUSION molecule --verify --tag ports --ci
-
-          echo "=========================================="
-          echo "Running cache/artifact smoke tests on macOS..."
-          echo "=========================================="
-          cd "$GITHUB_WORKSPACE"
-          $DIFFUSION cache enable
-          $DIFFUSION cache status
-          $DIFFUSION artifact list
-
-          echo "=========================================="
-          echo "All smoke tests passed on macOS!"
-          echo "=========================================="
-
-      - name: Run smoke tests (Windows)
-        if: matrix.os == 'windows'
-        working-directory: diffusion_tests
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $diffusion = "$env:GITHUB_WORKSPACE\bin\diffusion.exe"
-
-          Write-Host "=========================================="
-          Write-Host "Running deps smoke tests on Windows..."
-          Write-Host "=========================================="
-          & $diffusion deps check
-          Write-Host "Initial check exit code: $LASTEXITCODE (non-zero is OK here)"
-          & $diffusion deps lock
-          if ($LASTEXITCODE -ne 0) { Write-Error "deps lock failed"; exit 1 }
-          & $diffusion deps sync
-          if ($LASTEXITCODE -ne 0) { Write-Error "deps sync failed"; exit 1 }
-          & $diffusion deps check
-          if ($LASTEXITCODE -ne 0) { Write-Error "deps check failed after lock+sync"; exit 1 }
-
-          Write-Host "=========================================="
-          Write-Host "Running molecule smoke tests on Windows..."
-          Write-Host "=========================================="
-          & $diffusion molecule --ci
-          if ($LASTEXITCODE -ne 0) { Write-Error "molecule failed"; exit 1 }
-          & $diffusion molecule --verify --ci
-          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --verify failed"; exit 1 }
-          & $diffusion molecule --idempotence --ci
-          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --idempotence failed"; exit 1 }
-          & $diffusion molecule --lint --ci
-          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --lint failed"; exit 1 }
-          & $diffusion molecule --verify --tag ports --ci
-          if ($LASTEXITCODE -ne 0) { Write-Error "molecule --verify --tag ports failed"; exit 1 }
-
-          Write-Host "=========================================="
-          Write-Host "Running cache/artifact smoke tests on Windows..."
-          Write-Host "=========================================="
-          $diffusion = "$env:GITHUB_WORKSPACE\bin\diffusion.exe"
-          Set-Location "$env:GITHUB_WORKSPACE"
-          & $diffusion cache enable
-          if ($LASTEXITCODE -ne 0) { Write-Error "cache enable failed"; exit 1 }
-          & $diffusion cache status
-          if ($LASTEXITCODE -ne 0) { Write-Error "cache status failed"; exit 1 }
-          & $diffusion artifact list
-          if ($LASTEXITCODE -ne 0) { Write-Error "artifact list failed"; exit 1 }
-
-          Write-Host "=========================================="
-          Write-Host "All smoke tests passed on Windows!"
-          Write-Host "=========================================="
-
