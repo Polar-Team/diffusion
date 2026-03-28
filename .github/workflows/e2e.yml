@@ -94,7 +94,7 @@ jobs:
         if: env.YC_SA_ID != ''
         uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
         with:
-          yc-service-account-id: ${{ secrets.YC_SA_ID }}
+          yc-sa-id: ${{ secrets.YC_SA_ID }}
 
       - name: Export Yandex Cloud IAM token (Linux / macOS)
         if: steps.yc-iam.outputs.token != '' && runner.os != 'Windows'
