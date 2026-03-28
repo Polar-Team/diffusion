@@ -225,7 +225,7 @@ jobs:
               echo "=========================================="
               echo "Running molecule smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
-              $DIFFUSION molecule 
+              $DIFFUSION molecule --ci
               $DIFFUSION molecule --verify  --ci
               $DIFFUSION molecule --idempotence  --ci
               $DIFFUSION molecule --lint --ci 
