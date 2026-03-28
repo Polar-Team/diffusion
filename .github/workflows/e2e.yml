@@ -82,12 +82,12 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
       - name: Authenticate to Google Cloud (OIDC)
         id: gcp-auth
         if: env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != ''
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v2.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
@@ -95,7 +95,7 @@ jobs:
       - name: Authenticate to Yandex Cloud (OIDC)
         id: yc-iam
         if: env.YC_SA_ID != ''
-        uses: yc-actions/yc-iam-token@v1
+        uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
         with:
           yc-sa-id: ${{ secrets.YC_SA_ID }}
 
