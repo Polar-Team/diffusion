@@ -172,7 +172,7 @@ jobs:
               $DIFFUSION role add-collection posix --namespace ansible
               $DIFFUSION deps sync
               $DIFFUSION deps check
-              $DIFFUSION role remove-collection ansible --namespace posix
+              $DIFFUSION role remove-collection posix --namespace ansible
               $DIFFUSION deps sync
               $DIFFUSION role add-role git_role --src https://github.com/geerlingguy/ansible-role-git.git 
               $DIFFUSION deps sync
