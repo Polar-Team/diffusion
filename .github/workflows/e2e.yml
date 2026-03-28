@@ -156,9 +156,6 @@ jobs:
 
       # ── Smoke tests ───────────────────────────────────────────────────────
 
-      - name: Clone diffusion_tests repo
-        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
-
       - name: Run smoke tests (Linux)
         if: matrix.runner == 'ubuntu-latest'
         # Run the diffusion binary (static Go binary) inside the target distro's
@@ -170,7 +167,6 @@ jobs:
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -v /var/run/docker.sock:/var/run/docker.sock \
             ${GOOGLE_APPLICATION_CREDENTIALS:+-v "$GOOGLE_APPLICATION_CREDENTIALS:$GOOGLE_APPLICATION_CREDENTIALS"} \
-            -w "$GITHUB_WORKSPACE/diffusion_tests" \
             -e WORKSPACE="$GITHUB_WORKSPACE" \
             -e AWS_ACCESS_KEY_ID \
             -e AWS_SECRET_ACCESS_KEY \
@@ -181,9 +177,11 @@ jobs:
             "${{ matrix.container }}" \
             sh -c '
               set -e
+
               DIFFUSION="${WORKSPACE}/bin/diffusion"
-             
-              cd "${WORKSPACE}/diffusion_tests"
+
+              git clone ${{ env.DIFFUSION_TESTS_REPO }} /tmp/diffusion_tests && \
+              cd /tmp/diffusion_tests
 
               # Install git (required by diffusion --ci mode to get git remote URL).
               # Each minimal distro image uses a different package manager.
