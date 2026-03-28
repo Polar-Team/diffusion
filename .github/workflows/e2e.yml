@@ -198,16 +198,22 @@ jobs:
 
               DIFFUSION="${WORKSPACE}/bin/diffusion"
 
-              # Install git and docker CLI (git required by diffusion --ci mode;
-              # docker CLI required by diffusion to spawn DinD containers).
-              # Each minimal distro image uses a different package manager.
-              if command -v apt-get >/dev/null 2>&1; then
-                DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
-              elif command -v dnf >/dev/null 2>&1; then
-                dnf install -y -q git
-              elif command -v pacman >/dev/null 2>&1; then
-                pacman -Sy --noconfirm git
+              # Install git (required by diffusion --ci mode to get git remote URL)
+              # and verify it works before proceeding.
+              if ! command -v git >/dev/null 2>&1; then
+                if command -v apt-get >/dev/null 2>&1; then
+                  DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
+                elif command -v dnf >/dev/null 2>&1; then
+                  dnf install -y -q git
+                elif command -v pacman >/dev/null 2>&1; then
+                  pacman -Sy --noconfirm git
+                elif command -v apk >/dev/null 2>&1; then
+                  apk add --no-cache git
+                else
+                  echo "ERROR: no supported package manager found to install git" && exit 1
+                fi
               fi
+              git --version
 
               # Mark mounted directories as safe for Git (ownership mismatch between
               # host runner user and container root triggers Git safe.directory check).
