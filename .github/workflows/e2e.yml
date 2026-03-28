@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      id-token: write  # Required for OIDC token exchange with AWS, GCP, and Yandex Cloud
+      id-token: write # Required for OIDC token exchange with AWS, GCP, and Yandex Cloud
     env:
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
@@ -77,16 +77,16 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Authenticate to Yandex Cloud (OIDC)
-        id: yc-iam
-        if: env.YC_SA_ID != ''
-        uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
-        with:
-          yc-sa-id: ${{ secrets.YC_SA_ID }}
-
-      - name: Export Yandex Cloud IAM token
-        if: steps.yc-iam.outputs.token != ''
-        run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
+      # - name: Authenticate to Yandex Cloud (OIDC)
+      #   id: yc-iam
+      #   if: env.YC_SA_ID != ''
+      #   uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
+      #   with:
+      #     yc-sa-id: ${{ secrets.YC_SA_ID }}
+      #
+      # - name: Export Yandex Cloud IAM token
+      #   if: steps.yc-iam.outputs.token != ''
+      #   run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
