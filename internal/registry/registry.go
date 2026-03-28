@@ -13,6 +13,15 @@ import (
 	"diffusion/internal/utils"
 )
 
+// IsValidYcRegistry validates if the registry server is a valid Yandex Container Registry format.
+// Yandex Container Registry uses cr.yandex as the registry host.
+func IsValidYcRegistry(registryServer string) bool {
+	if registryServer == "" {
+		return false
+	}
+	return registryServer == "cr.yandex" || strings.HasPrefix(registryServer, "cr.yandex/")
+}
+
 // YcCliInit runs yc commands and sets env variables YC_TOKEN, YC_CLOUD_ID, YC_FOLDER_ID
 func YcCliInit() error {
 	// yc iam create-token
