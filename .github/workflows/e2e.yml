@@ -202,6 +202,18 @@ jobs:
               # and verify it works before proceeding.
               if ! command -v git >/dev/null 2>&1; then
                 if command -v apt-get >/dev/null 2>&1; then
+                  # Fix EOL Ubuntu releases (e.g. 23.04 Lunar) whose repos moved
+                  # from archive.ubuntu.com to old-releases.ubuntu.com
+                  if [ -f /etc/os-release ]; then
+                    . /etc/os-release
+                    if [ "$ID" = "ubuntu" ]; then
+                      SUPPORTED=$(curl -sf "https://changelogs.ubuntu.com/meta-release" | grep "^Dist: ${VERSION_CODENAME}$" || true)
+                      if [ -z "$SUPPORTED" ]; then
+                        sed -i 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+                        sed -i 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+                      fi
+                    fi
+                  fi
                   DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
                 elif command -v dnf >/dev/null 2>&1; then
                   dnf install -y -q git
