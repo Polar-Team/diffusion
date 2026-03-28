@@ -32,9 +32,9 @@ jobs:
           # a Docker container of the target distro via docker run.
           # The host docker binary is bind-mounted in so diffusion can spawn
           # the molecule container via the host Docker socket.
-          - os: ubuntu2304
+          - os: ubuntu2204
             runner: ubuntu-latest
-            container: ubuntu:23.04
+            container: ubuntu:22.04
           - os: ubuntu2404
             runner: ubuntu-latest
             container: ubuntu:24.04
@@ -202,16 +202,6 @@ jobs:
               # and verify it works before proceeding.
               if ! command -v git >/dev/null 2>&1; then
                 if command -v apt-get >/dev/null 2>&1; then
-                  # EOL Ubuntu releases (e.g. 23.04 Lunar) have repos on old-releases.ubuntu.com
-                  if [ -f /etc/os-release ]; then
-                    . /etc/os-release
-                    case "${VERSION_CODENAME}" in
-                      lunar|kinetic|impish|hirsute|groovy|eoan|disco|cosmic|artful|zesty|yakkety|wily|vivid|utopic|saucy|raring|quantal|oneiric|natty|maverick|lucid)
-                        sed -i 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-                        sed -i 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-                        ;;
-                    esac
-                  fi
                   DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
                 elif command -v dnf >/dev/null 2>&1; then
                   dnf install -y -q git
