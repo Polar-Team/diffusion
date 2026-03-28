@@ -1,0 +1,204 @@
+name: E2E Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  DIFFUSION_TESTS_REPO: https://github.com/Polar-Team/diffusion-ansible-tests-role.git
+
+jobs:
+  e2e:
+    name: E2E Tests (${{ matrix.os }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write # Required for OIDC token exchange with AWS, GCP, and Yandex Cloud
+    env:
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      YC_SA_ID: ${{ secrets.YC_SA_ID }}
+      YC_CLOUD_ID: ${{ secrets.YC_CLOUD_ID }}
+      YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux distros – smoke tests execute inside a Docker container of the
+          # target distro. The host docker binary is bind-mounted so diffusion
+          # can spawn the molecule container via the host Docker socket.
+          - os: ubuntu2204
+            container: ubuntu:22.04
+          - os: ubuntu2404
+            container: ubuntu:24.04
+          - os: debian12
+            container: debian:12
+          - os: debian13
+            container: debian:trixie
+          - os: fedora43
+            container: fedora:43
+          - os: fedora42
+            container: fedora:42
+          - os: almalinux9
+            container: almalinux:9
+          - os: almalinux10
+            container: almalinux:10
+          - os: archlinux
+            container: archlinux:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Cloud CLI authentication (OIDC) ──────────────────────────────────
+      # OIDC eliminates long-lived static credentials. GitHub's identity
+      # provider token is exchanged for short-lived cloud tokens at runtime.
+      # Required GitHub secrets:
+      #   AWS:  AWS_ROLE_ARN, AWS_DEFAULT_REGION
+      #   GCP:  GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT
+      #   YC:   YC_SA_ID
+      # Each step is skipped when its secret is absent (forks / unconfigured).
+
+      - name: Configure AWS credentials (OIDC)
+        if: env.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Authenticate to Google Cloud (OIDC)
+        id: gcp-auth
+        if: env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != ''
+        uses: google-github-actions/auth@v2.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # - name: Authenticate to Yandex Cloud (OIDC)
+      #   id: yc-iam
+      #   if: env.YC_SA_ID != ''
+      #   uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
+      #   with:
+      #     yc-sa-id: ${{ secrets.YC_SA_ID }}
+      #
+      # - name: Export Yandex Cloud IAM token
+      #   if: steps.yc-iam.outputs.token != ''
+      #   run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Build diffusion
+        run: make build
+
+      - name: Run unit tests
+        run: go test -v ./...
+
+      # ── Docker setup ─────────────────────────────────────────────────────
+
+      - name: Start Docker
+        run: |
+          sudo systemctl start docker
+          docker version
+          docker info
+
+      # ── Smoke tests ───────────────────────────────────────────────────────
+
+      - name: Clone diffusion tests repo
+        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} "$GITHUB_WORKSPACE/diffusion_tests"
+
+      - name: Run smoke tests
+        run: |
+          DOCKER_BIN=$(which docker)
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$DOCKER_BIN:/usr/local/bin/docker" \
+            ${GOOGLE_APPLICATION_CREDENTIALS:+-v "$GOOGLE_APPLICATION_CREDENTIALS:$GOOGLE_APPLICATION_CREDENTIALS"} \
+            -w "$GITHUB_WORKSPACE/diffusion_tests" \
+            -e WORKSPACE="$GITHUB_WORKSPACE" \
+            -e AWS_ACCESS_KEY_ID \
+            -e AWS_SECRET_ACCESS_KEY \
+            -e AWS_SESSION_TOKEN \
+            -e AWS_DEFAULT_REGION \
+            ${GOOGLE_APPLICATION_CREDENTIALS:+-e GOOGLE_APPLICATION_CREDENTIALS} \
+            ${YC_IAM_TOKEN:+-e YC_IAM_TOKEN} \
+            -e GIT_CONFIG_COUNT=2 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0="$GITHUB_WORKSPACE/diffusion_tests" \
+            -e GIT_CONFIG_KEY_1=safe.directory \
+            -e GIT_CONFIG_VALUE_1="$GITHUB_WORKSPACE" \
+            "${{ matrix.container }}" \
+            sh -c '
+              set -e
+
+              DIFFUSION="${WORKSPACE}/bin/diffusion"
+
+              # Install git (required by diffusion --ci mode to get git remote URL).
+              if ! command -v git >/dev/null 2>&1; then
+                if command -v apt-get >/dev/null 2>&1; then
+                  DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
+                elif command -v dnf >/dev/null 2>&1; then
+                  dnf install -y -q git
+                elif command -v pacman >/dev/null 2>&1; then
+                  pacman -Sy --noconfirm git
+                elif command -v apk >/dev/null 2>&1; then
+                  apk add --no-cache git
+                else
+                  echo "ERROR: no supported package manager found to install git" && exit 1
+                fi
+              fi
+              git --version
+
+              echo "=========================================="
+              echo "Running deps smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+              # First check is expected to fail before lock+sync — ignore exit code
+              $DIFFUSION deps check || echo "deps check failed before lock+sync (expected)"
+              $DIFFUSION deps lock
+              $DIFFUSION deps sync
+              $DIFFUSION deps check
+
+              echo "=========================================="
+              echo "Running role subcommand smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+              $DIFFUSION role
+              $DIFFUSION role add-collection general --namespace community
+              $DIFFUSION role add-collection posix --namespace ansible
+              $DIFFUSION deps sync
+              $DIFFUSION deps check
+              $DIFFUSION role remove-collection posix --namespace ansible
+              $DIFFUSION deps sync
+              $DIFFUSION role add-role git_role --src https://github.com/geerlingguy/ansible-role-git.git 
+              $DIFFUSION deps sync
+              $DIFFUSION deps check
+              $DIFFUSION role remove-role git_role
+              $DIFFUSION deps sync
+              $DIFFUSION deps check
+
+              echo "=========================================="
+              echo "Running molecule smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+              $DIFFUSION molecule --ci
+              $DIFFUSION molecule --verify --ci
+              $DIFFUSION molecule --idempotence --ci
+              $DIFFUSION molecule --lint --ci
+              $DIFFUSION molecule --verify --tag ports --ci
+
+              echo "=========================================="
+              echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+
+              $DIFFUSION cache enable
+              $DIFFUSION cache status
+              $DIFFUSION artifact list
+
+              echo "=========================================="
+              echo "All smoke tests passed on ${{ matrix.os }}!"
+              echo "=========================================="
+            '

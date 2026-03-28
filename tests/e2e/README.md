@@ -258,7 +258,7 @@ These E2E tests are designed for **local development and testing** to verify:
 - Docker-in-Docker functionality
 - Real-world usage scenarios
 
-**Note:** Vagrant-based tests are not suitable for CI/CD pipelines due to nested virtualization requirements. For CI/CD, use the standard Go unit tests (`go test -v`) which provide comprehensive coverage without VM overhead.
+**Note:** Vagrant-based tests run in CI via GitHub Actions using KVM-accelerated libvirt VMs. See `.github/workflows/e2e.yml` for the workflow definition. For local testing on Windows or macOS, use the helper scripts above.
 
 ## Additional Resources
 
