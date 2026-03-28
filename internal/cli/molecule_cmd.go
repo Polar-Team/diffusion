@@ -34,6 +34,7 @@ func NewMoleculeCmd(cli *CLI) *cobra.Command {
 				DestroyFlag:     cli.DestroyFlag,
 				WipeFlag:        cli.WipeFlag,
 				CIMode:          cli.CIMode,
+				OidcFlag:        cli.OidcFlag,
 			}
 			return molecule.RunMolecule(opts)
 		},
@@ -167,6 +168,7 @@ func NewMoleculeCmd(cli *CLI) *cobra.Command {
 	molCmd.Flags().BoolVar(&cli.DestroyFlag, "destroy", false, "run molecule destroy")
 	molCmd.Flags().BoolVar(&cli.WipeFlag, "wipe", false, "remove container and molecule role folder")
 	molCmd.Flags().BoolVar(&cli.CIMode, "ci", false, "CI/CD mode (non-interactive, skip TTY and permission fixes)")
+	molCmd.Flags().BoolVar(&cli.OidcFlag, "oidc", false, "use OIDC token from env (TOKEN + provider-specific vars: YC_CLOUD_ID/YC_FOLDER_ID for YC, AWS_REGION for AWS)")
 
 	return molCmd
 }

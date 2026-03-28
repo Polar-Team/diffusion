@@ -35,6 +35,7 @@ type MoleculeOptions struct {
 	DestroyFlag     bool
 	WipeFlag        bool
 	CIMode          bool
+	OidcFlag        bool
 }
 
 // RunMolecule is the core function that implements the molecule workflow.
@@ -415,7 +416,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 			return err
 		}
 
-		setupRegistryAuth(cfg)
+		setupRegistryAuth(cfg, opts.OidcFlag)
 
 		if err := runContainer(opts, cfg, path, roleDirName); err != nil {
 			return err
@@ -528,25 +529,42 @@ func setupCredentials(opts *MoleculeOptions, cfg *config.Config) error {
 }
 
 // setupRegistryAuth initializes CLI and performs docker login based on registry provider.
-func setupRegistryAuth(cfg *config.Config) {
-	switch cfg.ContainerRegistry.RegistryProvider {
+// When oidc is true, it reads credentials from environment variables instead of calling cloud CLIs.
+func setupRegistryAuth(cfg *config.Config, oidc bool) {
+	provider := cfg.ContainerRegistry.RegistryProvider
+	if oidc {
+		if err := registry.OidcInit(provider); err != nil {
+			log.Printf("\033[31mOIDC init error: %v\033[0m", err)
+			return
+		}
+	}
+	switch provider {
 	case config.RegistryProviderYC:
-		if err := registry.YcCliInit(); err != nil {
-			log.Printf("\033[33myc init warning: %v\033[0m", err)
+		if !oidc {
+			if err := registry.YcCliInit(); err != nil {
+				log.Printf("\033[33myc init warning: %v\033[0m", err)
+			}
 		}
 		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderAWS:
-		if err := registry.AwsCliInit(cfg.ContainerRegistry.RegistryServer); err != nil {
-			log.Printf("\033[33maws ecr init warning: %v\033[0m", err)
+		if !oidc {
+			if err := registry.AwsCliInit(cfg.ContainerRegistry.RegistryServer); err != nil {
+				log.Printf("\033[33maws ecr init warning: %v\033[0m", err)
+			}
+		} else {
+			region := os.Getenv("AWS_REGION")
+			log.Printf("\033[32mOIDC AWS: using region %s from environment\033[0m", region)
 		}
 		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to AWS ECR registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderGCP:
-		if err := registry.GcpCliInit(cfg.ContainerRegistry.RegistryServer); err != nil {
-			log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
+		if !oidc {
+			if err := registry.GcpCliInit(cfg.ContainerRegistry.RegistryServer); err != nil {
+				log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
+			}
 		}
 		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "oauth2accesstoken", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to GCP registry failed: %v\033[0m", err)
@@ -554,7 +572,7 @@ func setupRegistryAuth(cfg *config.Config) {
 	case config.RegistryProviderPublic:
 		log.Printf("\033[35mUsing public registry, skipping CLI initialization and authentication\033[0m")
 	default:
-		log.Printf("\033[33mUnknown registry provider '%s', skipping CLI initialization\033[0m", cfg.ContainerRegistry.RegistryProvider)
+		log.Printf("\033[33mUnknown registry provider '%s', skipping CLI initialization\033[0m", provider)
 	}
 }
 
