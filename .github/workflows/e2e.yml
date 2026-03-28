@@ -4,9 +4,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  DIFFUSION_TESTS_REPO: https://github.com/Polar-Team/diffusion-ansible-tests-role.git
-
 jobs:
   e2e:
     name: E2E Tests (${{ matrix.os }})
@@ -180,7 +177,7 @@ jobs:
 
               DIFFUSION="${WORKSPACE}/bin/diffusion"
 
-              git clone ${{ env.DIFFUSION_TESTS_REPO }} /tmp/diffusion_tests && \
+              git clone https://github.com/Polar-Team/diffusion-ansible-tests-role.git /tmp/diffusion_tests && \
               cd /tmp/diffusion_tests
 
               # Install git (required by diffusion --ci mode to get git remote URL).
