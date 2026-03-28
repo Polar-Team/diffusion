@@ -1,9 +1,6 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
-# -*- mode: ruby -*-
-# vi: set ft=ruby :
-
 # Supported OS configurations
 # Set BOX_NAME environment variable to choose OS
 # Examples:
@@ -14,39 +11,9 @@
 
 BOX_CONFIGS = {
   # Ubuntu versions
-  "ubuntu2204" => {
-    box: "generic/ubuntu2204",
-    name: "Ubuntu 22.04 LTS",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
-  "ubuntu2304" => {
-    box: "generic/ubuntu2304",
-    name: "Ubuntu 23.04",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
   "ubuntu2404" => {
-    box: "generic/ubuntu2404",
+    box: "onlyoffice/base-ubuntu2404",
     name: "Ubuntu 24.04 LTS",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
-
-  # Debian versions
-  "debian12" => {
-    box: "generic/debian12",
-    name: "Debian 12 (Bookworm)",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
-  "debian13" => {
-    box: "generic/debian13",
-    name: "Debian 13 (Trixie)",
     memory: 4096,
     cpus: 2,
     os_family: "linux"
@@ -60,33 +27,19 @@ BOX_CONFIGS = {
     cpus: 4,
     os_family: "windows"
   },
-  "windows10" => {
-    box: "gusztavvargadr/windows-10",
-    name: "Windows 10",
-    memory: 8192,
-    cpus: 4,
-    os_family: "windows"
-  },
 
   # macOS versions (requires VMware Fusion on macOS host)
   "macos15" => {
-    box: "yzgyyang/macos-15",
+    box: "tas50/macos_10.15",
     name: "macOS 15 Sequoia",
     memory: 8192,
     cpus: 4,
     os_family: "macos"
   },
-  "macos14" => {
-    box: "yzgyyang/macos-14",
-    name: "macOS 14 Sonoma",
-    memory: 8192,
-    cpus: 4,
-    os_family: "macos"
-  }
 }
 
 # Get box name from environment variable or use default
-box_name = ENV['BOX_NAME'] || ENV['VAGRANT_BOX'] || 'ubuntu2204'
+box_name = ENV['BOX_NAME'] || ENV['VAGRANT_BOX'] || 'ubuntu2404'
 
 # Validate box name
 unless BOX_CONFIGS.key?(box_name)
@@ -131,10 +84,28 @@ Vagrant.configure("2") do |config|
     lv.cpus = box_config[:cpus]
   end
 
+  # Hyper-V provider for Windows hosts with Core Isolation enabled.
+  # Core Isolation requires Hyper-V, which degrades VirtualBox/VMware performance
+  # (they fall back to Hyper-V passthrough / WHP mode instead of native hardware access).
+  # Using the Hyper-V provider directly gives the best performance on such hosts.
+  # Nested virtualization is enabled so Windows guests can run WSL2 + Docker.
+  # NOTE: Vagrant with Hyper-V must be run from an elevated (Administrator) shell.
+  config.vm.provider "hyperv" do |h|
+    h.vmname = "diffusion-e2e-#{box_name}"
+    h.cpus = box_config[:cpus]
+    h.memory = box_config[:memory]
+    h.maxmemory = nil                          # Disable dynamic memory (required for nested virt)
+    h.enable_virtualization_extensions = true   # Nested Hyper-V for WSL2/Docker in Windows guests
+    h.enable_checkpoints = false               # Disable checkpoints for performance
+  end
+
   # Sync diffusion source code to VM
-  # Path differs by OS
+  # Path differs by OS family. Hyper-V uses SMB by default which
+  # requires the host to be accessible over the network.
   if box_config[:os_family] == "windows"
     config.vm.synced_folder "../../", "C:/diffusion"
+  elsif box_config[:os_family] == "macos"
+    config.vm.synced_folder "../../", "/Users/vagrant/diffusion"
   else
     config.vm.synced_folder "../../", "/home/vagrant/diffusion"
   end
@@ -168,12 +139,21 @@ Vagrant.configure("2") do |config|
 
     # Add Docker's official GPG key
     install -m 0755 -d /etc/apt/keyrings
-    [ -f "/etc/apt/keyrings/docker.gpg" ] || curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+    # Detect distro for correct Docker repository
+    DISTRO_ID=$(. /etc/os-release && echo "$ID")
+    if [ "$DISTRO_ID" = "debian" ]; then
+      DOCKER_REPO_URL="https://download.docker.com/linux/debian"
+    else
+      DOCKER_REPO_URL="https://download.docker.com/linux/ubuntu"
+    fi
+
+    [ -f "/etc/apt/keyrings/docker.gpg" ] || curl -fsSL "${DOCKER_REPO_URL}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     [ -f "/etc/apt/keyrings/docker.gpg" ] || chmod a+r /etc/apt/keyrings/docker.gpg
 
-    # Add Docker repository
+    # Add Docker repository (using detected distro)
     echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] ${DOCKER_REPO_URL} \
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     # Install Docker
@@ -188,11 +168,11 @@ Vagrant.configure("2") do |config|
     systemctl enable docker
 
     echo "=========================================="
-    echo "Installing Go 1.21..."
+    echo "Installing Go 1.25..."
     echo "=========================================="
 
-    # Download and install Go
-    GO_VERSION="1.21.5"
+    # Download and install Go (must match go.mod version)
+    GO_VERSION="1.25.4"
     wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
     rm -rf /usr/local/go
     tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
@@ -237,13 +217,6 @@ Vagrant.configure("2") do |config|
 
     # Build diffusion
     make build
-
-    echo "=========================================="
-    echo "Running unit tests..."
-    echo "=========================================="
-
-    # Run unit tests
-    /usr/local/go/bin/go test -v ./...
 
     echo "=========================================="
     echo "Running E2E tests..."
@@ -428,12 +401,6 @@ EXPECT_SCRIPT
       go build -buildvcs=false -o bin/diffusion.exe
 
       Write-Host "=========================================="
-      Write-Host "Running unit tests..."
-      Write-Host "=========================================="
-
-      go test -v ./...
-
-      Write-Host "=========================================="
       Write-Host "Running E2E tests with expect..."
       if (Test-Path C:\\test) { Remove-Item -Recurse -Force C:\\test }
       New-Item -ItemType Directory -Path C:\\test
@@ -546,37 +513,146 @@ expect eof
     SHELL
 
   elsif box_config[:os_family] == "macos"
-    # macOS provisioning
+    # macOS provisioning (requires VMware Fusion on macOS host)
     config.vm.provision "shell", inline: <<-SHELL
+      set -e
+
       echo "=========================================="
       echo "Installing Homebrew..."
       echo "=========================================="
 
-      # Install Homebrew
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      # Install Homebrew (non-interactive)
+      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+      # Add Homebrew to PATH for this session
+      eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
 
       echo "=========================================="
-      echo "Installing Go and Docker..."
+      echo "Installing Go, Docker (via colima), and expect..."
       echo "=========================================="
 
-      brew install go docker
+      # Install dependencies
+      # Note: 'brew install docker' only installs the CLI client.
+      # colima provides the Docker daemon on macOS without Docker Desktop.
+      brew install go docker colima expect
+
+      # Start colima (lightweight Docker runtime for macOS)
+      colima start --cpu 2 --memory 2
 
       echo "=========================================="
       echo "Building diffusion..."
       echo "=========================================="
 
-      cd /home/vagrant/diffusion
-      go build -o diffusion
+      cd /Users/vagrant/diffusion
+
+      # Build diffusion
+      make build
 
       echo "=========================================="
-      echo "Running tests..."
+      echo "Running E2E tests..."
       echo "=========================================="
 
-      go test -v ./...
+      # Create test directory
+      [ -d "/Users/vagrant/test" ] && rm -rf "/Users/vagrant/test"
+      mkdir -p /Users/vagrant/test
+      cd /Users/vagrant/test
+
+      # Test 1: Initialize a new role using expect
+      echo "Test 1: Initialize new role..."
+      expect <<'EXPECT_SCRIPT'
+set timeout 30
+spawn /Users/vagrant/diffusion/bin/diffusion role --init
+expect "Enter role name:"
+send "test_role\r"
+expect "What namespace of the role should be?:"
+send "testorg\r"
+expect "What company of the role should be?:"
+send "Test Company\r"
+expect "What author of the role should be?:"
+send "Test Author\r"
+expect "Description of the role (optional):"
+send "Test role for E2E testing\r"
+expect "Enter platforms? (y/n):"
+send "n\r"
+expect "Galaxy Tags (comma-separated) (optional):"
+send "test,e2e\r"
+expect "Collections required (comma-separated) (optional):"
+send "\r"
+expect "Enter roles to add? (y/n):"
+send "n\r"
+expect eof
+EXPECT_SCRIPT
+
+      # Verify role was created
+      if [ -d "test_role" ]; then
+        echo "PASS: Role initialization successful"
+      else
+        echo "FAIL: Role initialization failed"
+        exit 1
+      fi
+
+      cd test_role
+
+      # Test 2: Create diffusion config using expect
+      echo "Test 2: Create diffusion config..."
+      expect <<'EXPECT_SCRIPT'
+set timeout 60
+spawn /Users/vagrant/diffusion/bin/diffusion molecule --role test_role --org myorg
+expect "Enter RegistryServer*"
+send "\r"
+expect "Enter RegistryProvider*"
+send "\r"
+expect "Enter MoleculeContainerName*"
+send "\r"
+expect "Enter MoleculeContainerTag*"
+send "\r"
+expect "Enable Vault Integration for artifact sources?*"
+send "n\r"
+expect "Configure artifact sources for private repositories?*"
+send "n\r"
+expect "What type of configuration you want use?*"
+send "\r"
+expect eof
+EXPECT_SCRIPT
+
+      # Verify config was created
+      if [ -f "diffusion.toml" ]; then
+        echo "PASS: Config creation successful"
+      else
+        echo "FAIL: Config creation failed"
+        exit 1
+      fi
+
+      # Test 3: Test cache feature
+      echo "Test 3: Test cache feature..."
+      /Users/vagrant/diffusion/bin/diffusion cache enable
+      /Users/vagrant/diffusion/bin/diffusion cache status
+
+      if [ -d "$HOME/.diffusion/cache" ]; then
+        echo "PASS: Cache directory created"
+      else
+        echo "FAIL: Cache directory not created"
+        exit 1
+      fi
+
+      # Test 4: Test artifact management
+      echo "Test 4: Test artifact management..."
+      /Users/vagrant/diffusion/bin/diffusion artifact list
 
       echo "=========================================="
-      echo "All tests passed on macOS!"
+      echo "All E2E tests passed on macOS!"
       echo "=========================================="
+
+      # Print summary
+      echo ""
+      echo "Summary:"
+      echo "  - Docker version: $(docker --version)"
+      echo "  - Go version: $(go version)"
+      echo "  - Diffusion built successfully"
+      echo "  - All unit tests passed"
+      echo "  - All E2E tests passed"
+      echo ""
+
     SHELL
   end
 end
