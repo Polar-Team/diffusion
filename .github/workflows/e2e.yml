@@ -83,6 +83,10 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
+      - name: Set up gcloud CLI (Windows / macOS)
+        if: (env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != '') && runner.os != 'Linux'
+        uses: google-github-actions/setup-gcloud@v2
+
       - name: Authenticate to Google Cloud (OIDC)
         id: gcp-auth
         if: env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && env.GCP_SERVICE_ACCOUNT != ''
