@@ -29,7 +29,9 @@ jobs:
       matrix:
         include:
           # Linux distros – run on ubuntu-latest; smoke tests execute inside
-          # a Docker container of the target distro via docker run
+          # a Docker container of the target distro via docker run.
+          # The host docker binary is bind-mounted in so diffusion can spawn
+          # the molecule container via the host Docker socket.
           - os: ubuntu2304
             runner: ubuntu-latest
             container: ubuntu:23.04
@@ -171,9 +173,11 @@ jobs:
         # Docker volume mounts created by molecule resolve correctly on the host
         # Docker daemon (which owns the mounted socket).
         run: |
+          DOCKER_BIN=$(which docker)
           docker run --rm \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$DOCKER_BIN:/usr/local/bin/docker" \
             ${GOOGLE_APPLICATION_CREDENTIALS:+-v "$GOOGLE_APPLICATION_CREDENTIALS:$GOOGLE_APPLICATION_CREDENTIALS"} \
             -w "$GITHUB_WORKSPACE/diffusion_tests" \
             -e WORKSPACE="$GITHUB_WORKSPACE" \
@@ -198,11 +202,11 @@ jobs:
               # docker CLI required by diffusion to spawn DinD containers).
               # Each minimal distro image uses a different package manager.
               if command -v apt-get >/dev/null 2>&1; then
-                DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git docker.io
+                DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
               elif command -v dnf >/dev/null 2>&1; then
-                dnf install -y -q git docker
+                dnf install -y -q git
               elif command -v pacman >/dev/null 2>&1; then
-                pacman -Sy --noconfirm git docker
+                pacman -Sy --noconfirm git
               fi
 
               # Mark mounted directories as safe for Git (ownership mismatch between
