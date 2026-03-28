@@ -225,16 +225,16 @@ jobs:
               echo "=========================================="
               echo "Running molecule smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
-              $DIFFUSION molecule --ci
-              $DIFFUSION molecule --verify --ci
-              $DIFFUSION molecule --idempotence --ci
-              $DIFFUSION molecule --lint --ci
-              $DIFFUSION molecule --verify --tag ports --ci
+              $DIFFUSION molecule 
+              $DIFFUSION molecule --verify 
+              $DIFFUSION molecule --idempotence 
+              $DIFFUSION molecule --lint 
+              $DIFFUSION molecule --verify --tag ports 
 
               echo "=========================================="
               echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
-              cd "$WORKSPACE"
+
               $DIFFUSION cache enable
               $DIFFUSION cache status
               $DIFFUSION artifact list
