@@ -4,6 +4,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  DIFFUSION_TESTS_REPO: https://github.com/Polar-Team/diffusion-ansible-tests-role.git
+
 jobs:
   e2e:
     name: E2E Tests (${{ matrix.os }})
@@ -153,6 +156,14 @@ jobs:
 
       # ── Smoke tests ───────────────────────────────────────────────────────
 
+      - name: Clone diffusion tests repo (macOS / Windows)
+        if: matrix.os == 'macos' || matrix.os == 'windows'
+        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} diffusion_tests
+
+      - name: Clone diffusion tests repo (Linux)
+        if: matrix.runner == 'ubuntu-latest'
+        run: git clone ${{ env.DIFFUSION_TESTS_REPO }} "$GITHUB_WORKSPACE/diffusion_tests"
+
       - name: Run smoke tests (Linux)
         if: matrix.runner == 'ubuntu-latest'
         # Run the diffusion binary (static Go binary) inside the target distro's
@@ -164,6 +175,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -v /var/run/docker.sock:/var/run/docker.sock \
             ${GOOGLE_APPLICATION_CREDENTIALS:+-v "$GOOGLE_APPLICATION_CREDENTIALS:$GOOGLE_APPLICATION_CREDENTIALS"} \
+            -w "$GITHUB_WORKSPACE/diffusion_tests" \
             -e WORKSPACE="$GITHUB_WORKSPACE" \
             -e AWS_ACCESS_KEY_ID \
             -e AWS_SECRET_ACCESS_KEY \
@@ -171,14 +183,16 @@ jobs:
             -e AWS_DEFAULT_REGION \
             ${GOOGLE_APPLICATION_CREDENTIALS:+-e GOOGLE_APPLICATION_CREDENTIALS} \
             ${YC_IAM_TOKEN:+-e YC_IAM_TOKEN} \
+            -e GIT_CONFIG_COUNT=2 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0="$GITHUB_WORKSPACE/diffusion_tests" \
+            -e GIT_CONFIG_KEY_1=safe.directory \
+            -e GIT_CONFIG_VALUE_1="$GITHUB_WORKSPACE" \
             "${{ matrix.container }}" \
             sh -c '
               set -e
 
               DIFFUSION="${WORKSPACE}/bin/diffusion"
-
-              git clone https://github.com/Polar-Team/diffusion-ansible-tests-role.git /tmp/diffusion_tests && \
-              cd /tmp/diffusion_tests
 
               # Install git (required by diffusion --ci mode to get git remote URL).
               # Each minimal distro image uses a different package manager.
@@ -189,6 +203,11 @@ jobs:
               elif command -v pacman >/dev/null 2>&1; then
                 pacman -Sy --noconfirm git
               fi
+
+              # Mark mounted directories as safe for Git (ownership mismatch between
+              # host runner user and container root triggers Git safe.directory check).
+              # GIT_CONFIG_COUNT env vars propagate this into any DinD containers
+              # that diffusion spawns internally.
 
               echo "=========================================="
               echo "Running deps smoke tests on ${{ matrix.os }}..."
