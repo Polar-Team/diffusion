@@ -142,6 +142,8 @@ jobs:
             Start-Service docker
             Start-Sleep -Seconds 10
           }
+          # Force Linux image resolution regardless of Windows host OS version
+          echo "DOCKER_DEFAULT_PLATFORM=linux/amd64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           docker version
           docker info
 
