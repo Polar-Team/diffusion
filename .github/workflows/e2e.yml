@@ -143,13 +143,16 @@ jobs:
           docker version
           docker info
 
-      - name: Install and start Docker (macOS via colima)
+      - name: Install and start Docker (macOS)
         if: matrix.os == 'macos'
-        run: |
-          brew install colima docker
-          colima start --memory 4 --disk 60
-          docker version
-          docker info
+        uses: docker/setup-docker-action@v4
+        with:
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
 
       # ── Smoke tests ───────────────────────────────────────────────────────
 
