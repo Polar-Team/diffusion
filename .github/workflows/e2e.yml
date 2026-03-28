@@ -182,6 +182,8 @@ jobs:
             sh -c '
               set -e
               DIFFUSION="$WORKSPACE/bin/diffusion"
+             
+              cd diffusion_tests
 
               # Install git (required by diffusion --ci mode to get git remote URL).
               # Each minimal distro image uses a different package manager.
