@@ -194,14 +194,15 @@ jobs:
 
               DIFFUSION="${WORKSPACE}/bin/diffusion"
 
-              # Install git (required by diffusion --ci mode to get git remote URL).
+              # Install git and docker CLI (git required by diffusion --ci mode;
+              # docker CLI required by diffusion to spawn DinD containers).
               # Each minimal distro image uses a different package manager.
               if command -v apt-get >/dev/null 2>&1; then
-                DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git
+                DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq git docker.io
               elif command -v dnf >/dev/null 2>&1; then
-                dnf install -y -q git
+                dnf install -y -q git docker
               elif command -v pacman >/dev/null 2>&1; then
-                pacman -Sy --noconfirm git
+                pacman -Sy --noconfirm git docker
               fi
 
               # Mark mounted directories as safe for Git (ownership mismatch between
