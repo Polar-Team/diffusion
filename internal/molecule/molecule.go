@@ -361,9 +361,7 @@ func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario stri
 
 	// Copy tests from diffusion repo to role tests directory
 	if opts.CIMode {
-		cmdCopy := fmt.Sprintf(`
-			cp -rf %s /opt/molecule/%s.%s/molecule/%s/roles/diffusion_tests
-		`, diffusionTestsPath, opts.OrgFlag, opts.RoleFlag, scenario)
+		cmdCopy := fmt.Sprintf(`cp -rf %s %s`, diffusionTestsPath, fmt.Sprintf("/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag, config.MoleculeDir, scenario, config.TestsDir))
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
 			log.Printf("\033[33mwarning: failed to copy diffusion tests in CI mode: %v\033[0m", err)
 		}
