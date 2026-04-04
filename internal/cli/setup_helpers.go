@@ -45,7 +45,7 @@ func AnsibleGalaxyInit() (string, error) {
 	)
 
 	if permissions != "" {
-		args = append(args, "chown", "-R", permissions, roleName)
+		args = append(args, "&&", "chown", "-R", permissions, roleName)
 	}
 
 	fmt.Printf("Initializing Ansible role: %s\n", roleName)
