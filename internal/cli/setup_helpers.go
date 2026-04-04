@@ -41,18 +41,23 @@ func AnsibleGalaxyInit() (string, error) {
 		"-v", fmt.Sprintf("%s:/ansible", currentDir),
 		"-w", "/ansible",
 		fmt.Sprintf("ghcr.io/polar-team/diffusion-molecule-container:%s", utils.GetDefaultMoleculeTag()),
+		"ansible-galaxy", "role", "init", roleName,
 	)
-
-	if permissions != "" {
-		args = append(args, "mkdir", roleName, "&&", "chown", "-R", permissions, roleName, "&&")
-	}
-
-	args = append(args, "ansible-galaxy", "role", "init", roleName)
 
 	fmt.Printf("Initializing Ansible role: %s\n", roleName)
 	fmt.Printf("Running command: docker %s\n", strings.Join(args, " "))
 
 	err = utils.RunCommandHide("docker", args...)
+
+	if permissions != "" {
+		args := append(args,
+			"run", "-v", fmt.Sprintf("%s:/ansible", currentDir),
+			"-w", "/ansible",
+			"chown", "-R", permissions, roleName)
+
+		err = utils.RunCommandHide("docker", args...)
+	}
+
 	if err != nil {
 		fmt.Printf("\033[31mInitializing of new role were failed: %v\033[0m", err)
 	}
