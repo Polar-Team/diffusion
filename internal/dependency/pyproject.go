@@ -82,7 +82,17 @@ func GeneratePyProjectContent(collections []config.CollectionRequirement, toolVe
 
 	// Add collection-specific dependencies
 	for _, col := range collections {
-		deps := getCollectionPythonDependencies(col.Name)
+		// Reconstruct namespace.name format for lookup (e.g., "community.general")
+		// col.Name is scenario-prefixed (e.g., "default.general"), so strip prefix first
+		pythonDepsKey := col.Name
+		if col.Namespace != "" {
+			colName := col.Name
+			if parts := strings.SplitN(colName, ".", 2); len(parts) == 2 {
+				colName = parts[1]
+			}
+			pythonDepsKey = col.Namespace + "." + colName
+		}
+		deps := getCollectionPythonDependencies(pythonDepsKey)
 		project.Dependencies = append(project.Dependencies, deps...)
 	}
 

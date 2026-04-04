@@ -13,6 +13,51 @@ import (
 	"diffusion/internal/utils"
 )
 
+// OidcInit reads pre-set environment variables for OIDC-based authentication.
+// Instead of calling cloud CLIs, it expects TOKEN (and provider-specific vars)
+// to already be present in the environment (e.g. injected by a CI/CD OIDC provider).
+//
+// For YC:  TOKEN, YC_CLOUD_ID, YC_FOLDER_ID must be set.
+// For AWS: TOKEN, AWS_REGION must be set.
+// For GCP: TOKEN must be set.
+func OidcInit(provider string) error {
+	token := os.Getenv("TOKEN")
+	if token == "" {
+		return fmt.Errorf("--oidc: TOKEN environment variable is not set")
+	}
+
+	switch provider {
+	case "YC":
+		if os.Getenv("YC_CLOUD_ID") == "" {
+			return fmt.Errorf("--oidc: YC_CLOUD_ID environment variable is not set")
+		}
+		if os.Getenv("YC_FOLDER_ID") == "" {
+			return fmt.Errorf("--oidc: YC_FOLDER_ID environment variable is not set")
+		}
+		log.Printf("\033[32mOIDC: using TOKEN, YC_CLOUD_ID=%s, YC_FOLDER_ID=%s\033[0m",
+			os.Getenv("YC_CLOUD_ID"), os.Getenv("YC_FOLDER_ID"))
+	case "AWS":
+		if os.Getenv("AWS_REGION") == "" {
+			return fmt.Errorf("--oidc: AWS_REGION environment variable is not set")
+		}
+		log.Printf("\033[32mOIDC: using TOKEN, AWS_REGION=%s\033[0m", os.Getenv("AWS_REGION"))
+	case "GCP":
+		log.Printf("\033[32mOIDC: using TOKEN for GCP\033[0m")
+	default:
+		log.Printf("\033[33mOIDC: provider '%s' — only TOKEN is required\033[0m", provider)
+	}
+	return nil
+}
+
+// IsValidYcRegistry validates if the registry server is a valid Yandex Container Registry format.
+// Yandex Container Registry uses cr.yandex as the registry host.
+func IsValidYcRegistry(registryServer string) bool {
+	if registryServer == "" {
+		return false
+	}
+	return registryServer == "cr.yandex" || strings.HasPrefix(registryServer, "cr.yandex/")
+}
+
 // YcCliInit runs yc commands and sets env variables YC_TOKEN, YC_CLOUD_ID, YC_FOLDER_ID
 func YcCliInit() error {
 	// yc iam create-token

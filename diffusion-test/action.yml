@@ -178,7 +178,8 @@ runs:
 
     - name: Restore Diffusion cache
       if: inputs.cache-enabled == 'true'
-      uses: actions/cache@v4
+      id: restore-cache
+      uses: actions/cache/restore@v4
       with:
         path: ~/.diffusion/cache
         key: diffusion-cache-${{ steps.cache-key.outputs.hash }}
@@ -229,6 +230,13 @@ runs:
         echo "::group::Cleaning up"
         diffusion molecule --ci --wipe || true
         echo "::endgroup::"
+
+    - name: Save Diffusion cache
+      if: always() && inputs.cache-enabled == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.diffusion/cache
+        key: diffusion-cache-${{ steps.cache-key.outputs.hash }}
 
     - name: Show cache status
       if: always() && inputs.cache-enabled == 'true'

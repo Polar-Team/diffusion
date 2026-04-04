@@ -22,6 +22,9 @@ type CLI struct {
 	RoleScmFlag     string
 	RoleVersionFlag string
 
+	// Namespace flag (shared by role and collection commands)
+	NamespaceFlag string
+
 	// Collection flags
 	AddCollectionFlag string
 
@@ -35,6 +38,7 @@ type CLI struct {
 	DestroyFlag        bool
 	WipeFlag           bool
 	CIMode             bool
+	OidcFlag           bool
 }
 
 // Execute is the main entry point for the CLI

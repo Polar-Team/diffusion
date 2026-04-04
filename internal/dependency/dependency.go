@@ -113,7 +113,7 @@ func (dr *DependencyResolver) ResolveRoleDependencies() ([]config.RoleRequiremen
 	if dr.config != nil && dr.config.Roles != nil {
 		for _, role := range dr.config.Roles {
 			// Role names in config are prefixed with scenario (e.g., "default.rolename")
-			// Extract the actual role name
+			// Extract the actual role name by stripping scenario prefix
 			parts := strings.SplitN(role.Name, ".", 2)
 			var roleName string
 			if len(parts) == 2 {
@@ -122,10 +122,16 @@ func (dr *DependencyResolver) ResolveRoleDependencies() ([]config.RoleRequiremen
 				roleName = role.Name
 			}
 
+			// Build the lookup key: namespace.roleName for Galaxy, or just roleName for git
+			lookupKey := roleName
+			if role.Namespace != "" {
+				lookupKey = role.Namespace + "." + roleName
+			}
+
 			// Get src and scm from requirements.yml if not in config
 			src := role.Src
 			scm := role.Scm
-			if reqRole, exists := requirementRoles[roleName]; exists {
+			if reqRole, exists := requirementRoles[lookupKey]; exists {
 				if src == "" {
 					src = reqRole.Src
 				}
@@ -135,11 +141,12 @@ func (dr *DependencyResolver) ResolveRoleDependencies() ([]config.RoleRequiremen
 			}
 
 			// Add role with constraint from config
-			roleMap[roleName] = config.RoleRequirement{
-				Name:    roleName,
-				Src:     src,
-				Scm:     scm,
-				Version: role.Version,
+			roleMap[lookupKey] = config.RoleRequirement{
+				Name:      roleName,
+				Namespace: role.Namespace,
+				Src:       src,
+				Scm:       scm,
+				Version:   role.Version,
 			}
 		}
 	}
@@ -159,22 +166,6 @@ func (dr *DependencyResolver) ResolveRoleDependencies() ([]config.RoleRequiremen
 	})
 
 	return roles, nil
-}
-
-// ParseCollectionString parses a collection string like "community.general>=7.4.0" or "community.docker"
-func ParseCollectionString(col string) (name, version string) {
-	// Check for version operators
-	for _, op := range []string{">=", "<=", "==", ">", "<", "="} {
-		if idx := strings.Index(col, op); idx != -1 {
-			name = strings.TrimSpace(col[:idx])
-			version = strings.TrimSpace(col[idx:])
-			return
-		}
-	}
-	// No version specified
-	name = strings.TrimSpace(col)
-	version = ""
-	return
 }
 
 // ResolvePythonVersion resolves Python version requirements
@@ -249,12 +240,20 @@ func ComputeDependencyHash(collections []config.CollectionRequirement, roles []c
 		return collections[i].Name < collections[j].Name
 	})
 	for _, col := range collections {
-		galaxyAPI := galaxy.NewGalaxyAPI()
-		resolvedVersion, err := galaxyAPI.ResolveVersion(col.Name, "collection", col.Version)
-		if err == nil {
-			col.Version = resolvedVersion
+		// Resolve collection version using namespace and name separately
+		if col.Namespace != "" {
+			// Strip scenario prefix from collection name (e.g., "default.general" -> "general")
+			colName := col.Name
+			if parts := strings.SplitN(colName, ".", 2); len(parts) == 2 {
+				colName = parts[1]
+			}
+			galaxyAPI := galaxy.NewGalaxyAPI()
+			resolvedVersion, err := galaxyAPI.ResolveVersion(col.Namespace, colName, "collection", col.Version)
+			if err == nil {
+				col.Version = resolvedVersion
+			}
 		}
-		_, err = fmt.Fprintf(h, "collection:%s:%s\n", col.Name, col.Version)
+		_, err := fmt.Fprintf(h, "collection:%s:%s:%s\n", col.Namespace, col.Name, col.Version)
 		if err != nil {
 			fmt.Printf("Error hashing collection: %v\n", err)
 		}
@@ -271,18 +270,18 @@ func ComputeDependencyHash(collections []config.CollectionRequirement, roles []c
 		if err == nil {
 			role.Version = resolvedVersion
 		}
-		// Normalize role names by stripping scenario prefixes
+		// Extract scenario prefix from role name
 		parts := strings.SplitN(role.Name, ".", 2)
-		var prefix string
+		var scenario, roleName string
 		if len(parts) == 2 {
-			prefix = fmt.Sprintf("%s.", parts[0])
-		} else if prefix == "default" || prefix == "" {
-			prefix = "default."
+			scenario = parts[0]
+			roleName = parts[1]
+		} else {
+			scenario = "default"
+			roleName = role.Name
 		}
 
-		role.Name = strings.TrimPrefix(role.Name, prefix)
-
-		_, err = fmt.Fprintf(h, "role:%s:%s:%s:%s\n", strings.Replace(prefix, ".", "", 1), role.Name, role.Version, role.Src)
+		_, err = fmt.Fprintf(h, "role:%s:%s:%s:%s:%s\n", scenario, role.Namespace, roleName, role.Version, role.Src)
 		if err != nil {
 			fmt.Printf("Error hashing role: %v\n", err)
 		}
@@ -383,18 +382,8 @@ func LoadDependencyConfig() (*config.DependencyConfig, error) {
 			// Extract actual role name from scenario prefix (e.g., "default.rolename" -> "rolename")
 			// Roles in diffusion.toml are stored as "scenario.rolename" or "scenario.namespace.rolename"
 
-			// Role names in config are prefixed with scenario (e.g., "default.rolename")
-			// Extract the actual role name
-			parts := strings.SplitN(role.Name, ".", 2)
-			var roleName string
-			if len(parts) == 2 {
-				roleName = parts[1]
-			} else {
-				roleName = role.Name
-			}
-
 			// Store the cleaned role name
-			cfg.DependencyConfig.Roles[i].Name = roleName
+			cfg.DependencyConfig.Roles[i].Name = role.Name
 
 			if role.Scm == "git" && role.Src != "" {
 				cfg.DependencyConfig.Roles[i].Src = role.Src
@@ -406,7 +395,7 @@ func LoadDependencyConfig() (*config.DependencyConfig, error) {
 				cfg.DependencyConfig.Roles[i].Version = role.Version
 			}
 
-			if roleName == "" {
+			if role.Name == "" {
 				return nil, fmt.Errorf("role name cannot be empty")
 			}
 		}

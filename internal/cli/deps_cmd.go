@@ -116,29 +116,61 @@ func newDepsResolveCmd() *cobra.Command {
 
 			fmt.Println("\033[1mCollections:\033[0m")
 			for _, col := range lockFile.Collections {
+				// Display as namespace.name (scenario) format for readability
+				displayName := col.Name
+				scenario := ""
+				if parts := strings.SplitN(col.Name, ".", 2); len(parts) == 2 {
+					scenario = parts[0]
+					colName := parts[1]
+					if col.Namespace != "" {
+						displayName = col.Namespace + "." + colName
+					} else {
+						displayName = colName
+					}
+				}
 				constraint := col.Version
 				resolved := col.ResolvedVersion
+				scenarioLabel := ""
+				if scenario != "" && scenario != "default" {
+					scenarioLabel = fmt.Sprintf(" [%s]", scenario)
+				}
 				if resolved != "" && resolved != constraint {
-					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m (constraint: %s)\n", col.Name, resolved, constraint)
+					fmt.Printf("  %s%s: \033[38;2;127;255;212m%s\033[0m (constraint: %s)\n", displayName, scenarioLabel, resolved, constraint)
 				} else if resolved != "" {
-					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", col.Name, resolved)
+					fmt.Printf("  %s%s: \033[38;2;127;255;212m%s\033[0m\n", displayName, scenarioLabel, resolved)
 				} else {
-					fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", col.Name, constraint)
+					fmt.Printf("  %s%s: \033[38;2;127;255;212m%s\033[0m\n", displayName, scenarioLabel, constraint)
 				}
 			}
 			fmt.Println()
 
 			if len(lockFile.Roles) > 0 {
 				fmt.Println("\033[1mRoles:\033[0m")
-				for _, role := range lockFile.Roles {
-					constraint := role.Version
-					resolved := role.ResolvedVersion
+				for _, r := range lockFile.Roles {
+					// Display as namespace.rolename (scenario) format for readability
+					displayName := r.Name
+					scenario := ""
+					if parts := strings.SplitN(r.Name, ".", 2); len(parts) == 2 {
+						scenario = parts[0]
+						roleName := parts[1]
+						if r.Namespace != "" && r.Src == "" {
+							displayName = r.Namespace + "." + roleName
+						} else {
+							displayName = roleName
+						}
+					}
+					constraint := r.Version
+					resolved := r.ResolvedVersion
+					scenarioLabel := ""
+					if scenario != "" && scenario != "default" {
+						scenarioLabel = fmt.Sprintf(" [%s]", scenario)
+					}
 					if resolved != "" && resolved != constraint {
-						fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m (constraint: %s)\n", role.Name, resolved, constraint)
+						fmt.Printf("  %s%s: \033[38;2;127;255;212m%s\033[0m (constraint: %s)\n", displayName, scenarioLabel, resolved, constraint)
 					} else if resolved != "" {
-						fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", role.Name, resolved)
+						fmt.Printf("  %s%s: \033[38;2;127;255;212m%s\033[0m\n", displayName, scenarioLabel, resolved)
 					} else {
-						fmt.Printf("  %s: \033[38;2;127;255;212m%s\033[0m\n", role.Name, constraint)
+						fmt.Printf("  %s%s: \033[38;2;127;255;212m%s\033[0m\n", displayName, scenarioLabel, constraint)
 					}
 				}
 				fmt.Println()
@@ -209,10 +241,24 @@ func newDepsInitCmd() *cobra.Command {
 
 								// Add collections from this scenario
 								for _, col := range req.Collections {
+									// Parse namespace and name from collection name (format: "namespace.name")
+									colParts := strings.SplitN(col.Name, ".", 2)
+									var namespace, colName string
+									if len(colParts) == 2 {
+										namespace = colParts[0]
+										colName = colParts[1]
+									} else {
+										namespace = ""
+										colName = col.Name
+									}
+
+									// Config name is prefixed with scenario (e.g., "default.general")
+									configName := scenarioName + "." + colName
+
 									// Check if collection already exists
 									exists := false
 									for _, existing := range cfg.DependencyConfig.Collections {
-										if existing.Name == col.Name {
+										if existing.Name == configName {
 											exists = true
 											break
 										}
@@ -224,17 +270,29 @@ func newDepsInitCmd() *cobra.Command {
 											version = ">=" + version
 										}
 										cfg.DependencyConfig.Collections = append(cfg.DependencyConfig.Collections, config.CollectionRequirement{
-											Name:    col.Name,
-											Version: version,
+											Name:      configName,
+											Namespace: namespace,
+											Version:   version,
 										})
-										fmt.Printf("    ✓ Added collection: %s %s\n", col.Name, version)
+										fmt.Printf("    + Added collection: %s (namespace: %s) %s\n", configName, namespace, version)
 									}
 								}
 
 								// Add roles from this scenario
 								for _, role := range req.Roles {
 									// Prefix role name with scenario name
-									roleNameWithScenario := scenarioName + "." + role.Name
+									// Extract namespace from role name if present (format: "namespace.rolename")
+									var namespace, actualRoleName string
+									roleParts := strings.SplitN(role.Name, ".", 2)
+									if len(roleParts) == 2 && role.Src == "" {
+										// Looks like "namespace.rolename" Galaxy format
+										namespace = roleParts[0]
+										actualRoleName = roleParts[1]
+									} else {
+										namespace = ""
+										actualRoleName = role.Name
+									}
+									roleNameWithScenario := scenarioName + "." + actualRoleName
 
 									// Check if role already exists
 									exists := false
@@ -252,12 +310,13 @@ func newDepsInitCmd() *cobra.Command {
 										}
 										version = strings.Replace(version, "v", "", 1)
 										cfg.DependencyConfig.Roles = append(cfg.DependencyConfig.Roles, config.RoleRequirement{
-											Name:    roleNameWithScenario,
-											Src:     role.Src,
-											Scm:     role.Scm,
-											Version: version,
+											Name:      roleNameWithScenario,
+											Namespace: namespace,
+											Src:       role.Src,
+											Scm:       role.Scm,
+											Version:   version,
 										})
-										fmt.Printf("    ✓ Added role: %s %s\n", roleNameWithScenario, version)
+										fmt.Printf("    + Added role: %s (namespace: %s) %s\n", roleNameWithScenario, namespace, version)
 									}
 								}
 							}
@@ -273,13 +332,27 @@ func newDepsInitCmd() *cobra.Command {
 				meta, err := role.ParseMetaFile()
 				if err == nil {
 					for _, col := range meta.Collections {
-						// Parse collection string
-						name, version := utils.ParseCollectionString(col)
+						// Parse collection string (format: "namespace.name" or "namespace.name>=version")
+						fullName, version := utils.ParseCollectionString(col)
+
+						// Extract namespace and name from the collection string
+						colParts := strings.SplitN(fullName, ".", 2)
+						var namespace, colName string
+						if len(colParts) == 2 {
+							namespace = colParts[0]
+							colName = colParts[1]
+						} else {
+							namespace = ""
+							colName = fullName
+						}
+
+						// Config name is prefixed with "default" scenario (meta.yml is for default scenario)
+						configName := "default." + colName
 
 						// Check if collection already exists
 						exists := false
 						for _, existing := range cfg.DependencyConfig.Collections {
-							if existing.Name == name {
+							if existing.Name == configName {
 								exists = true
 								break
 							}
@@ -290,10 +363,11 @@ func newDepsInitCmd() *cobra.Command {
 								version = ">=1.0.0" // Default constraint
 							}
 							cfg.DependencyConfig.Collections = append(cfg.DependencyConfig.Collections, config.CollectionRequirement{
-								Name:    name,
-								Version: version,
+								Name:      configName,
+								Namespace: namespace,
+								Version:   version,
 							})
-							fmt.Printf("    ✓ Added collection from meta: %s %s\n", name, version)
+							fmt.Printf("    + Added collection from meta: %s (namespace: %s) %s\n", configName, namespace, version)
 						}
 					}
 				}
@@ -357,32 +431,42 @@ func newDepsSyncCmd() *cobra.Command {
 				}
 
 				// Sync collections to requirements.yml (structured format with resolved versions)
+				// Collections are scenario-prefixed in lock file (e.g., "default.general")
 				fmt.Printf("Syncing collections to requirements.yml for %s...\n", scenario)
 				req.Collections = []role.RequirementCollection{}
+				colPrefix := scenario + "."
 				for _, col := range lockFile.Collections {
+					if !strings.HasPrefix(col.Name, colPrefix) {
+						continue
+					}
+					// Strip scenario prefix from collection name
+					colName := strings.TrimPrefix(col.Name, colPrefix)
+					// Reconstruct namespace.name format for YAML output
+					yamlName := colName
+					if col.Namespace != "" {
+						yamlName = col.Namespace + "." + colName
+					}
+
 					version := col.ResolvedVersion
 					if version == "" {
 						version = col.Version
 					}
 					req.Collections = append(req.Collections, role.RequirementCollection{
-						Name:    col.Name,
+						Name:    yamlName,
 						Version: version,
 					})
-					fmt.Printf("  ✓ %s: %s\n", col.Name, version)
+					fmt.Printf("  + %s: %s\n", yamlName, version)
 				}
 
 				// Sync roles to requirements.yml
 				fmt.Printf("Syncing roles to requirements.yml for %s...\n", scenario)
 				req.Roles = []role.RequirementRole{}
 				scenarioRoles := []dependency.LockFileEntry{}
-				prefix := scenario + "."
+				rolePrefix := scenario + "."
 				// Filter roles for this scenario
-				// (roles are prefixed with scenario name in lock file)
-				// e.g., "default.myrole"
-				// So we only pick roles that start with "default."
-				for _, role := range lockFile.Roles {
-					if strings.HasPrefix(role.Name, prefix) {
-						scenarioRoles = append(scenarioRoles, role)
+				for _, lockRole := range lockFile.Roles {
+					if strings.HasPrefix(lockRole.Name, rolePrefix) {
+						scenarioRoles = append(scenarioRoles, lockRole)
 					}
 				}
 				// Now add the filtered roles to requirements.yml
@@ -397,45 +481,60 @@ func newDepsSyncCmd() *cobra.Command {
 					}
 
 					// Remove scenario prefix from role name
-					prefix := scenario + "."
-					lockRole.Name = strings.TrimPrefix(lockRole.Name, prefix)
+					roleName := strings.TrimPrefix(lockRole.Name, rolePrefix)
+
+					// Reconstruct namespace.rolename for YAML output (Galaxy roles)
+					yamlRoleName := roleName
+					if lockRole.Namespace != "" && lockRole.Src == "" {
+						yamlRoleName = lockRole.Namespace + "." + roleName
+					}
 
 					req.Roles = append(req.Roles, role.RequirementRole{
-						Name:    lockRole.Name,
+						Name:    yamlRoleName,
 						Version: version,
 						Src:     lockRole.Src,    // Restore git URL
 						Scm:     lockRole.Source, // Restore SCM type
 					})
-					fmt.Printf("  ✓ %s: %s\n", lockRole.Name, version)
+					fmt.Printf("  + %s: %s\n", yamlRoleName, version)
 				}
 				// Save requirements.yml
 				if err := role.SaveRequirementFile(req, scenario); err != nil {
 					return fmt.Errorf("failed to save requirements.yml: %w", err)
 				}
-				fmt.Printf("\033[32m✓ requirements.yml updated for %s\033[0m\n", scenario)
+				fmt.Printf("\033[32m+ requirements.yml updated for %s\033[0m\n", scenario)
 
 			}
 			// Sync collections to meta/main.yml
+			// Only collections from the "default" scenario go into meta.yml
 
 			meta, _, err := role.LoadRoleConfig("")
 			if err != nil {
 				return fmt.Errorf("failed to load meta config: %w", err)
 			}
 
-			// Sync collections to meta.yml (simple string format - names only, no versions)
-			fmt.Println("Syncing collections to meta.yml...")
+			// Sync collections to meta.yml (simple string format - namespace.name, no versions)
+			fmt.Println("Syncing collections to meta.yml (default scenario only)...")
 			meta.Collections = []string{}
+			defaultColPrefix := "default."
 			for _, col := range lockFile.Collections {
-				// meta.yml should only have collection names, no version constraints
-				meta.Collections = append(meta.Collections, col.Name)
-				fmt.Printf("  ✓ %s\n", col.Name)
+				if !strings.HasPrefix(col.Name, defaultColPrefix) {
+					continue // Only default scenario collections go into meta.yml
+				}
+				// Strip scenario prefix and reconstruct namespace.name format
+				colName := strings.TrimPrefix(col.Name, defaultColPrefix)
+				metaName := colName
+				if col.Namespace != "" {
+					metaName = col.Namespace + "." + colName
+				}
+				meta.Collections = append(meta.Collections, metaName)
+				fmt.Printf("  + %s\n", metaName)
 			}
 
 			// Save meta.yml
 			if err := role.SaveMetaFile(meta); err != nil {
 				return fmt.Errorf("failed to save meta.yml: %w", err)
 			}
-			fmt.Printf("\033[32m✓ meta.yml updated\033[0m\n")
+			fmt.Printf("\033[32m+ meta.yml updated\033[0m\n")
 
 			fmt.Printf("\033[32mDependencies synced successfully from lock file\033[0m\n")
 			return nil
