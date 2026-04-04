@@ -190,15 +190,15 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	log.Printf("\033[32mConverge Done Successfully!\033[0m")
 
 	// Fix permissions on molecule directory for Unix systems (inside container)
-	if runtime.GOOS != "windows" {
-		uid := os.Getuid()
-		gid := os.Getgid()
-		log.Printf("User UID: %d, GID: %d", uid, gid)
-		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
-		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
-			log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
-		}
-	}
+	// if runtime.GOOS != "windows" {
+	// 	uid := os.Getuid()
+	// 	gid := os.Getgid()
+	// 	log.Printf("User UID: %d, GID: %d", uid, gid)
+	// 	chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
+	// 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
+	// 		log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+	// 	}
+	// }
 
 	return nil
 }
@@ -479,14 +479,14 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	}
 
 	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
-	if !opts.CIMode && runtime.GOOS != "windows" {
-		uid := os.Getuid()
-		gid := os.Getgid()
-		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
-		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
-			log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
-		}
-	}
+	// if !opts.CIMode && runtime.GOOS != "windows" {
+	// 	uid := os.Getuid()
+	// 	gid := os.Getgid()
+	// 	chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
+	// 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
+	// 		log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+	// 	}
+	// }
 
 	return nil
 }
