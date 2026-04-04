@@ -347,7 +347,7 @@ jobs:
           - [Verification Guide](https://github.com/Polar-Team/diffusion/blob/main/docs/verification.md)
 
           ---
-          'EOF'
+          EOF
           sed -i "s/\$VERSION/$VERSION/g" release-notes.md
 
       - name: Create GitHub Release
