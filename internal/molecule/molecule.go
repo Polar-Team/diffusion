@@ -950,7 +950,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 	const maxRetries = 30
 	dockerReady := false
 	for i := range maxRetries {
-		checkDocker := exec.Command("docker", "exec", "-w", "/", containerName, "docker", "info")
+		checkDocker := exec.Command("docker", "exec", "-w", "/opt/molecule", containerName, "docker", "info")
 		checkDocker.Stdout = io.Discard
 		checkDocker.Stderr = io.Discard
 		if err := checkDocker.Run(); err == nil {
@@ -969,7 +969,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 	// Never use -ti here: shell redirection (< file) conflicts with TTY allocation,
 	// and we don't need interactive terminal for this operation.
 	loadCmd := fmt.Sprintf("docker load < %s", tarballPath)
-	execFlags := []string{"exec", "-w", "/", containerName, "sh", "-c", loadCmd}
+	execFlags := []string{"exec", "-w", "/opt/molecule", containerName, "sh", "-c", loadCmd}
 	cmd := exec.Command("docker", execFlags...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1000,7 +1000,7 @@ func saveDinDImages(opts *MoleculeOptions) {
 	// Build flags the same way DockerExecInteractiveHide does.
 	// Never use -ti here: we need to capture stdout programmatically via .Output(),
 	// and -t (TTY allocation) fails when stdout is not a real terminal.
-	execFlags := []string{"exec", "-w", "/", containerName, "sh", "-c",
+	execFlags := []string{"exec", "-w", "/opt/molecule", containerName, "sh", "-c",
 		`docker images --format '{{.Repository}}:{{.Tag}}'`}
 	out, err := exec.Command("docker", execFlags...).Output()
 	if err != nil {
