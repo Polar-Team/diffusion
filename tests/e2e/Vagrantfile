@@ -9,6 +9,13 @@
 #   BOX_NAME=debian12 vagrant up
 #   BOX_NAME=macos15 vagrant up
 
+require 'securerandom'
+
+
+def random_string(length = 8)
+  return SecureRandom.alphanumeric(length).downcase
+end
+
 BOX_CONFIGS = {
   # Ubuntu versions
   "ubuntu2404" => {
@@ -61,15 +68,18 @@ puts "Box: #{box_config[:box]}"
 puts "=" * 50
 
 Vagrant.configure("2") do |config|
+
+  # Generate UUID for hostname
+  uuid = random_string(8)
   # Use selected box
   config.vm.box = box_config[:box]
-  config.vm.hostname = "diffusion-e2e-#{box_name}"
+  config.vm.hostname = "diffusion-e2e-#{box_name}-#{uuid}"
 
   # Configure VM resources
   config.vm.provider "virtualbox" do |vb|
     vb.memory = box_config[:memory]
     vb.cpus = box_config[:cpus]
-    vb.name = "diffusion-e2e-#{box_name}"
+    vb.name = "diffusion-e2e-#{box_name}-#{uuid}"
   end
 
   config.vm.provider "vmware_desktop" do |vmware|
@@ -229,6 +239,7 @@ Vagrant.configure("2") do |config|
 
     # Test 1: Initialize a new role using expect
     echo "Test 1: Initialize new role..."
+    sleep 40
     expect <<'EXPECT_SCRIPT'
 set timeout 30
 spawn /home/vagrant/diffusion/bin/diffusion role --init
@@ -243,35 +254,7 @@ send "Test Author\r"
 expect "Description of the role (optional):"
 send "Test role for E2E testing\r"
 expect "Enter platforms? (y/n):"
-send "n\r"
-expect "Galaxy Tags (comma-separated) (optional):"
-send "test,e2e\r"
-expect "Collections required (comma-separated) (optional):"
-send "\r"
-expect "Enter roles to add? (y/n):"
-send "n\r"
-expect eof
-EXPECT_SCRIPT
-
-    # Verify role was created
-    if [ -d "test_role" ]; then
-      echo "✓ Role initialization successful"
-    else
-      echo "✗ Role initialization failed"
-      exit 1
-    fi
-
-    cd test_role
-
-    # Test 2: Create diffusion config using expect
-    echo "Test 2: Create diffusion config..."
-    expect <<'EXPECT_SCRIPT'
-set timeout 60
-spawn /home/vagrant/diffusion/bin/diffusion molecule --role test_role --org myorg
-expect "Enter RegistryServer*"
-send "\r"
-expect "Enter RegistryProvider*"
-send "\r"
+send "n\r
 expect "Enter MoleculeContainerName*"
 send "\r"
 expect "Enter MoleculeContainerTag*"
@@ -284,6 +267,22 @@ expect "What type of configuration you want use?*"
 send "\r"
 expect eof
 EXPECT_SCRIPT
+
+    # Verify meta.yml file was created
+    if [ -f "meta/main.yml" ]; then
+      echo "✓ meta.yml creation successful"
+    else
+      echo "✗ meta.yml creation failed"
+      exit 1
+    fi
+
+    # Verify requirements.yml file was created
+    if [ -f "scenarios/default/requirements.yml" ]; then
+      echo "✓ requirements.yml creation successful"
+    else
+      echo "✗ requirements.yml creation failed"
+      exit 1
+    fi
 
     # Verify config was created
     if [ -f "diffusion.toml" ]; then
