@@ -85,7 +85,7 @@ func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMole
 
 	// Run molecule destroy inside the container first
 	roleDir := utils.GetRoleDirName(opts.OrgFlag, opts.RoleFlag)
-	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "bash", opts.CIMode, "-c", fmt.Sprintf("cd /opt/molecule/%s && molecule destroy", roleDir))
+	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "bash", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule destroy", roleDir))
 
 	// Save DinD images before removing the container
 	if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache {
@@ -182,7 +182,7 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd /opt/molecule/%s && %smolecule converge", roleDirName, tagEnv)
+	cmdStr := fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mConverge failed: %v\033[0m", err)
 		os.Exit(1)
@@ -205,7 +205,7 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 
 // runLint runs yamllint and ansible-lint inside the container.
 func runLint(opts *MoleculeOptions, roleDirName string) error {
-	cmdStr := fmt.Sprintf(`cd /opt/molecule/%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint `, roleDirName)
+	cmdStr := fmt.Sprintf(`cd ./%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint `, roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mLint failed: %v\033[0m", err)
 		os.Exit(1)
@@ -237,7 +237,7 @@ func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, rol
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd /opt/molecule/%s && %smolecule verify", roleDirName, tagEnv)
+	cmdStr := fmt.Sprintf("cd ./%s && %smolecule verify", roleDirName, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mVerify failed: %v\033[0m", err)
 		os.Exit(1)
@@ -382,7 +382,7 @@ func runIdempotence(opts *MoleculeOptions, roleDirName string) error {
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd /opt/molecule/%s && %smolecule idempotence", roleDirName, tagEnv)
+	cmdStr := fmt.Sprintf("cd ./%s && %smolecule idempotence", roleDirName, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mIdempotence failed: %v\033[0m", err)
 		os.Exit(1)
@@ -393,7 +393,7 @@ func runIdempotence(opts *MoleculeOptions, roleDirName string) error {
 
 // runDestroy runs molecule destroy inside the container.
 func runDestroy(opts *MoleculeOptions, roleDirName string) error {
-	cmdStr := fmt.Sprintf("cd /opt/molecule/%s && molecule destroy", roleDirName)
+	cmdStr := fmt.Sprintf("cd ./%s && molecule destroy", roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mDestroy failed: %v\033[0m", err)
 		os.Exit(1)
@@ -467,15 +467,15 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	if err == nil {
 		// container exists
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode)
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd /opt/molecule/%s && molecule converge", roleDirName))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	} else {
 		// Sync UV dependencies with pyproject.toml from diffusion
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
 			log.Printf("\033[33mWarning: uv-sync failed: %v\033[0m", err)
 			log.Printf("\033[33mContinuing with existing dependencies...\033[0m")
 		}
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd /opt/molecule/%s && molecule create", roleDirName))
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd /opt/molecule/%s && molecule converge", roleDirName))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
 	}
 
 	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
@@ -583,7 +583,11 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 
 	// CI Mode: Don't mount /opt/molecule, we'll clone repo inside container
 	if !opts.CIMode {
-		args = append(args, "-v", fmt.Sprintf("%s/molecule:/opt/molecule", path))
+		moleculeHostPath := fmt.Sprintf("%s/molecule", path)
+		if err := os.MkdirAll(moleculeHostPath, 0755); err != nil {
+			log.Printf("\033[33mwarning: failed to create molecule directory: %v\033[0m", err)
+		}
+		args = append(args, "-v", fmt.Sprintf("%s:/opt/molecule", moleculeHostPath))
 	}
 
 	args = append(args,
@@ -950,7 +954,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 	const maxRetries = 30
 	dockerReady := false
 	for i := range maxRetries {
-		checkDocker := exec.Command("docker", "exec", "-w", "/", containerName, "docker", "info")
+		checkDocker := exec.Command("docker", "exec", containerName, "docker", "info")
 		checkDocker.Stdout = io.Discard
 		checkDocker.Stderr = io.Discard
 		if err := checkDocker.Run(); err == nil {
@@ -969,7 +973,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 	// Never use -ti here: shell redirection (< file) conflicts with TTY allocation,
 	// and we don't need interactive terminal for this operation.
 	loadCmd := fmt.Sprintf("docker load < %s", tarballPath)
-	execFlags := []string{"exec", "-w", "/", containerName, "sh", "-c", loadCmd}
+	execFlags := []string{"exec", containerName, "sh", "-c", loadCmd}
 	cmd := exec.Command("docker", execFlags...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1000,7 +1004,7 @@ func saveDinDImages(opts *MoleculeOptions) {
 	// Build flags the same way DockerExecInteractiveHide does.
 	// Never use -ti here: we need to capture stdout programmatically via .Output(),
 	// and -t (TTY allocation) fails when stdout is not a real terminal.
-	execFlags := []string{"exec", "-w", "/", containerName, "sh", "-c",
+	execFlags := []string{"exec", containerName, "sh", "-c",
 		`docker images --format '{{.Repository}}:{{.Tag}}'`}
 	out, err := exec.Command("docker", execFlags...).Output()
 	if err != nil {
