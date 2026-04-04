@@ -49,6 +49,7 @@ func AnsibleGalaxyInit() (string, error) {
 	// }
 
 	fmt.Printf("Initializing Ansible role: %s\n", roleName)
+	fmt.Printf("Running command: docker %s\n", strings.Join(args, " "))
 
 	err = utils.RunCommandHide("docker", args...)
 	if err != nil {
