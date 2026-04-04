@@ -342,9 +342,7 @@ jobs:
 
           ### Documentation
 
-          - [Installation Guide](https://github.com/Polar-Team/diffusion#-installation)
-          - [Building from Source](https://github.com/Polar-Team/diffusion/blob/main/docs/building.md)
-          - [Verification Guide](https://github.com/Polar-Team/diffusion/blob/main/docs/verification.md)
+          - [Installation Guide](https://polar-team.github.io/diffusion/#install)
 
           ---
           EOF
