@@ -44,7 +44,7 @@ func AnsibleGalaxyInit() (string, error) {
 	)
 
 	if permissions != "" {
-		args = append(args, "mkdir", roleName, "&&", "chown", "-R", permissions, roleName)
+		args = append(args, "mkdir", roleName, "&&", "chown", "-R", permissions, roleName, "&&")
 	}
 
 	args = append(args, "ansible-galaxy", "role", "init", roleName)
