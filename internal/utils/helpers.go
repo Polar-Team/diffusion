@@ -330,8 +330,7 @@ func DockerExecInteractive(role, command string, ciMode bool, args ...string) er
 	if !ciMode {
 		execFlags = append(execFlags, "-ti")
 	}
-	// Use -w /opt/molecule to avoid "outside of container mount namespace root" on Linux.
-	execFlags = append(execFlags, "-w", "/opt/molecule", fmt.Sprintf("molecule-%s", role), command)
+	execFlags = append(execFlags, fmt.Sprintf("molecule-%s", role), command)
 	all := append(execFlags, args...)
 	cmd := exec.Command("docker", all...)
 	cmd.Stdout = os.Stdout
@@ -353,8 +352,7 @@ func DockerExecInteractiveHide(role, command string, ciMode bool, args ...string
 	if !ciMode {
 		execFlags = append(execFlags, "-ti")
 	}
-	// Use -w /opt/molecule to avoid "outside of container mount namespace root" on Linux.
-	execFlags = append(execFlags, "-w", "/opt/molecule", fmt.Sprintf("molecule-%s", role), command)
+	execFlags = append(execFlags, fmt.Sprintf("molecule-%s", role), command)
 	all := append(execFlags, args...)
 	cmd := exec.Command("docker", all...)
 	cmd.Stdout = io.Discard
