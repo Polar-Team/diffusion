@@ -32,9 +32,7 @@ func AnsibleGalaxyInit() (string, error) {
 		"run",
 	}
 
-	// Add user mapping for Unix systems to avoid permission issues
-	args = append(args, utils.GetUserMappingArgs()...)
-
+	permissions := utils.GetUserMappingArgs()
 	// Set HOME environment variable for ansible-galaxy config
 	// containerHome := utils.GetContainerHomePath()
 
@@ -49,6 +47,20 @@ func AnsibleGalaxyInit() (string, error) {
 	fmt.Printf("Initializing Ansible role: %s\n", roleName)
 
 	err = utils.RunCommandHide("docker", args...)
+
+	perms := []string{
+		"run",
+	}
+
+	if permissions != "" {
+		perms := append(perms,
+			"-v", fmt.Sprintf("%s:/ansible", currentDir),
+			"-w", "/ansible",
+			fmt.Sprintf("ghcr.io/polar-team/diffusion-molecule-container:%s", utils.GetDefaultMoleculeTag()),
+			"chown", "-R", permissions, roleName)
+		err = utils.RunCommandHide("docker", perms...)
+	}
+
 	if err != nil {
 		fmt.Printf("\033[31mInitializing of new role were failed: %v\033[0m", err)
 	}
