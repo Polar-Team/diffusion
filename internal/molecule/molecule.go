@@ -416,6 +416,14 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 
 		setupRegistryAuth(cfg, opts.OidcFlag)
 
+		// Ensure molecule directory exists on host before mounting it into the container
+		if !opts.CIMode {
+			moleculeHostPath := filepath.Join(path, config.MoleculeDir)
+			if err := os.MkdirAll(moleculeHostPath, 0755); err != nil {
+				return fmt.Errorf("failed to create molecule directory %s: %w", moleculeHostPath, err)
+			}
+		}
+
 		if err := runContainer(opts, cfg, path, roleDirName); err != nil {
 			return err
 		}
@@ -583,11 +591,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 
 	// CI Mode: Don't mount /opt/molecule, we'll clone repo inside container
 	if !opts.CIMode {
-		moleculeHostPath := fmt.Sprintf("%s/molecule", path)
-		if err := os.MkdirAll(moleculeHostPath, 0755); err != nil {
-			log.Printf("\033[33mwarning: failed to create molecule directory: %v\033[0m", err)
-		}
-		args = append(args, "-v", fmt.Sprintf("%s:/opt/molecule", moleculeHostPath))
+		args = append(args, "-v", fmt.Sprintf("%s/molecule:/opt/molecule", path))
 	}
 
 	args = append(args,
@@ -595,6 +599,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		"-e", "TOKEN="+os.Getenv("TOKEN"),
 		"-e", "VAULT_TOKEN="+os.Getenv("VAULT_TOKEN"),
 		"-e", "VAULT_ADDR="+os.Getenv("VAULT_ADDR"),
+		"-e", "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
 	)
 
 	// Get Python version from lock file if it exists, otherwise use default
