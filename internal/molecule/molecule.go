@@ -182,7 +182,11 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, tagEnv)
+	scenario := config.DefaultScenario
+	if opts.RoleScenario != "" {
+		scenario = opts.RoleScenario
+	}
+	cmdStr := fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && %smolecule converge", roleDirName, scenario, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mConverge failed: %v\033[0m", err)
 		os.Exit(1)
@@ -471,11 +475,15 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	}
 
 	// finally create/converge
+	scenario := config.DefaultScenario
+	if opts.RoleScenario != "" {
+		scenario = opts.RoleScenario
+	}
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", opts.RoleFlag)).Run()
 	if err == nil {
 		// container exists
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode)
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && molecule converge", roleDirName, scenario))
 	} else {
 		// Sync UV dependencies with pyproject.toml from diffusion
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
@@ -483,7 +491,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 			log.Printf("\033[33mContinuing with existing dependencies...\033[0m")
 		}
 		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && molecule converge", roleDirName, scenario))
 	}
 
 	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
