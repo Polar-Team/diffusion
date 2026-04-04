@@ -32,7 +32,7 @@ func AnsibleGalaxyInit() (string, error) {
 		"run",
 	}
 
-	permissions := utils.GetUserMappingArgs()
+	// permissions := utils.GetUserMappingArgs()
 	// Set HOME environment variable for ansible-galaxy config
 	// containerHome := utils.GetContainerHomePath()
 
@@ -44,9 +44,9 @@ func AnsibleGalaxyInit() (string, error) {
 		"ansible-galaxy", "role", "init", roleName,
 	)
 
-	if permissions != "" {
-		args = append(args, "chown", "-R", permissions, roleName)
-	}
+	// if permissions != "" {
+	// 	args = append(args, "chown", "-R", permissions, roleName)
+	// }
 
 	fmt.Printf("Initializing Ansible role: %s\n", roleName)
 
