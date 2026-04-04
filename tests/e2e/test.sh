@@ -13,8 +13,6 @@ NC='\033[0m' # No Color
 # Available OS options
 declare -A OS_OPTIONS=(
   ["ubuntu2404"]="Ubuntu 24.04 LTS"
-  ["windows11"]="Windows 11"
-  ["macos15"]="macOS 15 Sequoia"
 )
 
 echo -e "${GREEN}=========================================="
