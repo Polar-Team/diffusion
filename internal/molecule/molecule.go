@@ -190,15 +190,15 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	log.Printf("\033[32mConverge Done Successfully!\033[0m")
 
 	// Fix permissions on molecule directory for Unix systems (inside container)
-	// if runtime.GOOS != "windows" {
-	// 	uid := os.Getuid()
-	// 	gid := os.Getgid()
-	// 	log.Printf("User UID: %d, GID: %d", uid, gid)
-	// 	chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
-	// 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
-	// 		log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
-	// 	}
-	// }
+	if runtime.GOOS != "windows" {
+		uid := os.Getuid()
+		gid := os.Getgid()
+		log.Printf("User UID: %d, GID: %d", uid, gid)
+		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
+			log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+		}
+	}
 
 	return nil
 }
@@ -479,14 +479,14 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	}
 
 	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
-	// if !opts.CIMode && runtime.GOOS != "windows" {
-	// 	uid := os.Getuid()
-	// 	gid := os.Getgid()
-	// 	chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
-	// 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
-	// 		log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
-	// 	}
-	// }
+	if !opts.CIMode && runtime.GOOS != "windows" {
+		uid := os.Getuid()
+		gid := os.Getgid()
+		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
+			log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+		}
+	}
 
 	return nil
 }
@@ -950,7 +950,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 	const maxRetries = 30
 	dockerReady := false
 	for i := range maxRetries {
-		checkDocker := exec.Command("docker", "exec", containerName, "docker", "info")
+		checkDocker := exec.Command("docker", "exec", "-w", "/", containerName, "docker", "info")
 		checkDocker.Stdout = io.Discard
 		checkDocker.Stderr = io.Discard
 		if err := checkDocker.Run(); err == nil {
@@ -969,7 +969,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 	// Never use -ti here: shell redirection (< file) conflicts with TTY allocation,
 	// and we don't need interactive terminal for this operation.
 	loadCmd := fmt.Sprintf("docker load < %s", tarballPath)
-	execFlags := []string{"exec", containerName, "sh", "-c", loadCmd}
+	execFlags := []string{"exec", "-w", "/", containerName, "sh", "-c", loadCmd}
 	cmd := exec.Command("docker", execFlags...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1000,7 +1000,7 @@ func saveDinDImages(opts *MoleculeOptions) {
 	// Build flags the same way DockerExecInteractiveHide does.
 	// Never use -ti here: we need to capture stdout programmatically via .Output(),
 	// and -t (TTY allocation) fails when stdout is not a real terminal.
-	execFlags := []string{"exec", containerName, "sh", "-c",
+	execFlags := []string{"exec", "-w", "/", containerName, "sh", "-c",
 		`docker images --format '{{.Repository}}:{{.Tag}}'`}
 	out, err := exec.Command("docker", execFlags...).Output()
 	if err != nil {
