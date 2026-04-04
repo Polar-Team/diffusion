@@ -199,9 +199,9 @@ func GetDefaultMoleculeTag() string {
 // GetUserMappingArgs returns docker user mapping arguments for Unix systems
 // On Unix systems, maps the current user's UID:GID to avoid permission issues
 // On Windows, returns empty slice to use default root user
-func GetUserMappingArgs() []string {
+func GetUserMappingArgs() string {
 	if runtime.GOOS == "windows" {
-		return []string{}
+		return "" // No user mapping on Windows
 	}
 
 	// On Unix systems, get current user's UID and GID
@@ -209,7 +209,7 @@ func GetUserMappingArgs() []string {
 	gid := os.Getgid()
 
 	// Return user mapping argument
-	return []string{"--user", fmt.Sprintf("%d:%d", uid, gid)}
+	return fmt.Sprintf("%d:%d", uid, gid)
 }
 
 // GetContainerHomePath returns the home directory path inside the container

@@ -787,7 +787,9 @@ func ensureRole(opts *MoleculeOptions, roleMoleculePath string) {
 	if utils.Exists(roleMoleculePath) {
 		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
 	} else {
-		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("ansible-galaxy role init %s.%s", opts.OrgFlag, opts.RoleFlag)); err != nil {
+		if err := utils.DockerExecInteractive(
+			opts.RoleFlag, "/bin/sh", opts.CIMode,
+			"-c", fmt.Sprintf("ansible-galaxy role init %s.%s", opts.OrgFlag, opts.RoleFlag)); err != nil {
 			log.Printf("\033[33mrole init warning: %v\033[0m", err)
 		}
 
