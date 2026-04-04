@@ -49,9 +49,13 @@ func AnsibleGalaxyInit() (string, error) {
 
 	err = utils.RunCommandHide("docker", args...)
 
+	perms := []string{
+		"run",
+	}
+
 	if permissions != "" {
-		perms := append(args,
-			"run", "-v", fmt.Sprintf("%s:/ansible", currentDir),
+		perms := append(perms,
+			"-v", fmt.Sprintf("%s:/ansible", currentDir),
 			"-w", "/ansible",
 			fmt.Sprintf("ghcr.io/polar-team/diffusion-molecule-container:%s", utils.GetDefaultMoleculeTag()),
 			"chown", "-R", permissions, roleName)
