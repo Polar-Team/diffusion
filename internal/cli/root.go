@@ -39,6 +39,7 @@ type CLI struct {
 	WipeFlag           bool
 	CIMode             bool
 	OidcFlag           bool
+	ForceFlag          bool
 }
 
 // Execute is the main entry point for the CLI
