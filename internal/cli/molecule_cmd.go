@@ -35,6 +35,7 @@ func NewMoleculeCmd(cli *CLI) *cobra.Command {
 				WipeFlag:        cli.WipeFlag,
 				CIMode:          cli.CIMode,
 				OidcFlag:        cli.OidcFlag,
+				ForceFlag:       cli.ForceFlag,
 			}
 			return molecule.RunMolecule(opts)
 		},
@@ -169,6 +170,7 @@ func NewMoleculeCmd(cli *CLI) *cobra.Command {
 	molCmd.Flags().BoolVar(&cli.WipeFlag, "wipe", false, "remove container and molecule role folder")
 	molCmd.Flags().BoolVar(&cli.CIMode, "ci", false, "CI/CD mode (non-interactive, skip TTY and permission fixes)")
 	molCmd.Flags().BoolVar(&cli.OidcFlag, "oidc", false, "use OIDC token from env (TOKEN + provider-specific vars: YC_CLOUD_ID/YC_FOLDER_ID for YC, AWS_REGION for AWS)")
+	molCmd.Flags().BoolVar(&cli.ForceFlag, "force", false, "force reinstall of roles/collections from requirements.yml before converge")
 
 	return molCmd
 }
