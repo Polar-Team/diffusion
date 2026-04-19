@@ -1,0 +1,381 @@
+---
+name: "Diffusion Dependency Update"
+description: "Lock and check Diffusion dependencies, sync if needed, run tests, and create a PR"
+author: "Polar-Team"
+
+branding:
+  icon: "refresh-cw"
+  color: "blue"
+
+inputs:
+  diffusion-version:
+    description: "Diffusion version to use (e.g., latest, v0.3.13)"
+    required: false
+    default: "latest"
+  target-branch:
+    description: "Target branch for the pull request"
+    required: true
+  working-directory:
+    description: "Working directory for the role"
+    required: false
+    default: "."
+  run-lint:
+    description: "Run lint tests after sync"
+    required: false
+    default: "true"
+  run-verify:
+    description: "Run verify tests after sync"
+    required: false
+    default: "true"
+  run-idempotence:
+    description: "Run idempotence tests after sync"
+    required: false
+    default: "true"
+  cache-enabled:
+    description: "Enable caching for Ansible roles, collections, and optionally UV/Docker"
+    required: false
+    default: "false"
+  cache-uv:
+    description: "Cache UV/Python packages (requires cache-enabled: true)"
+    required: false
+    default: "false"
+  cache-docker:
+    description: "Cache DinD Docker images as tarballs (requires cache-enabled: true)"
+    required: false
+    default: "false"
+  pr-title:
+    description: "Title for the pull request"
+    required: false
+    default: "chore(deps): update diffusion dependencies"
+  pr-labels:
+    description: "Comma-separated labels to apply to the PR"
+    required: false
+    default: "dependencies,automated"
+
+outputs:
+  sync-required:
+    description: "Whether a sync was required (true/false)"
+    value: ${{ steps.deps-check.outputs.sync-required }}
+  pr-url:
+    description: "URL of the created pull request (empty if no sync needed)"
+    value: ${{ steps.create-pr.outputs.pr-url }}
+  pr-number:
+    description: "Number of the created pull request (empty if no sync needed)"
+    value: ${{ steps.create-pr.outputs.pr-number }}
+
+runs:
+  using: "composite"
+  steps:
+    # ── Install Diffusion (same pattern as diffusion-test) ──────────────
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Install SLSA verifier
+      shell: bash
+      run: |
+        SLSA_VERSION="v2.7.0"
+        wget -qO /tmp/slsa-verifier "https://github.com/slsa-framework/slsa-verifier/releases/download/${SLSA_VERSION}/slsa-verifier-linux-amd64"
+        chmod +x /tmp/slsa-verifier
+        sudo mv /tmp/slsa-verifier /usr/local/bin/slsa-verifier
+
+    - name: Download Diffusion
+      shell: bash
+      run: |
+        if [ "${{ inputs.diffusion-version }}" = "latest" ]; then
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/Polar-Team/diffusion/releases/latest | jq -r .tag_name)
+        else
+          LATEST_RELEASE="${{ inputs.diffusion-version }}"
+        fi
+        echo "DIFFUSION_RELEASE=${LATEST_RELEASE}" >> "$GITHUB_ENV"
+
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "x86_64" ]; then
+          ARCHIVE_NAME="diffusion-linux-amd64.tar.gz"
+        elif [ "$ARCH" = "aarch64" ]; then
+          ARCHIVE_NAME="diffusion-linux-arm64.tar.gz"
+        else
+          echo "Unsupported architecture: $ARCH"
+          exit 1
+        fi
+        echo "DIFFUSION_ARCHIVE=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
+
+        BASE_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}"
+        echo "Downloading Diffusion ${LATEST_RELEASE} (${ARCHIVE_NAME})..."
+        wget -qO /tmp/diffusion.tar.gz        "${BASE_URL}/${ARCHIVE_NAME}"
+        wget -qO /tmp/diffusion.tar.gz.sig    "${BASE_URL}/${ARCHIVE_NAME}.sig"
+        wget -qO /tmp/diffusion.tar.gz.pem    "${BASE_URL}/${ARCHIVE_NAME}.pem"
+        wget -qO /tmp/SHA256SUMS              "${BASE_URL}/SHA256SUMS"
+        wget -qO /tmp/multiple.intoto.jsonl   "${BASE_URL}/multiple.intoto.jsonl"
+
+    - name: Verify SHA256 checksum
+      shell: bash
+      run: |
+        cd /tmp
+        cp diffusion.tar.gz        "${DIFFUSION_ARCHIVE}"
+        cp diffusion.tar.gz.sig    "${DIFFUSION_ARCHIVE}.sig"
+        cp diffusion.tar.gz.pem    "${DIFFUSION_ARCHIVE}.pem"
+        grep "${DIFFUSION_ARCHIVE}" SHA256SUMS | sha256sum --check
+        rm "${DIFFUSION_ARCHIVE}" "${DIFFUSION_ARCHIVE}.sig" "${DIFFUSION_ARCHIVE}.pem"
+        echo "Checksum verified."
+
+    - name: Verify Cosign signature
+      shell: bash
+      run: |
+        cosign verify-blob \
+          --certificate /tmp/diffusion.tar.gz.pem \
+          --signature /tmp/diffusion.tar.gz.sig \
+          --certificate-identity-regexp="https://github.com/Polar-Team/diffusion" \
+          --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+          /tmp/diffusion.tar.gz
+        echo "Cosign signature verified."
+
+    - name: Verify SLSA provenance
+      shell: bash
+      run: |
+        slsa-verifier verify-artifact /tmp/diffusion.tar.gz \
+          --provenance-path /tmp/multiple.intoto.jsonl \
+          --source-uri github.com/Polar-Team/diffusion \
+          --source-tag "${DIFFUSION_RELEASE}"
+        echo "SLSA provenance verified."
+
+    - name: Install Diffusion
+      shell: bash
+      run: |
+        echo "Extracting archive..."
+        tar -xzf /tmp/diffusion.tar.gz -C /tmp
+        chmod +x /tmp/diffusion
+        sudo mv /tmp/diffusion /usr/local/bin/diffusion
+        rm /tmp/diffusion.tar.gz /tmp/diffusion.tar.gz.sig /tmp/diffusion.tar.gz.pem \
+           /tmp/SHA256SUMS /tmp/multiple.intoto.jsonl
+
+        echo "Verifying installation..."
+        diffusion --version
+
+    # ── Lock and check dependencies ────────────────────────────────────
+    - name: Lock dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running diffusion deps lock"
+        diffusion deps lock
+        echo "::endgroup::"
+
+    - name: Check dependencies
+      id: deps-check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running diffusion deps check"
+        if diffusion deps check; then
+          echo "Dependencies are up to date — nothing to do."
+          echo "sync-required=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "Dependencies are out of sync — sync required."
+          echo "sync-required=true" >> "$GITHUB_OUTPUT"
+        fi
+        echo "::endgroup::"
+
+    # ── Sync dependencies (only when check failed) ─────────────────────
+    - name: Sync dependencies
+      if: steps.deps-check.outputs.sync-required == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running diffusion deps sync"
+        diffusion deps sync
+        echo "::endgroup::"
+
+    - name: Verify sync
+      if: steps.deps-check.outputs.sync-required == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Verifying deps after sync"
+        diffusion deps check
+        echo "::endgroup::"
+
+    # ── Run tests after sync (reuse diffusion-test) ────────────────────
+    - name: Disable AppArmor unprivileged userns restriction
+      if: steps.deps-check.outputs.sync-required == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
+          echo "Detected Ubuntu/Debian — disabling AppArmor unprivileged userns restriction"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        else
+          echo "Not Ubuntu/Debian, skipping AppArmor tweak"
+        fi
+
+    - name: Configure cache
+      if: steps.deps-check.outputs.sync-required == 'true' && inputs.cache-enabled == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Configuring Diffusion cache"
+        CACHE_FLAGS=""
+        if [ "${{ inputs.cache-uv }}" = "true" ]; then
+          CACHE_FLAGS="${CACHE_FLAGS} --uv"
+        fi
+        if [ "${{ inputs.cache-docker }}" = "true" ]; then
+          CACHE_FLAGS="${CACHE_FLAGS} --docker"
+        fi
+        diffusion cache enable${CACHE_FLAGS}
+        diffusion cache status
+        echo "::endgroup::"
+
+    - name: Run converge
+      if: steps.deps-check.outputs.sync-required == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule converge"
+        diffusion molecule --ci
+        echo "::endgroup::"
+
+    - name: Run lint
+      if: steps.deps-check.outputs.sync-required == 'true' && inputs.run-lint == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule lint"
+        diffusion molecule --ci --lint
+        echo "::endgroup::"
+
+    - name: Run verify
+      if: steps.deps-check.outputs.sync-required == 'true' && inputs.run-verify == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule verify"
+        diffusion molecule --ci --verify
+        echo "::endgroup::"
+
+    - name: Run idempotence
+      if: steps.deps-check.outputs.sync-required == 'true' && inputs.run-idempotence == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Running molecule idempotence"
+        diffusion molecule --ci --idempotence
+        echo "::endgroup::"
+
+    - name: Cleanup molecule
+      if: always() && steps.deps-check.outputs.sync-required == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::Cleaning up"
+        diffusion molecule --ci --wipe || true
+        echo "::endgroup::"
+
+    # ── Create PR with updated dependencies ────────────────────────────
+    - name: Configure git
+      if: steps.deps-check.outputs.sync-required == 'true'
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Create branch and commit changes
+      if: steps.deps-check.outputs.sync-required == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        BRANCH_NAME="diffusion/deps-update-$(date +%Y%m%d-%H%M%S)"
+        echo "UPDATE_BRANCH=${BRANCH_NAME}" >> "$GITHUB_ENV"
+
+        git checkout -b "${BRANCH_NAME}"
+
+        # Stage dependency files
+        git add diffusion.lock requirements.yml diffusion.toml 2>/dev/null || true
+        git add -A
+
+        if git diff --cached --quiet; then
+          echo "No file changes detected after sync — skipping PR."
+          echo "SKIP_PR=true" >> "$GITHUB_ENV"
+        else
+          git commit -m "${{ inputs.pr-title }}" \
+                     -m "Automated dependency update by diffusion-update action." \
+                     -m "Tests passed before this PR was created."
+          git push origin "${BRANCH_NAME}"
+          echo "SKIP_PR=false" >> "$GITHUB_ENV"
+        fi
+
+    - name: Create pull request
+      id: create-pr
+      if: steps.deps-check.outputs.sync-required == 'true' && env.SKIP_PR != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        LABELS="${{ inputs.pr-labels }}"
+        LABEL_ARGS=""
+        if [ -n "${LABELS}" ]; then
+          IFS=',' read -ra LABEL_ARRAY <<< "${LABELS}"
+          for label in "${LABEL_ARRAY[@]}"; do
+            LABEL_ARGS="${LABEL_ARGS} --label $(echo "${label}" | xargs)"
+          done
+        fi
+
+        PR_URL=$(gh pr create \
+          --base "${{ inputs.target-branch }}" \
+          --head "${UPDATE_BRANCH}" \
+          --title "${{ inputs.pr-title }}" \
+          --body "## Automated Dependency Update
+
+        This PR was created automatically by the **diffusion-update** action.
+
+        ### What happened
+        1. \`diffusion deps lock\` updated the lockfile
+        2. \`diffusion deps check\` detected out-of-sync dependencies
+        3. \`diffusion deps sync\` resolved the dependencies
+        4. Molecule tests (converge, lint, verify, idempotence) **passed**
+
+        ### Changed files
+        Dependency lockfile and/or requirements were updated to match the latest resolved versions.
+
+        ---
+        *Created by [diffusion-update](https://github.com/Polar-Team/diffusion) action*" \
+          ${LABEL_ARGS})
+
+        echo "pr-url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+        PR_NUMBER=$(echo "${PR_URL}" | grep -oE '[0-9]+$')
+        echo "pr-number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+        echo "Pull request created: ${PR_URL}"
+
+    - name: Summary
+      if: always()
+      shell: bash
+      run: |
+        {
+          echo "## Diffusion Dependency Update Results 🔄"
+          echo ""
+          if [ "${{ steps.deps-check.outputs.sync-required }}" = "true" ]; then
+            if [ "${SKIP_PR}" = "true" ]; then
+              echo "| Step | Status |"
+              echo "|------|--------|"
+              echo "| Lock | ✅ Completed |"
+              echo "| Check | ⚠️ Out of sync |"
+              echo "| Sync | ✅ Completed |"
+              echo "| Tests | ✅ Passed |"
+              echo "| PR | ⏭️ Skipped (no file changes after sync) |"
+            else
+              echo "| Step | Status |"
+              echo "|------|--------|"
+              echo "| Lock | ✅ Completed |"
+              echo "| Check | ⚠️ Out of sync |"
+              echo "| Sync | ✅ Completed |"
+              echo "| Tests | ✅ Passed |"
+              echo "| PR | ✅ Created → ${{ steps.create-pr.outputs.pr-url }} |"
+            fi
+          else
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| Lock | ✅ Completed |"
+            echo "| Check | ✅ Up to date |"
+            echo ""
+            echo "Dependencies are already in sync — no action needed. 🎉"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"

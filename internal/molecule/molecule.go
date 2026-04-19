@@ -369,20 +369,12 @@ func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario stri
 	}
 
 	// Copy tests from diffusion repo to role tests directory
-	if opts.CIMode {
-		ciTestsPath := fmt.Sprintf(
-			"/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag,
-			config.MoleculeDir, scenario, config.TestsDir)
-		cmdCopy := fmt.Sprintf(`mkdir -p %s && cp -rf %s/. %s`, ciTestsPath, diffusionTestsPath, ciTestsPath)
-		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
-			log.Printf("\033[33mwarning: failed to copy diffusion tests in CI mode: %v\033[0m", err)
-		}
-	} else {
-
-		cmdCopy := fmt.Sprintf(`cp -rf %s %s`, diffusionTestsPath, fmt.Sprintf("/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag, config.MoleculeDir, scenario, config.TestsDir))
-		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
-			log.Printf("\033[33mwarning: failed to copy diffusion tests: %v\033[0m", err)
-		}
+	destPath := fmt.Sprintf(
+		"/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag,
+		config.MoleculeDir, scenario, config.TestsDir)
+	cmdCopy := fmt.Sprintf(`mkdir -p %s && cp -rf %s/. %s`, destPath, diffusionTestsPath, destPath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
+		log.Printf("\033[33mwarning: failed to copy diffusion tests: %v\033[0m", err)
 	}
 
 	return nil

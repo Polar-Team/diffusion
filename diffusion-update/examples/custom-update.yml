@@ -1,0 +1,37 @@
+---
+# Example: Custom Diffusion Dependency Update
+# Targets a specific branch, uses custom PR title and labels,
+# and skips idempotence tests for faster feedback.
+
+name: Dependency Update (Custom)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target-branch:
+        description: "Branch to create the PR against"
+        required: true
+        default: "develop"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Diffusion Update
+        uses: Polar-Team/diffusion/diffusion-update@main
+        with:
+          diffusion-version: "latest"
+          target-branch: ${{ github.event.inputs.target-branch }}
+          run-lint: "true"
+          run-verify: "true"
+          run-idempotence: "false"
+          pr-title: "chore: automated dependency sync"
+          pr-labels: "dependencies,bot"
