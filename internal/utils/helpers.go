@@ -243,10 +243,12 @@ func RunCommandCapture(ctx context.Context, name string, args ...string) (string
 }
 
 // runCommandHide runs command and discards stdout/stderr with a loading animation
-func RunCommandHide(name string, args ...string) error {
-	spinner := NewSpinner(fmt.Sprintf("Running %s", name))
-	spinner.Start()
-	defer spinner.Stop()
+func RunCommandHide(ciMode bool, name string, args ...string) error {
+	if !ciMode {
+		spinner := NewSpinner(fmt.Sprintf("Running %s", name))
+		spinner.Start()
+		defer spinner.Stop()
+	}
 
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = io.Discard
