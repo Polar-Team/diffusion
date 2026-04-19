@@ -104,7 +104,7 @@ func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMole
 	}
 
 	// Remove the container
-	_ = utils.RunCommandHide("docker", "rm", fmt.Sprintf("molecule-%s", opts.RoleFlag), "-f")
+	_ = utils.RunCommandHide(opts.CIMode, "docker", "rm", fmt.Sprintf("molecule-%s", opts.RoleFlag), "-f")
 
 	// Remove the role folder
 	if err := os.RemoveAll(roleMoleculePath); err != nil {
@@ -418,7 +418,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 			return err
 		}
 
-		setupRegistryAuth(cfg, opts.OidcFlag)
+		setupRegistryAuth(cfg, opts.OidcFlag, opts.CIMode)
 
 		// Ensure molecule directory exists on host before mounting it into the container
 		if !opts.CIMode {
@@ -548,7 +548,7 @@ func setupCredentials(opts *MoleculeOptions, cfg *config.Config) error {
 
 // setupRegistryAuth initializes CLI and performs docker login based on registry provider.
 // When oidc is true, it reads credentials from environment variables instead of calling cloud CLIs.
-func setupRegistryAuth(cfg *config.Config, oidc bool) {
+func setupRegistryAuth(cfg *config.Config, oidc bool, ciMode bool) {
 	provider := cfg.ContainerRegistry.RegistryProvider
 	if oidc {
 		if err := registry.OidcInit(provider); err != nil {
@@ -563,7 +563,7 @@ func setupRegistryAuth(cfg *config.Config, oidc bool) {
 				log.Printf("\033[33myc init warning: %v\033[0m", err)
 			}
 		}
-		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
+		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderAWS:
@@ -575,7 +575,7 @@ func setupRegistryAuth(cfg *config.Config, oidc bool) {
 			region := os.Getenv("AWS_REGION")
 			log.Printf("\033[32mOIDC AWS: using region %s from environment\033[0m", region)
 		}
-		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
+		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to AWS ECR registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderGCP:
@@ -584,7 +584,7 @@ func setupRegistryAuth(cfg *config.Config, oidc bool) {
 				log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
 			}
 		}
-		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "oauth2accesstoken", "--password", os.Getenv("TOKEN")); err != nil {
+		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "oauth2accesstoken", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to GCP registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderPublic:
@@ -782,7 +782,7 @@ func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyCmd)
 	}
 
-	copyScenarios := fmt.Sprintf("if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios /opt/molecule/%s/molecule; fi", roleDirName)
+	copyScenarios := fmt.Sprintf("mkdir -p /opt/molecule/%s/molecule && if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios/. /opt/molecule/%s/molecule/; fi", roleDirName, roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyScenarios); err != nil {
 		return fmt.Errorf("failed to copy scenarios in container: %w", err)
 	}
