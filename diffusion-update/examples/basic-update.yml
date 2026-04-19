@@ -1,0 +1,32 @@
+---
+# Example: Basic Diffusion Dependency Update
+# Runs on a schedule and on manual trigger.
+# Creates a PR to main if dependencies are out of sync.
+
+name: Dependency Update
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Diffusion Update
+        uses: Polar-Team/diffusion/diffusion-update@main
+        with:
+          diffusion-version: "latest"
+          target-branch: "main"
+          run-lint: "true"
+          run-verify: "true"
+          run-idempotence: "true"
