@@ -782,7 +782,7 @@ func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyCmd)
 	}
 
-	copyScenarios := fmt.Sprintf("if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios /opt/molecule/%s/molecule; fi", roleDirName)
+	copyScenarios := fmt.Sprintf("mkdir -p /opt/molecule/%s/molecule && if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios/. /opt/molecule/%s/molecule/; fi", roleDirName, roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyScenarios); err != nil {
 		return fmt.Errorf("failed to copy scenarios in container: %w", err)
 	}
