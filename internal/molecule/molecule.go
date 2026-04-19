@@ -291,7 +291,7 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				cmdRemoteTests := fmt.Sprintf(`
 				cd /opt/molecule/%s.%s/molecule/%s && \
 				if [ ! -d tests ]; then \
-					git clone %s tests; \
+					mkdir -p tests && cd tests && git clone %s; \
 				else \
 					echo "Tests directory already exists, skipping clone"; \
 				fi
@@ -304,7 +304,7 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				if _, err := os.Stat(testsDst); os.IsNotExist(err) {
 					cmdRemoteTests := fmt.Sprintf(`
 					cd %s && \
-					git clone %s tests
+					mkdir -p tests && cd tests && git clone %s;
 				`, filepath.Join(roleMoleculePath, config.MoleculeDir, scenario), remoteRepo)
 					if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
 						log.Printf("\033[33mwarning: failed to clone remote tests: %v\033[0m", err)
@@ -319,7 +319,7 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				cmdRemoteTests := fmt.Sprintf(`
 				cd /opt/molecule/%s.%s/molecule/%s && \
 				rm -rf tests && \
-				git clone %s tests
+			  mkdir -p tests && cd tests && git clone %s
 			`, opts.OrgFlag, opts.RoleFlag, scenario, remoteRepo)
 				if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
 					log.Printf("\033[33mwarning: failed to clone remote tests in CI mode: %v\033[0m", err)
@@ -373,7 +373,7 @@ func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario stri
 		ciTestsPath := fmt.Sprintf(
 			"/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag,
 			config.MoleculeDir, scenario, config.TestsDir)
-		cmdCopy := fmt.Sprintf(`mkdir -p %s && cp -rf %s %s`, ciTestsPath, diffusionTestsPath, ciTestsPath)
+		cmdCopy := fmt.Sprintf(`mkdir -p %s && cp -rf %s/. %s`, ciTestsPath, diffusionTestsPath, ciTestsPath)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
 			log.Printf("\033[33mwarning: failed to copy diffusion tests in CI mode: %v\033[0m", err)
 		}
