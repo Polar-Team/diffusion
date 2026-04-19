@@ -36,6 +36,7 @@ type MoleculeOptions struct {
 	WipeFlag        bool
 	CIMode          bool
 	OidcFlag        bool
+	ForceFlag       bool
 }
 
 // RunMolecule is the core function that implements the molecule workflow.
@@ -186,7 +187,11 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	if opts.RoleScenario != "" {
 		scenario = opts.RoleScenario
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && %smolecule converge", roleDirName, scenario, tagEnv)
+	galaxyInstall := ""
+	if opts.ForceFlag {
+		galaxyInstall = fmt.Sprintf("ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && ", scenario)
+	}
+	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule converge", roleDirName, galaxyInstall, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mConverge failed: %v\033[0m", err)
 		os.Exit(1)
@@ -479,11 +484,15 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	if opts.RoleScenario != "" {
 		scenario = opts.RoleScenario
 	}
+	galaxyInstall := ""
+	if opts.ForceFlag {
+		galaxyInstall = fmt.Sprintf("ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && ", scenario)
+	}
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", opts.RoleFlag)).Run()
 	if err == nil {
 		// container exists
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode)
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && molecule converge", roleDirName, scenario))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall))
 	} else {
 		// Sync UV dependencies with pyproject.toml from diffusion
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
@@ -491,7 +500,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 			log.Printf("\033[33mContinuing with existing dependencies...\033[0m")
 		}
 		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && molecule converge", roleDirName, scenario))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall))
 	}
 
 	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
