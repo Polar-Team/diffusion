@@ -81,12 +81,19 @@ runs:
     - name: Download Diffusion
       shell: bash
       run: |
+        set -euo pipefail
+
         if [ "${{ inputs.diffusion-version }}" = "latest" ]; then
-          LATEST_RELEASE=$(curl -s https://api.github.com/repos/Polar-Team/diffusion/releases/latest | jq -r .tag_name)
+          LATEST_RELEASE=$(curl -sfS https://api.github.com/repos/Polar-Team/diffusion/releases/latest | jq -r .tag_name)
+          if [ -z "${LATEST_RELEASE}" ] || [ "${LATEST_RELEASE}" = "null" ]; then
+            echo "::error::Failed to resolve latest Diffusion release from GitHub API"
+            exit 1
+          fi
         else
           LATEST_RELEASE="${{ inputs.diffusion-version }}"
         fi
         echo "DIFFUSION_RELEASE=${LATEST_RELEASE}" >> "$GITHUB_ENV"
+        echo "Resolved Diffusion version: ${LATEST_RELEASE}"
 
         ARCH=$(uname -m)
         if [ "$ARCH" = "x86_64" ]; then
@@ -94,18 +101,30 @@ runs:
         elif [ "$ARCH" = "aarch64" ]; then
           ARCHIVE_NAME="diffusion-linux-arm64.tar.gz"
         else
-          echo "Unsupported architecture: $ARCH"
+          echo "::error::Unsupported architecture: $ARCH"
           exit 1
         fi
         echo "DIFFUSION_ARCHIVE=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
 
         BASE_URL="https://github.com/Polar-Team/diffusion/releases/download/${LATEST_RELEASE}"
         echo "Downloading Diffusion ${LATEST_RELEASE} (${ARCHIVE_NAME})..."
-        wget -qO /tmp/diffusion.tar.gz        "${BASE_URL}/${ARCHIVE_NAME}"
-        wget -qO /tmp/diffusion.tar.gz.sig    "${BASE_URL}/${ARCHIVE_NAME}.sig"
-        wget -qO /tmp/diffusion.tar.gz.pem    "${BASE_URL}/${ARCHIVE_NAME}.pem"
-        wget -qO /tmp/SHA256SUMS              "${BASE_URL}/SHA256SUMS"
-        wget -qO /tmp/multiple.intoto.jsonl   "${BASE_URL}/multiple.intoto.jsonl"
+
+        download() {
+          local url="$1" dest="$2"
+          echo "  ↓ ${url}"
+          if ! curl -fSL --retry 3 --retry-delay 5 -o "${dest}" "${url}"; then
+            echo "::error::Failed to download: ${url}"
+            exit 1
+          fi
+        }
+
+        download "${BASE_URL}/${ARCHIVE_NAME}"       /tmp/diffusion.tar.gz
+        download "${BASE_URL}/${ARCHIVE_NAME}.sig"    /tmp/diffusion.tar.gz.sig
+        download "${BASE_URL}/${ARCHIVE_NAME}.pem"    /tmp/diffusion.tar.gz.pem
+        download "${BASE_URL}/SHA256SUMS"             /tmp/SHA256SUMS
+        download "${BASE_URL}/multiple.intoto.jsonl"  /tmp/multiple.intoto.jsonl
+
+        echo "All artifacts downloaded successfully."
 
     - name: Verify SHA256 checksum
       shell: bash
@@ -194,7 +213,7 @@ runs:
         diffusion deps check
         echo "::endgroup::"
 
-    # ── Run tests after sync (reuse diffusion-test) ────────────────────
+    # ── Run tests after sync ───────────────────────────────────────────
     - name: Disable AppArmor unprivileged userns restriction
       if: steps.deps-check.outputs.sync-required == 'true' && runner.os == 'Linux'
       shell: bash
@@ -317,11 +336,7 @@ runs:
           done
         fi
 
-        PR_URL=$(gh pr create \
-          --base "${{ inputs.target-branch }}" \
-          --head "${UPDATE_BRANCH}" \
-          --title "${{ inputs.pr-title }}" \
-          --body "## Automated Dependency Update
+        PR_BODY="## Automated Dependency Update
 
         This PR was created automatically by the **diffusion-update** action.
 
@@ -335,14 +350,18 @@ runs:
         Dependency lockfile and/or requirements were updated to match the latest resolved versions.
 
         ---
-        *Created by [diffusion-update](https://github.com/Polar-Team/diffusion) action*" \
+        *Created by [diffusion-update](https://github.com/Polar-Team/diffusion) action*"
+
+        PR_URL=$(gh pr create \
+          --base "${{ inputs.target-branch }}" \
+          --head "${UPDATE_BRANCH}" \
+          --title "${{ inputs.pr-title }}" \
+          --body "${PR_BODY}" \
           ${LABEL_ARGS})
 
         echo "pr-url=${PR_URL}" >> "$GITHUB_OUTPUT"
-
-        PR_NUMBER=$(echo "${PR_URL}" | grep -oE '[0-9]+$')
+        PR_NUMBER="${PR_URL##*/}"
         echo "pr-number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-
         echo "Pull request created: ${PR_URL}"
 
     - name: Summary
@@ -353,7 +372,7 @@ runs:
           echo "## Diffusion Dependency Update Results 🔄"
           echo ""
           if [ "${{ steps.deps-check.outputs.sync-required }}" = "true" ]; then
-            if [ "${SKIP_PR}" = "true" ]; then
+            if [ "${SKIP_PR:-}" = "true" ]; then
               echo "| Step | Status |"
               echo "|------|--------|"
               echo "| Lock | ✅ Completed |"
