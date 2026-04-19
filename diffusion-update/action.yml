@@ -248,7 +248,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::Running molecule converge"
-        diffusion molecule --ci
+        diffusion molecule --ci --force
         echo "::endgroup::"
 
     - name: Run lint
