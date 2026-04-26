@@ -127,7 +127,7 @@ func TestSaveConfig(t *testing.T) {
 			Extends: "default",
 			Ignore:  []string{".git/*"},
 			Rules: &config.YamlLintRules{
-				CommentsIdentation: false,
+				CommentsIndentation: false,
 			},
 		},
 		AnsibleLintConfig: &config.AnsibleLint{

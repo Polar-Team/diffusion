@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"diffusion/internal/config"
+
 	"github.com/spf13/cobra"
 )
 
@@ -72,21 +73,38 @@ func NewShowCmd(cli *CLI) *cobra.Command {
 			}
 			if cfg.YamlLintConfig.Rules != nil {
 				fmt.Printf("  Rules:\n")
-				if cfg.YamlLintConfig.Rules.Braces != nil {
-					fmt.Printf("    Braces:                \033[38;2;127;255;212m%v\033[0m\n", cfg.YamlLintConfig.Rules.Braces)
+				ruleEntries := []struct {
+					name  string
+					value any
+				}{
+					{"Anchors", cfg.YamlLintConfig.Rules.Anchors},
+					{"Braces", cfg.YamlLintConfig.Rules.Braces},
+					{"Brackets", cfg.YamlLintConfig.Rules.Brackets},
+					{"Colons", cfg.YamlLintConfig.Rules.Colons},
+					{"Commas", cfg.YamlLintConfig.Rules.Commas},
+					{"Comments", cfg.YamlLintConfig.Rules.Comments},
+					{"Comments Indentation", cfg.YamlLintConfig.Rules.CommentsIndentation},
+					{"Document End", cfg.YamlLintConfig.Rules.DocumentEnd},
+					{"Document Start", cfg.YamlLintConfig.Rules.DocumentStart},
+					{"Empty Lines", cfg.YamlLintConfig.Rules.EmptyLines},
+					{"Empty Values", cfg.YamlLintConfig.Rules.EmptyValues},
+					{"Float Values", cfg.YamlLintConfig.Rules.FloatValues},
+					{"Hyphens", cfg.YamlLintConfig.Rules.Hyphens},
+					{"Indentation", cfg.YamlLintConfig.Rules.Indentation},
+					{"Key Duplicates", cfg.YamlLintConfig.Rules.KeyDuplicates},
+					{"Key Ordering", cfg.YamlLintConfig.Rules.KeyOrdering},
+					{"Line Length", cfg.YamlLintConfig.Rules.LineLength},
+					{"New Line At End Of File", cfg.YamlLintConfig.Rules.NewLineAtEndOfFile},
+					{"New Lines", cfg.YamlLintConfig.Rules.NewLines},
+					{"Octal Values", cfg.YamlLintConfig.Rules.OctalValues},
+					{"Quoted Strings", cfg.YamlLintConfig.Rules.QuotedStrings},
+					{"Trailing Spaces", cfg.YamlLintConfig.Rules.TrailingSpaces},
+					{"Truthy", cfg.YamlLintConfig.Rules.Truthy},
 				}
-				if cfg.YamlLintConfig.Rules.Brackets != nil {
-					fmt.Printf("    Brackets:              \033[38;2;127;255;212m%v\033[0m\n", cfg.YamlLintConfig.Rules.Brackets)
-				}
-				if cfg.YamlLintConfig.Rules.NewLines != nil {
-					fmt.Printf("    New Lines:             \033[38;2;127;255;212m%v\033[0m\n", cfg.YamlLintConfig.Rules.NewLines)
-				}
-				if cfg.YamlLintConfig.Rules.Comments != nil {
-					fmt.Printf("    Comments:              \033[38;2;127;255;212m%v\033[0m\n", cfg.YamlLintConfig.Rules.Comments)
-				}
-				fmt.Printf("    Comments Indentation:  \033[38;2;127;255;212m%t\033[0m\n", cfg.YamlLintConfig.Rules.CommentsIdentation)
-				if cfg.YamlLintConfig.Rules.OctalValues != nil {
-					fmt.Printf("    Octal Values:          \033[38;2;127;255;212m%v\033[0m\n", cfg.YamlLintConfig.Rules.OctalValues)
+				for _, entry := range ruleEntries {
+					if entry.value != nil {
+						fmt.Printf("    %-24s \033[38;2;127;255;212m%v\033[0m\n", entry.name+":", entry.value)
+					}
 				}
 			}
 			fmt.Println()

@@ -74,21 +74,55 @@ type ArtifactCredentials struct {
 }
 
 type YamlLintRules struct {
-	Braces             any  `toml:"braces"`
-	Brackets           any  `toml:"brackets"`
-	NewLines           any  `toml:"new-lines"`
-	Comments           any  `toml:"comments"`
-	CommentsIdentation bool `toml:"comments-indentation"`
-	OctalValues        any  `toml:"octal-values"`
+	Anchors             any `toml:"anchors,omitempty"`
+	Braces              any `toml:"braces,omitempty"`
+	Brackets            any `toml:"brackets,omitempty"`
+	Colons              any `toml:"colons,omitempty"`
+	Commas              any `toml:"commas,omitempty"`
+	Comments            any `toml:"comments,omitempty"`
+	CommentsIndentation any `toml:"comments-indentation,omitempty"`
+	DocumentEnd         any `toml:"document-end,omitempty"`
+	DocumentStart       any `toml:"document-start,omitempty"`
+	EmptyLines          any `toml:"empty-lines,omitempty"`
+	EmptyValues         any `toml:"empty-values,omitempty"`
+	FloatValues         any `toml:"float-values,omitempty"`
+	Hyphens             any `toml:"hyphens,omitempty"`
+	Indentation         any `toml:"indentation,omitempty"`
+	KeyDuplicates       any `toml:"key-duplicates,omitempty"`
+	KeyOrdering         any `toml:"key-ordering,omitempty"`
+	LineLength          any `toml:"line-length,omitempty"`
+	NewLineAtEndOfFile  any `toml:"new-line-at-end-of-file,omitempty"`
+	NewLines            any `toml:"new-lines,omitempty"`
+	OctalValues         any `toml:"octal-values,omitempty"`
+	QuotedStrings       any `toml:"quoted-strings,omitempty"`
+	TrailingSpaces      any `toml:"trailing-spaces,omitempty"`
+	Truthy              any `toml:"truthy,omitempty"`
 }
 
 type YamlLintRulesExport struct {
-	Braces             any  `yaml:"braces"`
-	Brackets           any  `yaml:"brackets"`
-	NewLines           any  `yaml:"new-lines"`
-	Comments           any  `yaml:"comments"`
-	CommentsIdentation bool `yaml:"comments-indentation"`
-	OctalValues        any  `yaml:"octal-values"`
+	Anchors             any `yaml:"anchors,omitempty"`
+	Braces              any `yaml:"braces,omitempty"`
+	Brackets            any `yaml:"brackets,omitempty"`
+	Colons              any `yaml:"colons,omitempty"`
+	Commas              any `yaml:"commas,omitempty"`
+	Comments            any `yaml:"comments,omitempty"`
+	CommentsIndentation any `yaml:"comments-indentation,omitempty"`
+	DocumentEnd         any `yaml:"document-end,omitempty"`
+	DocumentStart       any `yaml:"document-start,omitempty"`
+	EmptyLines          any `yaml:"empty-lines,omitempty"`
+	EmptyValues         any `yaml:"empty-values,omitempty"`
+	FloatValues         any `yaml:"float-values,omitempty"`
+	Hyphens             any `yaml:"hyphens,omitempty"`
+	Indentation         any `yaml:"indentation,omitempty"`
+	KeyDuplicates       any `yaml:"key-duplicates,omitempty"`
+	KeyOrdering         any `yaml:"key-ordering,omitempty"`
+	LineLength          any `yaml:"line-length,omitempty"`
+	NewLineAtEndOfFile  any `yaml:"new-line-at-end-of-file,omitempty"`
+	NewLines            any `yaml:"new-lines,omitempty"`
+	OctalValues         any `yaml:"octal-values,omitempty"`
+	QuotedStrings       any `yaml:"quoted-strings,omitempty"`
+	TrailingSpaces      any `yaml:"trailing-spaces,omitempty"`
+	Truthy              any `yaml:"truthy,omitempty"`
 }
 
 type YamlLint struct {

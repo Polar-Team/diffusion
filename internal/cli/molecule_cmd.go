@@ -50,12 +50,12 @@ func NewMoleculeCmd(cli *CLI) *cobra.Command {
 				log.Printf("\033[38;2;127;255;212mNew config file will be created...\033[0m")
 
 				YamlLintRulesDefault := &config.YamlLintRules{
-					Braces:             map[string]any{"max-spaces-inside": 1, "level": "warning"},
-					Brackets:           map[string]any{"max-spaces-inside": 1, "level": "warning"},
-					NewLines:           map[string]any{"type": "platform"},
-					Comments:           map[string]any{"min-spaces-from-content": 1},
-					CommentsIdentation: false,
-					OctalValues:        map[string]any{"forbid-implicit-octal": true},
+					Braces:              map[string]any{"max-spaces-inside": 1, "level": "warning"},
+					Brackets:            map[string]any{"max-spaces-inside": 1, "level": "warning"},
+					NewLines:            map[string]any{"type": "platform"},
+					Comments:            map[string]any{"min-spaces-from-content": 1},
+					CommentsIndentation: false,
+					OctalValues:         map[string]any{"forbid-implicit-octal": true},
 				}
 				YamlLintDefault := &config.YamlLint{
 					Extends: "default",
