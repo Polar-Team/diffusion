@@ -263,9 +263,10 @@ func verifyLocalTests(opts *MoleculeOptions, path, roleMoleculePath, scenario st
 		cmdCopy := fmt.Sprintf(`
 			cd /tmp && \
 			rm -rf repo && \
-			git clone "${GIT_REMOTE}" repo && \
+			git clone --no-checkout "${GIT_REMOTE}" repo && \
 			cd repo && \
-			git checkout "${GIT_SHA}" && \
+			git fetch origin "${GIT_SHA}" && \
+			git checkout FETCH_HEAD && \
 			cp -rf /tmp/repo/tests /opt/molecule/%s.%s/molecule/%s/
 		`, opts.OrgFlag, opts.RoleFlag, scenario)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
@@ -774,11 +775,21 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 	log.Printf("\033[32mCI Mode: Setting up repository inside container...\033[0m")
 
-	cloneCmd := `cd /tmp && rm -rf repo && git clone "$GIT_REMOTE" repo && cd repo && git checkout "$GIT_BRANCH"`
+	// During pull_request events, actions/checkout creates a synthetic merge
+	// commit that doesn't exist on any remote branch. A plain git clone only
+	// fetches the default branch, so that merge commit SHA is unreachable and
+	// git checkout "$GIT_SHA" fails with exit code 128.
+	//
+	// To handle both branch pushes and PRs reliably we:
+	//   1. Clone with no checkout (fast, avoids checking out default branch)
+	//   2. Fetch the exact commit by SHA (works even for PR merge commits
+	//      as long as the server advertises it — GitHub does via uploadpack.allowReachableSHA1InWant)
+	//   3. Checkout the fetched commit in detached HEAD mode
+	cloneCmd := `cd /tmp && rm -rf repo && git clone --no-checkout "$GIT_REMOTE" repo && cd repo && git fetch origin "$GIT_SHA" && git checkout FETCH_HEAD`
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cloneCmd); err != nil {
 		return fmt.Errorf("failed to clone repository in container: %w", err)
 	}
-	log.Printf("\033[32mCI Mode: Repository cloned to /tmp/repo\033[0m")
+	log.Printf("\033[32mCI Mode: Repository cloned to /tmp/repo (commit: $GIT_SHA)\033[0m")
 
 	mkdirCmd := fmt.Sprintf("mkdir -p /opt/molecule/%s", roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", mkdirCmd); err != nil {
