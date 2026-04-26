@@ -470,6 +470,10 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		if err != nil {
 			log.Printf("\033[33mexport linters warning: %v\033[0m", err)
 		}
+		metaFixCmd := fmt.Sprintf(
+			`if [ -f /opt/molecule/%s/meta/main.yml ]; then sed -i 's/^\(\s*namespace:\s*\).*/\1%s/' /opt/molecule/%s/meta/main.yml; fi`,
+			roleDirName, opts.OrgFlag, roleDirName)
+		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", metaFixCmd)
 	}
 
 	// finally create/converge
