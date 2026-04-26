@@ -238,7 +238,7 @@ send "Test role for E2E testing\r"
 expect "Enter platforms? (y/n):"
 send "n\r"
 expect "Galaxy Tags (comma-separated) (optional):"
-send "\r"
+send "test1,test2,org\r"
 expect "Collections required (comma-separated) (optional):"
 send "\r"
 expect "Enter roles to add? (y/n):"
@@ -251,6 +251,63 @@ EXPECT_SCRIPT
       echo "✓ meta.yml creation successful"
     else
       echo "✗ meta.yml creation failed"
+      exit 1
+    fi
+
+    # Verify meta.yml content: role name
+    if grep -q "role_name: test_role" "test_role/meta/main.yml"; then
+      echo "✓ meta.yml role name is correct"
+    else
+      echo "✗ meta.yml role name is missing or incorrect"
+      echo "--- meta.yml content ---"
+      cat "test_role/meta/main.yml"
+      exit 1
+    fi
+
+    # Verify meta.yml content: namespace
+    if grep -q "namespace: testorg" "test_role/meta/main.yml"; then
+      echo "✓ meta.yml namespace is correct"
+    else
+      echo "✗ meta.yml namespace is missing or incorrect"
+      echo "--- meta.yml content ---"
+      cat "test_role/meta/main.yml"
+      exit 1
+    fi
+
+    # Verify meta.yml content: author
+    if grep -q "author: Test Author" "test_role/meta/main.yml"; then
+      echo "✓ meta.yml author is correct"
+    else
+      echo "✗ meta.yml author is missing or incorrect"
+      echo "--- meta.yml content ---"
+      cat "test_role/meta/main.yml"
+      exit 1
+    fi
+
+    # Verify meta.yml content: description
+    if grep -q "description: Test role for E2E testing" "test_role/meta/main.yml"; then
+      echo "✓ meta.yml description is correct"
+    else
+      echo "✗ meta.yml description is missing or incorrect"
+      echo "--- meta.yml content ---"
+      cat "test_role/meta/main.yml"
+      exit 1
+    fi
+
+    # Verify meta.yml content: galaxy_tags
+    META_FILE="test_role/meta/main.yml"
+    TAGS_OK=true
+    for tag in test1 test2 org; do
+      if grep -q "^\s*- ${tag}$" "$META_FILE"; then
+        echo "✓ meta.yml galaxy_tags contains '${tag}'"
+      else
+        echo "✗ meta.yml galaxy_tags missing '${tag}'"
+        TAGS_OK=false
+      fi
+    done
+    if [ "$TAGS_OK" = "false" ]; then
+      echo "--- meta.yml content ---"
+      cat "$META_FILE"
       exit 1
     fi
 
@@ -274,7 +331,7 @@ expect "Enter MoleculeContainerName*"
 send "\r"
 expect "Enter MoleculeContainerTag*"
 send "\r"
-expect "Enable Vult Integration for artifact sources? (y/N):"
+expect "Enable Vault Integration for artifact sources? (y/N):"
 send "N\r"
 expect "Configure artifact sources for private repositories? (y/N):"
 send "N\r"
