@@ -807,6 +807,13 @@ func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyCmd)
 	}
 
+	// Lowercase the namespace field in meta/main.yml inside the container so it
+	// matches the lowercased roleDirName used for the directory structure.
+	metaFixCmd := fmt.Sprintf(
+		`if [ -f /opt/molecule/%s/meta/main.yml ]; then sed -i 's/^\(\s*namespace:\s*\).*/\1%s/' /opt/molecule/%s/meta/main.yml; fi`,
+		roleDirName, opts.OrgFlag, roleDirName)
+	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", metaFixCmd)
+
 	copyScenarios := fmt.Sprintf("mkdir -p /opt/molecule/%s/molecule && if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios/. /opt/molecule/%s/molecule/; fi", roleDirName, roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyScenarios); err != nil {
 		return fmt.Errorf("failed to copy scenarios in container: %w", err)
