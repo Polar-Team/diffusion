@@ -186,6 +186,17 @@ runs:
         restore-keys: |
           diffusion-cache-
 
+    - name: Disable AppArmor unprivileged userns restriction
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
+          echo "Detected Ubuntu/Debian — disabling AppArmor unprivileged userns restriction"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        else
+          echo "Not Ubuntu/Debian, skipping AppArmor tweak"
+        fi
+
     - name: Run converge
       if: inputs.run-converge == 'true'
       shell: bash

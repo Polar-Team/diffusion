@@ -36,6 +36,7 @@ type MoleculeOptions struct {
 	WipeFlag        bool
 	CIMode          bool
 	OidcFlag        bool
+	ForceFlag       bool
 }
 
 // RunMolecule is the core function that implements the molecule workflow.
@@ -103,7 +104,7 @@ func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMole
 	}
 
 	// Remove the container
-	_ = utils.RunCommandHide("docker", "rm", fmt.Sprintf("molecule-%s", opts.RoleFlag), "-f")
+	_ = utils.RunCommandHide(opts.CIMode, "docker", "rm", fmt.Sprintf("molecule-%s", opts.RoleFlag), "-f")
 
 	// Remove the role folder
 	if err := os.RemoveAll(roleMoleculePath); err != nil {
@@ -137,7 +138,7 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		scenario = opts.RoleScenario
 	}
 
-	// Create tests directory for verify/lint
+	// Create tests directory for verify
 	moleculeDefaultTestsPath := fmt.Sprintf("molecule/%s.%s/molecule/%s/tests", opts.OrgFlag, opts.RoleFlag, scenario)
 	if err := os.MkdirAll(moleculeDefaultTestsPath, 0o755); err != nil {
 		log.Printf("\033[33mwarning: cannot create scenario tests dir: %v\033[0m", err)
@@ -182,7 +183,15 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, tagEnv)
+	scenario := config.DefaultScenario
+	if opts.RoleScenario != "" {
+		scenario = opts.RoleScenario
+	}
+	galaxyInstall := ""
+	if opts.ForceFlag {
+		galaxyInstall = fmt.Sprintf("ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && ", scenario)
+	}
+	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule converge", roleDirName, galaxyInstall, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf("\033[31mConverge failed: %v\033[0m", err)
 		os.Exit(1)
@@ -282,7 +291,7 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				cmdRemoteTests := fmt.Sprintf(`
 				cd /opt/molecule/%s.%s/molecule/%s && \
 				if [ ! -d tests ]; then \
-					git clone %s tests; \
+					mkdir -p tests && cd tests && git clone %s; \
 				else \
 					echo "Tests directory already exists, skipping clone"; \
 				fi
@@ -295,7 +304,7 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				if _, err := os.Stat(testsDst); os.IsNotExist(err) {
 					cmdRemoteTests := fmt.Sprintf(`
 					cd %s && \
-					git clone %s tests
+					mkdir -p tests && cd tests && git clone %s;
 				`, filepath.Join(roleMoleculePath, config.MoleculeDir, scenario), remoteRepo)
 					if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
 						log.Printf("\033[33mwarning: failed to clone remote tests: %v\033[0m", err)
@@ -310,7 +319,7 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				cmdRemoteTests := fmt.Sprintf(`
 				cd /opt/molecule/%s.%s/molecule/%s && \
 				rm -rf tests && \
-				git clone %s tests
+			  mkdir -p tests && cd tests && git clone %s
 			`, opts.OrgFlag, opts.RoleFlag, scenario, remoteRepo)
 				if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
 					log.Printf("\033[33mwarning: failed to clone remote tests in CI mode: %v\033[0m", err)
@@ -360,17 +369,12 @@ func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario stri
 	}
 
 	// Copy tests from diffusion repo to role tests directory
-	if opts.CIMode {
-		cmdCopy := fmt.Sprintf(`cp -rf %s %s`, diffusionTestsPath, fmt.Sprintf("/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag, config.MoleculeDir, scenario, config.TestsDir))
-		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
-			log.Printf("\033[33mwarning: failed to copy diffusion tests in CI mode: %v\033[0m", err)
-		}
-	} else {
-
-		cmdCopy := fmt.Sprintf(`cp -rf %s %s`, diffusionTestsPath, fmt.Sprintf("/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag, config.MoleculeDir, scenario, config.TestsDir))
-		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
-			log.Printf("\033[33mwarning: failed to copy diffusion tests: %v\033[0m", err)
-		}
+	destPath := fmt.Sprintf(
+		"/opt/molecule/%s.%s/%s/%s/%s/diffusion_tests", opts.OrgFlag, opts.RoleFlag,
+		config.MoleculeDir, scenario, config.TestsDir)
+	cmdCopy := fmt.Sprintf(`mkdir -p %s && cp -rf %s/. %s`, destPath, diffusionTestsPath, destPath)
+	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
+		log.Printf("\033[33mwarning: failed to copy diffusion tests: %v\033[0m", err)
 	}
 
 	return nil
@@ -414,7 +418,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 			return err
 		}
 
-		setupRegistryAuth(cfg, opts.OidcFlag)
+		setupRegistryAuth(cfg, opts.OidcFlag, opts.CIMode)
 
 		// Ensure molecule directory exists on host before mounting it into the container
 		if !opts.CIMode {
@@ -471,11 +475,19 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	}
 
 	// finally create/converge
+	scenario := config.DefaultScenario
+	if opts.RoleScenario != "" {
+		scenario = opts.RoleScenario
+	}
+	galaxyInstall := ""
+	if opts.ForceFlag {
+		galaxyInstall = fmt.Sprintf("ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && ", scenario)
+	}
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", opts.RoleFlag)).Run()
 	if err == nil {
 		// container exists
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode)
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall))
 	} else {
 		// Sync UV dependencies with pyproject.toml from diffusion
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
@@ -483,7 +495,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 			log.Printf("\033[33mContinuing with existing dependencies...\033[0m")
 		}
 		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule converge", roleDirName))
+		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall))
 	}
 
 	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
@@ -536,7 +548,7 @@ func setupCredentials(opts *MoleculeOptions, cfg *config.Config) error {
 
 // setupRegistryAuth initializes CLI and performs docker login based on registry provider.
 // When oidc is true, it reads credentials from environment variables instead of calling cloud CLIs.
-func setupRegistryAuth(cfg *config.Config, oidc bool) {
+func setupRegistryAuth(cfg *config.Config, oidc bool, ciMode bool) {
 	provider := cfg.ContainerRegistry.RegistryProvider
 	if oidc {
 		if err := registry.OidcInit(provider); err != nil {
@@ -551,7 +563,7 @@ func setupRegistryAuth(cfg *config.Config, oidc bool) {
 				log.Printf("\033[33myc init warning: %v\033[0m", err)
 			}
 		}
-		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
+		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderAWS:
@@ -563,7 +575,7 @@ func setupRegistryAuth(cfg *config.Config, oidc bool) {
 			region := os.Getenv("AWS_REGION")
 			log.Printf("\033[32mOIDC AWS: using region %s from environment\033[0m", region)
 		}
-		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
+		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to AWS ECR registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderGCP:
@@ -572,7 +584,7 @@ func setupRegistryAuth(cfg *config.Config, oidc bool) {
 				log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
 			}
 		}
-		if err := utils.RunCommandHide("docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "oauth2accesstoken", "--password", os.Getenv("TOKEN")); err != nil {
+		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "oauth2accesstoken", "--password", os.Getenv("TOKEN")); err != nil {
 			log.Printf("\033[33mdocker login to GCP registry failed: %v\033[0m", err)
 		}
 	case config.RegistryProviderPublic:
@@ -770,7 +782,7 @@ func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyCmd)
 	}
 
-	copyScenarios := fmt.Sprintf("if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios /opt/molecule/%s/molecule; fi", roleDirName)
+	copyScenarios := fmt.Sprintf("mkdir -p /opt/molecule/%s/molecule && if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios/. /opt/molecule/%s/molecule/; fi", roleDirName, roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyScenarios); err != nil {
 		return fmt.Errorf("failed to copy scenarios in container: %w", err)
 	}
