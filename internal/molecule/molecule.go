@@ -448,7 +448,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 
 	// CI Mode: Clone repository and setup files inside container
 	if opts.CIMode {
-		if err := setupCIRepository(opts, roleDirName); err != nil {
+		if err := setupCIRepository(opts, path, roleDirName); err != nil {
 			return err
 		}
 	}
@@ -782,7 +782,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 }
 
 // setupCIRepository clones the repo and sets up role files inside the container.
-func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
+func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) error {
 	log.Printf("\033[32mCI Mode: Setting up repository inside container...\033[0m")
 
 	// GIT_BRANCH is now reliable for both push and pull_request events:
@@ -821,6 +821,43 @@ func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 
 	copyLintCmd := fmt.Sprintf("if [ -f /tmp/repo/.ansible-lint ]; then cp /tmp/repo/.ansible-lint /opt/molecule/%s/; fi && if [ -f /tmp/repo/.yamllint ]; then cp /tmp/repo/.yamllint /opt/molecule/%s/; fi", roleDirName, roleDirName)
 	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyLintCmd)
+
+	// Copy host-side files that may have been updated by commands like
+	// "diffusion deps lock" / "diffusion deps sync" before molecule was invoked.
+	// The cloned repo inside the container has the remote (stale) versions;
+	// overwrite them with the runner's current copies so tests use the
+	// freshly resolved dependencies.
+	containerName := fmt.Sprintf("molecule-%s", opts.RoleFlag)
+	hostOverrideFiles := []string{config.LockFileName, "diffusion.toml"}
+	for _, fname := range hostOverrideFiles {
+		hostFile := filepath.Join(hostPath, fname)
+		if _, err := os.Stat(hostFile); err == nil {
+			dest := fmt.Sprintf("%s:/opt/molecule/%s/%s", containerName, roleDirName, fname)
+			if cpErr := exec.Command("docker", "cp", hostFile, dest).Run(); cpErr != nil {
+				log.Printf("\033[33mwarning: failed to copy %s into container: %v\033[0m", fname, cpErr)
+			} else {
+				log.Printf("\033[32mCI Mode: copied host %s into container\033[0m", fname)
+			}
+		}
+	}
+	// Also copy scenario-level requirements.yml files that deps sync may have updated
+	scenariosHostPath := filepath.Join(hostPath, config.ScenariosDir)
+	if entries, err := os.ReadDir(scenariosHostPath); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			reqFile := filepath.Join(scenariosHostPath, entry.Name(), "requirements.yml")
+			if _, err := os.Stat(reqFile); err == nil {
+				dest := fmt.Sprintf("%s:/opt/molecule/%s/molecule/%s/requirements.yml", containerName, roleDirName, entry.Name())
+				if cpErr := exec.Command("docker", "cp", reqFile, dest).Run(); cpErr != nil {
+					log.Printf("\033[33mwarning: failed to copy scenarios/%s/requirements.yml into container: %v\033[0m", entry.Name(), cpErr)
+				} else {
+					log.Printf("\033[32mCI Mode: copied host scenarios/%s/requirements.yml into container\033[0m", entry.Name())
+				}
+			}
+		}
+	}
 
 	log.Printf("\033[32mCI Mode: Role files copied to /opt/molecule/%s\033[0m", roleDirName)
 
