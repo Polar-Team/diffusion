@@ -263,10 +263,7 @@ func verifyLocalTests(opts *MoleculeOptions, path, roleMoleculePath, scenario st
 		cmdCopy := fmt.Sprintf(`
 			cd /tmp && \
 			rm -rf repo && \
-			git clone --no-checkout "${GIT_REMOTE}" repo && \
-			cd repo && \
-			git fetch origin "${GIT_SHA}" && \
-			git checkout FETCH_HEAD && \
+			git clone --single-branch --branch "${GIT_BRANCH}" "${GIT_REMOTE}" repo && \
 			cp -rf /tmp/repo/tests /opt/molecule/%s.%s/molecule/%s/
 		`, opts.OrgFlag, opts.RoleFlag, scenario)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
@@ -647,13 +644,26 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		}
 		gitRemote := strings.TrimSpace(string(gitRemoteOutput))
 
-		gitBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-		gitBranchCmd.Dir = path
-		gitBranchOutput, err := gitBranchCmd.Output()
-		if err != nil {
-			return fmt.Errorf("CI mode: failed to get git branch name: %w", err)
+		// Detect pull_request events: actions/checkout creates a synthetic
+		// merge commit on a detached HEAD that doesn't exist on the remote.
+		// In that case git rev-parse --abbrev-ref HEAD returns "HEAD" and
+		// the SHA is unreachable from the remote, so neither can be used
+		// for cloning inside the container.
+		//
+		// GitHub Actions sets GITHUB_HEAD_REF to the PR source branch name
+		// for pull_request events (empty for push events). When present we
+		// use it as the branch to clone; otherwise we fall back to the
+		// local branch name.
+		gitBranch := os.Getenv("GITHUB_HEAD_REF")
+		if gitBranch == "" {
+			gitBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+			gitBranchCmd.Dir = path
+			gitBranchOutput, err := gitBranchCmd.Output()
+			if err != nil {
+				return fmt.Errorf("CI mode: failed to get git branch name: %w", err)
+			}
+			gitBranch = strings.TrimSpace(string(gitBranchOutput))
 		}
-		gitBranch := strings.TrimSpace(string(gitBranchOutput))
 
 		gitShaCmd := exec.Command("git", "rev-parse", "HEAD")
 		gitShaCmd.Dir = path
@@ -671,7 +681,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 			"-e", "ROLE_NAME="+opts.RoleFlag,
 			"-e", "ORG_NAME="+opts.OrgFlag,
 		)
-		log.Printf("\033[32mCI Mode: Will clone %s (commit: %s) inside container\033[0m", gitRemote, gitSha[:8])
+		log.Printf("\033[32mCI Mode: Will clone %s (branch: %s, commit: %s) inside container\033[0m", gitRemote, gitBranch, gitSha[:8])
 	}
 
 	// Add cgroup mount only if it exists (may not be available in WSL2)
@@ -775,17 +785,12 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 	log.Printf("\033[32mCI Mode: Setting up repository inside container...\033[0m")
 
-	// During pull_request events, actions/checkout creates a synthetic merge
-	// commit that doesn't exist on any remote branch. A plain git clone only
-	// fetches the default branch, so that merge commit SHA is unreachable and
-	// git checkout "$GIT_SHA" fails with exit code 128.
-	//
-	// To handle both branch pushes and PRs reliably we:
-	//   1. Clone with no checkout (fast, avoids checking out default branch)
-	//   2. Fetch the exact commit by SHA (works even for PR merge commits
-	//      as long as the server advertises it — GitHub does via uploadpack.allowReachableSHA1InWant)
-	//   3. Checkout the fetched commit in detached HEAD mode
-	cloneCmd := `cd /tmp && rm -rf repo && git clone --no-checkout "$GIT_REMOTE" repo && cd repo && git fetch origin "$GIT_SHA" && git checkout FETCH_HEAD`
+	// GIT_BRANCH is now reliable for both push and pull_request events:
+	// - push: resolved from git rev-parse --abbrev-ref HEAD
+	// - pull_request: resolved from GITHUB_HEAD_REF (the PR source branch)
+	// We clone only that branch (--single-branch) for speed, then the
+	// checkout lands on the correct branch tip.
+	cloneCmd := `cd /tmp && rm -rf repo && git clone --single-branch --branch "$GIT_BRANCH" "$GIT_REMOTE" repo`
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cloneCmd); err != nil {
 		return fmt.Errorf("failed to clone repository in container: %w", err)
 	}
