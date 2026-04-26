@@ -259,12 +259,29 @@ func RunCommandHide(ciMode bool, name string, args ...string) error {
 func ExportLinters(cfg *config.Config, roleMoleculePath string, CIMode bool, roleFlag string, orgFlag string) error {
 
 	yamlrules := config.YamlLintRulesExport{
-		Braces:             cfg.YamlLintConfig.Rules.Braces,
-		Brackets:           cfg.YamlLintConfig.Rules.Brackets,
-		NewLines:           cfg.YamlLintConfig.Rules.NewLines,
-		Comments:           cfg.YamlLintConfig.Rules.Comments,
-		CommentsIdentation: cfg.YamlLintConfig.Rules.CommentsIdentation,
-		OctalValues:        cfg.YamlLintConfig.Rules.OctalValues,
+		Anchors:             cfg.YamlLintConfig.Rules.Anchors,
+		Braces:              cfg.YamlLintConfig.Rules.Braces,
+		Brackets:            cfg.YamlLintConfig.Rules.Brackets,
+		Colons:              cfg.YamlLintConfig.Rules.Colons,
+		Commas:              cfg.YamlLintConfig.Rules.Commas,
+		Comments:            cfg.YamlLintConfig.Rules.Comments,
+		CommentsIndentation: cfg.YamlLintConfig.Rules.CommentsIndentation,
+		DocumentEnd:         cfg.YamlLintConfig.Rules.DocumentEnd,
+		DocumentStart:       cfg.YamlLintConfig.Rules.DocumentStart,
+		EmptyLines:          cfg.YamlLintConfig.Rules.EmptyLines,
+		EmptyValues:         cfg.YamlLintConfig.Rules.EmptyValues,
+		FloatValues:         cfg.YamlLintConfig.Rules.FloatValues,
+		Hyphens:             cfg.YamlLintConfig.Rules.Hyphens,
+		Indentation:         cfg.YamlLintConfig.Rules.Indentation,
+		KeyDuplicates:       cfg.YamlLintConfig.Rules.KeyDuplicates,
+		KeyOrdering:         cfg.YamlLintConfig.Rules.KeyOrdering,
+		LineLength:          cfg.YamlLintConfig.Rules.LineLength,
+		NewLineAtEndOfFile:  cfg.YamlLintConfig.Rules.NewLineAtEndOfFile,
+		NewLines:            cfg.YamlLintConfig.Rules.NewLines,
+		OctalValues:         cfg.YamlLintConfig.Rules.OctalValues,
+		QuotedStrings:       cfg.YamlLintConfig.Rules.QuotedStrings,
+		TrailingSpaces:      cfg.YamlLintConfig.Rules.TrailingSpaces,
+		Truthy:              cfg.YamlLintConfig.Rules.Truthy,
 	}
 
 	exportYamlLint := config.YamlLintExport{
