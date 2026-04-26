@@ -150,7 +150,12 @@ func NewMoleculeCmd(cli *CLI) *cobra.Command {
 	} else {
 		if MetaConfig.GalaxyInfo.RoleName != "" {
 			cli.RoleFlag = MetaConfig.GalaxyInfo.RoleName
-			cli.OrgFlag = MetaConfig.GalaxyInfo.Namespace
+			namespace := MetaConfig.GalaxyInfo.Namespace
+			if namespace != strings.ToLower(namespace) {
+				log.Printf("\033[33mwarning: namespace '%s' contains uppercase characters, converting to lowercase\033[0m", namespace)
+				namespace = strings.ToLower(namespace)
+			}
+			cli.OrgFlag = namespace
 		} else {
 			cli.RoleFlag = ""
 			cli.OrgFlag = ""
