@@ -646,7 +646,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		}
 		gitRemote := strings.TrimSpace(string(gitRemoteOutput))
 
-		gitBranchCmd := exec.Command("git", "rev-parse", "--abrev-ref", "HEAD")
+		gitBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 		gitBranchCmd.Dir = path
 		gitBranchOutput, err := gitBranchCmd.Output()
 		if err != nil {
