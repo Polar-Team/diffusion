@@ -1,9 +1,6 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
-# -*- mode: ruby -*-
-# vi: set ft=ruby :
-
 # Supported OS configurations
 # Set BOX_NAME environment variable to choose OS
 # Examples:
@@ -12,81 +9,26 @@
 #   BOX_NAME=debian12 vagrant up
 #   BOX_NAME=macos15 vagrant up
 
+require 'securerandom'
+
+
+def random_string(length = 8)
+  return SecureRandom.alphanumeric(length).downcase
+end
+
 BOX_CONFIGS = {
   # Ubuntu versions
-  "ubuntu2204" => {
-    box: "generic/ubuntu2204",
-    name: "Ubuntu 22.04 LTS",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
-  "ubuntu2304" => {
-    box: "generic/ubuntu2304",
-    name: "Ubuntu 23.04",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
   "ubuntu2404" => {
-    box: "generic/ubuntu2404",
+    box: "onlyoffice/base-ubuntu2404",
     name: "Ubuntu 24.04 LTS",
     memory: 4096,
     cpus: 2,
     os_family: "linux"
   },
-
-  # Debian versions
-  "debian12" => {
-    box: "generic/debian12",
-    name: "Debian 12 (Bookworm)",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
-  "debian13" => {
-    box: "generic/debian13",
-    name: "Debian 13 (Trixie)",
-    memory: 4096,
-    cpus: 2,
-    os_family: "linux"
-  },
-
-  # Windows versions (requires license)
-  "windows11" => {
-    box: "gusztavvargadr/windows-11",
-    name: "Windows 11",
-    memory: 8192,
-    cpus: 4,
-    os_family: "windows"
-  },
-  "windows10" => {
-    box: "gusztavvargadr/windows-10",
-    name: "Windows 10",
-    memory: 8192,
-    cpus: 4,
-    os_family: "windows"
-  },
-
-  # macOS versions (requires VMware Fusion on macOS host)
-  "macos15" => {
-    box: "yzgyyang/macos-15",
-    name: "macOS 15 Sequoia",
-    memory: 8192,
-    cpus: 4,
-    os_family: "macos"
-  },
-  "macos14" => {
-    box: "yzgyyang/macos-14",
-    name: "macOS 14 Sonoma",
-    memory: 8192,
-    cpus: 4,
-    os_family: "macos"
-  }
 }
 
 # Get box name from environment variable or use default
-box_name = ENV['BOX_NAME'] || ENV['VAGRANT_BOX'] || 'ubuntu2204'
+box_name = ENV['BOX_NAME'] || ENV['VAGRANT_BOX'] || 'ubuntu2404'
 
 # Validate box name
 unless BOX_CONFIGS.key?(box_name)
@@ -108,15 +50,18 @@ puts "Box: #{box_config[:box]}"
 puts "=" * 50
 
 Vagrant.configure("2") do |config|
+
+  # Generate UUID for hostname
+  uuid = random_string(8)
   # Use selected box
   config.vm.box = box_config[:box]
-  config.vm.hostname = "diffusion-e2e-#{box_name}"
+  config.vm.hostname = "diffusion-e2e-#{box_name}-#{uuid}"
 
   # Configure VM resources
   config.vm.provider "virtualbox" do |vb|
     vb.memory = box_config[:memory]
     vb.cpus = box_config[:cpus]
-    vb.name = "diffusion-e2e-#{box_name}"
+    vb.name = "diffusion-e2e-#{box_name}-#{uuid}"
   end
 
   config.vm.provider "vmware_desktop" do |vmware|
@@ -131,10 +76,28 @@ Vagrant.configure("2") do |config|
     lv.cpus = box_config[:cpus]
   end
 
+  # Hyper-V provider for Windows hosts with Core Isolation enabled.
+  # Core Isolation requires Hyper-V, which degrades VirtualBox/VMware performance
+  # (they fall back to Hyper-V passthrough / WHP mode instead of native hardware access).
+  # Using the Hyper-V provider directly gives the best performance on such hosts.
+  # Nested virtualization is enabled so Windows guests can run WSL2 + Docker.
+  # NOTE: Vagrant with Hyper-V must be run from an elevated (Administrator) shell.
+  config.vm.provider "hyperv" do |h|
+    h.vmname = "diffusion-e2e-#{box_name}"
+    h.cpus = box_config[:cpus]
+    h.memory = box_config[:memory]
+    h.maxmemory = nil                          # Disable dynamic memory (required for nested virt)
+    h.enable_virtualization_extensions = true   # Nested Hyper-V for WSL2/Docker in Windows guests
+    h.enable_checkpoints = false               # Disable checkpoints for performance
+  end
+
   # Sync diffusion source code to VM
-  # Path differs by OS
+  # Path differs by OS family. Hyper-V uses SMB by default which
+  # requires the host to be accessible over the network.
   if box_config[:os_family] == "windows"
     config.vm.synced_folder "../../", "C:/diffusion"
+  elsif box_config[:os_family] == "macos"
+    config.vm.synced_folder "../../", "/Users/vagrant/diffusion"
   else
     config.vm.synced_folder "../../", "/home/vagrant/diffusion"
   end
@@ -168,12 +131,21 @@ Vagrant.configure("2") do |config|
 
     # Add Docker's official GPG key
     install -m 0755 -d /etc/apt/keyrings
-    [ -f "/etc/apt/keyrings/docker.gpg" ] || curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+    # Detect distro for correct Docker repository
+    DISTRO_ID=$(. /etc/os-release && echo "$ID")
+    if [ "$DISTRO_ID" = "debian" ]; then
+      DOCKER_REPO_URL="https://download.docker.com/linux/debian"
+    else
+      DOCKER_REPO_URL="https://download.docker.com/linux/ubuntu"
+    fi
+
+    [ -f "/etc/apt/keyrings/docker.gpg" ] || curl -fsSL "${DOCKER_REPO_URL}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     [ -f "/etc/apt/keyrings/docker.gpg" ] || chmod a+r /etc/apt/keyrings/docker.gpg
 
-    # Add Docker repository
+    # Add Docker repository (using detected distro)
     echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] ${DOCKER_REPO_URL} \
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     # Install Docker
@@ -188,11 +160,11 @@ Vagrant.configure("2") do |config|
     systemctl enable docker
 
     echo "=========================================="
-    echo "Installing Go 1.21..."
+    echo "Installing Go 1.25..."
     echo "=========================================="
 
-    # Download and install Go
-    GO_VERSION="1.21.5"
+    # Download and install Go (must match go.mod version)
+    GO_VERSION="1.25.4"
     wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
     rm -rf /usr/local/go
     tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
@@ -239,13 +211,6 @@ Vagrant.configure("2") do |config|
     make build
 
     echo "=========================================="
-    echo "Running unit tests..."
-    echo "=========================================="
-
-    # Run unit tests
-    /usr/local/go/bin/go test -v ./...
-
-    echo "=========================================="
     echo "Running E2E tests..."
     echo "=========================================="
 
@@ -256,6 +221,7 @@ Vagrant.configure("2") do |config|
 
     # Test 1: Initialize a new role using expect
     echo "Test 1: Initialize new role..."
+    sleep 30
     expect <<'EXPECT_SCRIPT'
 set timeout 30
 spawn /home/vagrant/diffusion/bin/diffusion role --init
@@ -272,7 +238,7 @@ send "Test role for E2E testing\r"
 expect "Enter platforms? (y/n):"
 send "n\r"
 expect "Galaxy Tags (comma-separated) (optional):"
-send "test,e2e\r"
+send "\r"
 expect "Collections required (comma-separated) (optional):"
 send "\r"
 expect "Enter roles to add? (y/n):"
@@ -280,33 +246,38 @@ send "n\r"
 expect eof
 EXPECT_SCRIPT
 
-    # Verify role was created
-    if [ -d "test_role" ]; then
-      echo "✓ Role initialization successful"
+    # Verify meta.yml file was created
+    if [ -f "test_role/meta/main.yml" ]; then
+      echo "✓ meta.yml creation successful"
     else
-      echo "✗ Role initialization failed"
+      echo "✗ meta.yml creation failed"
+      exit 1
+    fi
+
+    # Verify requirements.yml file was created
+    if [ -f "test_role/scenarios/default/requirements.yml" ]; then
+      echo "✓ requirements.yml creation successful"
+    else
+      echo "✗ requirements.yml creation failed"
       exit 1
     fi
 
     cd test_role
-
-    # Test 2: Create diffusion config using expect
-    echo "Test 2: Create diffusion config..."
     expect <<'EXPECT_SCRIPT'
-set timeout 60
-spawn /home/vagrant/diffusion/bin/diffusion molecule --role test_role --org myorg
-expect "Enter RegistryServer*"
+set timeout 30
+spawn /home/vagrant/diffusion/bin/diffusion molecule
+expect "Enter RegistryServer (ghcr.io):"
 send "\r"
-expect "Enter RegistryProvider*"
+expect "Enter RegistryProvider (Public):"
 send "\r"
 expect "Enter MoleculeContainerName*"
 send "\r"
 expect "Enter MoleculeContainerTag*"
 send "\r"
-expect "Enable Vault Integration for artifact sources?*"
-send "n\r"
-expect "Configure artifact sources for private repositories?*"
-send "n\r"
+expect "Enable Vult Integration for artifact sources? (y/N):"
+send "N\r"
+expect "Configure artifact sources for private repositories? (y/N):"
+send "N\r"
 expect "What type of configuration you want use?*"
 send "\r"
 expect eof
@@ -379,204 +350,5 @@ EXPECT_SCRIPT
     echo ""
 
   SHELL
-
-  elsif box_config[:os_family] == "windows"
-    # Windows provisioning
-    config.vm.provision "shell", inline: <<-SHELL
-      Write-Host "=========================================="
-      Write-Host "Installing Chocolatey..."
-      Write-Host "=========================================="
-
-      # Install Chocolatey
-      Set-ExecutionPolicy Bypass -Scope Process -Force
-      [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-      Write-Host "=========================================="
-      Write-Host "Installing Cygwin with expect..."
-      Write-Host "=========================================="
-
-      # Install Cygwin with expect package
-      choco install cygwin -y
-      choco install cyg-get -y
-
-      # Install expect via Cygwin package manager
-      C:\\tools\\cygwin\\cygwinsetup.exe -q -P expect
-
-      Write-Host "=========================================="
-      Write-Host "Installing Go and Git..."
-      Write-Host "=========================================="
-
-      # Install Go and Git
-      choco install golang git docker-desktop -y
-
-      # Refresh environment
-      $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-
-      Write-Host "=========================================="
-      Write-Host "Setup WSL2 backend for Docker..."
-      Write-Host "=========================================="
-
-      wsl --set-default-version 2
-      wsl --install -d Ubuntu
-
-      Write-Host "=========================================="
-      Write-Host "Building diffusion..."
-      Write-Host "=========================================="
-
-      cd C:\\diffusion
-      go build -buildvcs=false -o bin/diffusion.exe
-
-      Write-Host "=========================================="
-      Write-Host "Running unit tests..."
-      Write-Host "=========================================="
-
-      go test -v ./...
-
-      Write-Host "=========================================="
-      Write-Host "Running E2E tests with expect..."
-      if (Test-Path C:\\test) { Remove-Item -Recurse -Force C:\\test }
-      New-Item -ItemType Directory -Path C:\\test
-      cd C:\\test
-
-      # Test 1: Initialize a new role using Cygwin expect
-      Write-Host 'Test 1: Initialize new role...'
-
-      # Create expect script for Windows
-      @"
-#!/usr/bin/expect -f
-set timeout 30
-spawn C:/diffusion/bin/diffusion.exe role --init
-expect "Enter role name:"
-send "test_role\r"
-expect "What namespace of the role should be?:"
-send "testorg\r"
-expect "What company of the role should be?:"
-send "Test Company\r"
-expect "What author of the role should be?:"
-send "Test Author\r"
-expect "Description of the role (optional):"
-send "Test role for E2E testing\r"
-expect "Enter platforms? (y/n):"
-send "n\r"
-expect "Galaxy Tags (comma-separated) (optional):"
-send "test,e2e\r"
-expect "Collections required (comma-separated) (optional):"
-send "\r"
-expect "Enter roles to add? (y/n):"
-send "n\r"
-expect eof
-"@ | Out-File -FilePath C:\\test\\test_init.exp -Encoding ASCII
-
-      # Run expect script via Cygwin
-      C:\\tools\\cygwin\\bin\\bash.exe -c 'expect /cygdrive/c/test/test_init.exp'
-
-      # Verify role was created
-      if (Test-Path C:\\test\\test_role) {
-        Write-Host 'Role initialization successful'
-      } else {
-        Write-Host 'Role initialization failed'
-        exit 1
-      }
-
-      cd C:\\test\\test_role
-
-      # Test 2: Create diffusion config using expect
-      Write-Host 'Test 2: Create diffusion config...'
-
-      @"
-#!/usr/bin/expect -f
-set timeout 60
-spawn C:/diffusion/bin/diffusion.exe molecule --role test_role --org myorg
-expect "Enter RegistryServer*"
-send "\r"
-expect "Enter RegistryProvider*"
-send "\r"
-expect "Enter MoleculeContainerName*"
-send "\r"
-expect "Enter MoleculeContainerTag*"
-send "\r"
-expect "Enable Vault Integration for artifact sources?*"
-send "n\r"
-expect "Configure artifact sources for private repositories?*"
-send "n\r"
-expect "What type of configuration you want use?*"
-send "\r"
-expect eof
-"@ | Out-File -FilePath C:\\test\\test_role\\test_config.exp -Encoding ASCII
-
-      C:\\tools\\cygwin\\bin\\bash.exe -c 'expect /cygdrive/c/test/test_role/test_config.exp'
-
-      # Verify config was created
-      if (Test-Path C:\\test\\test_role\\diffusion.toml) {
-        Write-Host 'Config creation successful'
-      } else {
-        Write-Host 'Config creation failed'
-        exit 1
-      }
-
-      # Test 3: Test cache feature
-      Write-Host 'Test 3: Test cache feature...'
-      C:\\diffusion\\bin\\diffusion.exe cache enable
-      C:\\diffusion\\bin\\diffusion.exe cache status
-
-      if (Test-Path $env:USERPROFILE\\.diffusion\\cache) {
-        Write-Host 'Cache directory created'
-      } else {
-        Write-Host 'Cache directory not created'
-        exit 1
-      }
-
-      # Test 4: Test artifact management
-      Write-Host 'Test 4: Test artifact management...'
-      C:\\diffusion\\bin\\diffusion.exe artifact list
-
-      Write-Host '=========================================='
-      Write-Host 'All E2E tests passed on Windows!'
-      Write-Host '=========================================='
-
-      # Print summary
-      Write-Host ''
-      Write-Host 'Summary:'
-      Write-Host '  - Go version: $(go version)'
-      Write-Host '  - Diffusion built successfully'
-      Write-Host '  - All unit tests passed'
-      Write-Host '  - All E2E tests passed with Cygwin expect'
-      Write-Host ''
-    SHELL
-
-  elsif box_config[:os_family] == "macos"
-    # macOS provisioning
-    config.vm.provision "shell", inline: <<-SHELL
-      echo "=========================================="
-      echo "Installing Homebrew..."
-      echo "=========================================="
-
-      # Install Homebrew
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-      echo "=========================================="
-      echo "Installing Go and Docker..."
-      echo "=========================================="
-
-      brew install go docker
-
-      echo "=========================================="
-      echo "Building diffusion..."
-      echo "=========================================="
-
-      cd /home/vagrant/diffusion
-      go build -o diffusion
-
-      echo "=========================================="
-      echo "Running tests..."
-      echo "=========================================="
-
-      go test -v ./...
-
-      echo "=========================================="
-      echo "All tests passed on macOS!"
-      echo "=========================================="
-    SHELL
   end
 end

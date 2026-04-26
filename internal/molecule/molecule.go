@@ -646,6 +646,14 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		}
 		gitRemote := strings.TrimSpace(string(gitRemoteOutput))
 
+		gitBranchCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		gitBranchCmd.Dir = path
+		gitBranchOutput, err := gitBranchCmd.Output()
+		if err != nil {
+			return fmt.Errorf("CI mode: failed to get git branch name: %w", err)
+		}
+		gitBranch := strings.TrimSpace(string(gitBranchOutput))
+
 		gitShaCmd := exec.Command("git", "rev-parse", "HEAD")
 		gitShaCmd.Dir = path
 		gitShaOutput, err := gitShaCmd.Output()
@@ -657,6 +665,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 		args = append(args,
 			"-e", "CI_MODE=true",
 			"-e", "GIT_REMOTE="+gitRemote,
+			"-e", "GIT_BRANCH="+gitBranch,
 			"-e", "GIT_SHA="+gitSha,
 			"-e", "ROLE_NAME="+opts.RoleFlag,
 			"-e", "ORG_NAME="+opts.OrgFlag,
@@ -765,7 +774,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 func setupCIRepository(opts *MoleculeOptions, roleDirName string) error {
 	log.Printf("\033[32mCI Mode: Setting up repository inside container...\033[0m")
 
-	cloneCmd := `cd /tmp && rm -rf repo && git clone "$GIT_REMOTE" repo && cd repo && git checkout "$GIT_SHA"`
+	cloneCmd := `cd /tmp && rm -rf repo && git clone "$GIT_REMOTE" repo && cd repo && git checkout "$GIT_BRANCH"`
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cloneCmd); err != nil {
 		return fmt.Errorf("failed to clone repository in container: %w", err)
 	}
