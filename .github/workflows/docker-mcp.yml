@@ -77,7 +77,10 @@ jobs:
           docker run --rm ${{ env.IMAGE_NAME }}:test --version
 
       - name: Run dive check
-        uses: MartinHeinz/dive-action@v0.1.0
-        with:
-          image: ${{ env.IMAGE_NAME }}:test
-          config: ${{ github.workspace }}/mcp/.dive-ci
+        run: |
+          DIVE_VERSION=$(curl -sL https://api.github.com/repos/wagoodman/dive/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          pushd /tmp
+          wget -q "https://github.com/wagoodman/dive/releases/download/v${DIVE_VERSION}/dive_${DIVE_VERSION}_linux_amd64.tar.gz"
+          tar xzf "dive_${DIVE_VERSION}_linux_amd64.tar.gz"
+          popd
+          CI=true /tmp/dive ${{ env.IMAGE_NAME }}:test --ci-config ${{ github.workspace }}/mcp/.dive-ci
