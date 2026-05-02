@@ -321,22 +321,15 @@ def check_molecule_yml(project_path: str = "", scenario: str = "default") -> str
     if root is None:
         return "Error: Could not find project root."
 
-    # Check multiple possible locations
-    candidates = [
-        root / "molecule" / scenario / "molecule.yml",
-        root / "scenarios" / scenario / "molecule.yml",
-    ]
-    mol_path = None
-    for c in candidates:
-        if c.exists():
-            mol_path = c
-            break
+    pathScenarios = root / "scenarios" / scenario / "molecule.yml"
+
+    if pathScenarios.exists():
+        mol_path = pathScenarios
+    else:
+        mol_path = None
 
     if mol_path is None:
-        return (
-            f"No molecule.yml found for scenario '{scenario}'. Searched:\n"
-            + "\n".join(f"  - {c}" for c in candidates)
-        )
+        return f"No molecule.yml found for scenario '{scenario}'."
 
     try:
         data = _load_yaml(mol_path)

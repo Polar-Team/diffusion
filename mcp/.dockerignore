@@ -8,7 +8,11 @@ __pycache__/
 dist/
 build/
 cache/
+images/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 uv.lock
+# Go build artifacts (inside diffusion_src/ — copied at build time)
+diffusion_src/bin/
+diffusion_src/.git/

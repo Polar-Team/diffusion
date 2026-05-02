@@ -8,6 +8,9 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed -E 's/
 CACHE_PATH ?= ./cache
 TEST_CONTAINER := false
 
+# Path to the diffusion Go source (parent repo by default)
+DIFFUSION_SRC ?= ../..
+
 ifeq ($(TEST_CONTAINER), true)
 	TEST_SUFFIX := -test
 endif
@@ -18,6 +21,9 @@ IMAGE := $(REGISTRY)/$(ORG)/$(IMAGE_NAME)
 # Platforms
 PLATFORMS := linux/amd64,linux/arm64
 
+# Build args passed to docker build
+BUILD_ARGS := --build-arg DIFFUSION_VERSION=$(VERSION)
+
 .PHONY: help
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -25,6 +31,27 @@ help: ## Show this help message
 	@echo 'Available targets:'
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-25s %s\n", $$1, $$2}'
 
+# ---------------------------------------------------------------------------
+# Prepare build context: copy diffusion Go source into diffusion_src/
+# ---------------------------------------------------------------------------
+.PHONY: prepare-context
+prepare-context:
+	@echo "Preparing build context — copying diffusion Go source..."
+	@rm -rf diffusion_src
+	@mkdir -p diffusion_src
+	@cp -r $(DIFFUSION_SRC)/cmd diffusion_src/cmd
+	@cp -r $(DIFFUSION_SRC)/internal diffusion_src/internal
+	@cp $(DIFFUSION_SRC)/go.mod diffusion_src/go.mod
+	@cp $(DIFFUSION_SRC)/go.sum diffusion_src/go.sum
+	@echo "Build context ready."
+
+.PHONY: clean-context
+clean-context:
+	@rm -rf diffusion_src
+
+# ---------------------------------------------------------------------------
+# Cache / registry helpers
+# ---------------------------------------------------------------------------
 .PHONY: check_cache
 check_cache:
 	@echo "Checking cache at $(CACHE_PATH)..."
@@ -52,13 +79,17 @@ setup-buildx: ## Setup Docker Buildx for multi-platform builds
 		docker buildx create --name multiplatform-builder --driver docker-container --use
 	@docker buildx inspect --bootstrap
 
+# ---------------------------------------------------------------------------
+# Build targets
+# ---------------------------------------------------------------------------
 .PHONY: build-and-push-separate
-build-and-push-separate: ## Build and push with separate tags per architecture
+build-and-push-separate: prepare-context ## Build and push with separate tags per architecture
 ifneq ($(wildcard ${CACHE_PATH}/firstinit),)
 	@echo "Building and pushing $(IMAGE) with architecture-specific tags..."
 	docker buildx build \
 		--platform linux/amd64 \
 		--cache-to=type=local,dest=${CACHE_PATH} \
+		$(BUILD_ARGS) \
 		-t $(IMAGE):$(VERSION)-amd64$(TEST_SUFFIX) \
 		-t $(IMAGE):latest-amd64$(TEST_SUFFIX) \
 		--push \
@@ -66,6 +97,7 @@ ifneq ($(wildcard ${CACHE_PATH}/firstinit),)
 	docker buildx build \
 		--platform linux/arm64 \
 		--cache-to=type=local,dest=${CACHE_PATH} \
+		$(BUILD_ARGS) \
 		-t $(IMAGE):$(VERSION)-arm64$(TEST_SUFFIX) \
 		-t $(IMAGE):latest-arm64$(TEST_SUFFIX) \
 		--push \
@@ -77,6 +109,7 @@ else
 		--platform linux/amd64 \
 		--cache-from=type=local,src=${CACHE_PATH} \
 		--cache-to=type=local,dest=${CACHE_PATH} \
+		$(BUILD_ARGS) \
 		-t $(IMAGE):$(VERSION)-amd64$(TEST_SUFFIX) \
 		-t $(IMAGE):latest-amd64$(TEST_SUFFIX) \
 		--push \
@@ -85,34 +118,40 @@ else
 		--platform linux/arm64 \
 		--cache-from=type=local,src=${CACHE_PATH} \
 		--cache-to=type=local,dest=${CACHE_PATH} \
+		$(BUILD_ARGS) \
 		-t $(IMAGE):$(VERSION)-arm64$(TEST_SUFFIX) \
 		-t $(IMAGE):latest-arm64$(TEST_SUFFIX) \
 		--push \
 		.
 endif
+	@$(MAKE) clean-context
 
 .PHONY: publish
 publish: check_cache setup-buildx login build-and-push-separate ## Full pipeline: cache → buildx → login → build+push
 
 .PHONY: build-local
-build-local: ## Build image locally for current platform
+build-local: prepare-context ## Build image locally for current platform
 	@echo "Building local image for testing..."
-	docker build -t $(IMAGE_NAME):local .
+	docker build $(BUILD_ARGS) -t $(IMAGE_NAME):local .
+	@$(MAKE) clean-context
 	@echo "Image built: $(IMAGE_NAME):local"
-	@echo "Test with: docker run --rm $(IMAGE_NAME):local"
+	@echo "Test with: docker run --rm -v \$$(pwd):/project $(IMAGE_NAME):local diffusion --version"
 
 .PHONY: test-local
 test-local: build-local ## Build and test image locally
-	@echo "Testing MCP server starts correctly..."
+	@echo "Testing MCP server module loads..."
 	@docker run --rm $(IMAGE_NAME):local python -c "from diffusion_mcp.server import mcp; print('MCP server OK')"
 	@echo "Testing Docker CLI is available..."
 	@docker run --rm $(IMAGE_NAME):local docker --version
+	@echo "Testing diffusion binary is available..."
+	@docker run --rm $(IMAGE_NAME):local diffusion --version
 	@echo "✅ All local tests passed"
 
 .PHONY: build-and-save
-build-and-save: ## Build and save image to tar file
+build-and-save: prepare-context ## Build and save image to tar file
 	@echo "Building and saving image..."
-	docker build -t $(IMAGE_NAME):local .
+	docker build $(BUILD_ARGS) -t $(IMAGE_NAME):local .
+	@$(MAKE) clean-context
 	@mkdir -p ./images
 	docker save $(IMAGE_NAME):local -o ./images/$(IMAGE_NAME)-local.tar
 	@echo "Image saved to: ./images/$(IMAGE_NAME)-local.tar"
@@ -131,7 +170,7 @@ load-local: ## Load saved image from tar file
 	fi
 
 .PHONY: clean
-clean: ## Remove buildx builder
+clean: clean-context ## Remove buildx builder and build context
 	@echo "Cleaning up buildx builder..."
 	-docker buildx rm multiplatform-builder
 

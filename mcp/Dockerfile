@@ -2,12 +2,41 @@
 # -------------------------------------------------------------------
 # Diffusion MCP Server — multi-arch container image
 # ghcr.io/polar-team/diffusion-mcp-server:{version}-{amd64|arm64}
+#
+# Includes:
+#   - diffusion CLI binary (compiled from source)
+#   - diffusion-mcp Python server (FastMCP)
+#   - Docker CE CLI (for container management tools)
+#
+# Mount your project at /project:
+#   docker run --rm -i \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     -v $(pwd):/project \
+#     ghcr.io/polar-team/diffusion-mcp-server:latest
 # -------------------------------------------------------------------
 
+ARG GO_VERSION="1.25.4"
 ARG PYTHON_VERSION="3.13-slim"
 
-# ---- builder: install deps into a venv so the final stage stays small ----
-FROM python:${PYTHON_VERSION} AS builder
+# ---- stage 1: compile the diffusion Go binary ----
+FROM golang:${GO_VERSION} AS go-builder
+
+ARG DIFFUSION_VERSION="dev"
+
+WORKDIR /build
+# Copy Go module files first for layer caching
+COPY diffusion_src/go.mod diffusion_src/go.sum ./
+RUN go mod download
+
+# Copy the rest of the source and build
+COPY diffusion_src/ ./
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-s -w -X diffusion/internal/cli.Version=${DIFFUSION_VERSION}" \
+    -o /usr/local/bin/diffusion \
+    ./cmd/diffusion
+
+# ---- stage 2: install Python deps into a venv ----
+FROM python:${PYTHON_VERSION} AS py-builder
 
 COPY pyproject.toml README.md /src/
 COPY diffusion_mcp/ /src/diffusion_mcp/
@@ -17,7 +46,7 @@ RUN pip install --no-cache-dir uv && \
     uv pip install --python /opt/venv/bin/python /src && \
     rm -rf /root/.cache /tmp/*
 
-# ---- final: minimal runtime image ----
+# ---- stage 3: final runtime image ----
 FROM python:${PYTHON_VERSION}
 
 LABEL maintainer="Daniel Dalavurak"
@@ -43,27 +72,27 @@ RUN apt-get update && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/* /tmp/*
 
-# Clean up debconf templates to reduce image size
-RUN rm -rf /var/cache/debconf/* && \
-    find /var/lib/dpkg -name "*.dat-old" -delete
+# Copy diffusion binary from Go builder
+COPY --from=go-builder /usr/local/bin/diffusion /usr/local/bin/diffusion
 
-# Copy venv from builder
-COPY --from=builder /opt/venv /opt/venv
+# Copy Python venv from py-builder
+COPY --from=py-builder /opt/venv /opt/venv
 
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:/usr/local/bin:$PATH"
 
-# The MCP server needs access to the host Docker socket (/var/run/docker.sock),
-# which is typically owned by root:docker. We run as root by default to avoid
-# GID mismatch issues across different host configurations (Docker Desktop,
-# standard Linux installs, rootless Docker all use different GIDs).
+# The MCP server needs access to the host Docker socket (/var/run/docker.sock)
+# and the project directory for reading diffusion.toml, molecule.yml, etc.
 #
-# To run as non-root, mount the socket and pass the host docker GID:
+# Usage:
 #   docker run --rm -i \
 #     -v /var/run/docker.sock:/var/run/docker.sock \
-#     --group-add $(stat -c '%g' /var/run/docker.sock) \
-#     --user 1000:1000 \
+#     -v /path/to/project:/project \
 #     ghcr.io/polar-team/diffusion-mcp-server:latest
-WORKDIR /opt/mcp
+#
+# The project mount at /project is the default WORKDIR, so diffusion CLI
+# commands auto-detect diffusion.toml and the MCP server's _find_project_root
+# resolves config files from there.
+WORKDIR /project
 
 # Default: run the MCP server on stdio transport
 ENTRYPOINT ["diffusion-mcp"]
