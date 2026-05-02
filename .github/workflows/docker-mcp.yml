@@ -64,16 +64,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Set short SHA
-        id: vars
-        run: echo "short_sha=sha-$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+      - name: Build local image for testing
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mcp
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:test
+          cache-from: type=gha
 
       - name: Test image
         run: |
-          docker run --rm ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.short_sha }} --version
+          docker run --rm ${{ env.IMAGE_NAME }}:test --version
 
       - name: Run dive check
         uses: MartinHeinz/dive-action@v0.1.0
         with:
-          image: ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.short_sha }}
+          image: ${{ env.IMAGE_NAME }}:test
           config: ${{ github.workspace }}/mcp/.dive-ci
