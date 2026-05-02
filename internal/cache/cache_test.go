@@ -381,3 +381,83 @@ func TestCacheConfigDockerUVFields(t *testing.T) {
 		t.Error("UVCache should be true")
 	}
 }
+func TestCacheDirectoryStructure(t *testing.T) {
+	cacheID := "teststructure"
+	customPath := ""
+
+	cacheDir, err := EnsureCacheDir(cacheID, customPath)
+	if err != nil {
+		t.Fatalf("EnsureCacheDir failed: %v", err)
+	}
+	defer CleanupCache(cacheID, customPath)
+
+	// Test that cache directory has expected structure
+	expectedDirs := []string{
+		config.CacheRolesDir,
+		config.CacheCollectionsDir,
+	}
+
+	for _, dir := range expectedDirs {
+		dirPath := filepath.Join(cacheDir, dir)
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			t.Fatalf("failed to create %s: %v", dir, err)
+		}
+		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+			t.Errorf("expected directory %s to exist", dir)
+		}
+	}
+}
+
+func TestCacheIDGeneration(t *testing.T) {
+	id1, err := GenerateCacheID()
+	if err != nil {
+		t.Fatalf("GenerateCacheID failed: %v", err)
+	}
+
+	id2, err := GenerateCacheID()
+	if err != nil {
+		t.Fatalf("GenerateCacheID failed: %v", err)
+	}
+
+	if id1 == id2 {
+		t.Error("GenerateCacheID should generate unique IDs")
+	}
+
+	if len(id1) != 16 {
+		t.Errorf("expected cache ID length 16, got %d", len(id1))
+	}
+}
+
+func TestGetOrCreateCacheIDWithExisting(t *testing.T) {
+	cfg := &config.Config{
+		CacheConfig: &config.CacheSettings{
+			CacheID: "existing123",
+		},
+	}
+
+	id, err := GetOrCreateCacheID(cfg)
+	if err != nil {
+		t.Fatalf("GetOrCreateCacheID failed: %v", err)
+	}
+
+	if id != "existing123" {
+		t.Errorf("expected existing cache ID 'existing123', got %s", id)
+	}
+}
+
+func TestGetOrCreateCacheIDWithoutExisting(t *testing.T) {
+	cfg := &config.Config{}
+
+	id, err := GetOrCreateCacheID(cfg)
+	if err != nil {
+		t.Fatalf("GetOrCreateCacheID failed: %v", err)
+	}
+
+	if id == "" {
+		t.Error("expected generated cache ID to be non-empty")
+	}
+
+	if len(id) != 16 {
+		t.Errorf("expected cache ID length 16, got %d", len(id))
+	}
+}

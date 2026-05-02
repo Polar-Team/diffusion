@@ -352,3 +352,20 @@ func stringContainsHelper(s, substr string) bool {
 	}
 	return false
 }
+func TestNewDependencyResolver(t *testing.T) {
+	meta := &role.Meta{}
+	req := &role.Requirement{}
+	cfg := &config.DependencyConfig{}
+
+	resolver := NewDependencyResolver(meta, req, cfg)
+
+	if resolver.meta != meta {
+		t.Error("meta not set correctly")
+	}
+	if resolver.requirement != req {
+		t.Error("requirement not set correctly")
+	}
+	if resolver.config != cfg {
+		t.Error("config not set correctly")
+	}
+}

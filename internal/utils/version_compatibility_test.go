@@ -12,21 +12,21 @@ func TestValidateToolCompatibility(t *testing.T) {
 		pythonVersion string
 		wantOK        bool
 	}{
-		// Ansible tests
-		{"Ansible 13 with Python 3.10", "ansible", "13.1.0", "3.10", true},
-		{"Ansible 13 with Python 3.9", "ansible", "13.1.0", "3.9", false},
-		{"Ansible 10 with Python 3.10", "ansible", "10.0.0", "3.10", true},
-		{"Ansible 9 with Python 3.9", "ansible", "9.0.0", "3.9", true},
+		// Ansible tests - using supported Python versions 3.11, 3.12, 3.13
+		{"Ansible 13 with Python 3.13", "ansible", "13.1.0", "3.13", true},
+		{"Ansible 13 with Python 3.11", "ansible", "13.1.0", "3.11", true},
+		{"Ansible 10 with Python 3.12", "ansible", "10.0.0", "3.12", true},
+		{"Ansible 9 with Python 3.11", "ansible", "9.0.0", "3.11", true},
 
-		// Molecule tests
-		{"Molecule 25 with Python 3.10", "molecule", "25.12.0", "3.10", true},
-		{"Molecule 25 with Python 3.9", "molecule", "25.12.0", "3.9", false},
-		{"Molecule 24 with Python 3.10", "molecule", "24.0.0", "3.10", true},
-		{"Molecule 6 with Python 3.9", "molecule", "6.0.0", "3.9", true},
+		// Molecule tests - using supported Python versions
+		{"Molecule 25 with Python 3.13", "molecule", "25.12.0", "3.13", true},
+		{"Molecule 25 with Python 3.11", "molecule", "25.12.0", "3.11", true},
+		{"Molecule 24 with Python 3.12", "molecule", "24.0.0", "3.12", true},
+		{"Molecule 6 with Python 3.11", "molecule", "6.0.0", "3.11", true},
 
-		// ansible-lint tests
-		{"ansible-lint 24 with Python 3.10", "ansible-lint", "24.0.0", "3.10", true},
-		{"ansible-lint 24 with Python 3.9", "ansible-lint", "24.0.0", "3.9", false},
+		// ansible-lint tests - using supported Python versions
+		{"ansible-lint 24 with Python 3.13", "ansible-lint", "24.0.0", "3.13", true},
+		{"ansible-lint 24 with Python 3.11", "ansible-lint", "24.0.0", "3.11", true},
 	}
 
 	for _, tt := range tests {
@@ -50,10 +50,10 @@ func TestGetCompatibleVersion(t *testing.T) {
 		wantVersion   string
 		wantErr       bool
 	}{
-		{"Ansible for Python 3.9", "ansible", "3.9", ">=9.0.0", false},
-		{"Ansible for Python 3.10", "ansible", "3.10", ">=13.0.0", false}, // Returns latest compatible
-		{"Molecule for Python 3.9", "molecule", "3.9", ">=6.0.0", false},
-		{"Molecule for Python 3.10", "molecule", "3.10", ">=25.0.0", false}, // Returns latest compatible
+		{"Ansible for Python 3.11", "ansible", "3.11", ">=13.0.0", false},
+		{"Ansible for Python 3.13", "ansible", "3.13", ">=13.0.0", false},
+		{"Molecule for Python 3.11", "molecule", "3.11", ">=25.0.0", false},
+		{"Molecule for Python 3.13", "molecule", "3.13", ">=25.0.0", false},
 	}
 
 	for _, tt := range tests {
@@ -78,23 +78,23 @@ func TestAdjustToolVersionsForPython(t *testing.T) {
 		wantAdjusted  bool
 	}{
 		{
-			name: "Python 3.9 with incompatible tools",
+			name: "Python 3.11 with incompatible tools",
 			toolVersions: map[string]string{
 				"ansible":      ">=13.0.0",
 				"molecule":     ">=25.0.0",
 				"ansible-lint": ">=24.0.0",
 			},
-			pythonVersion: "3.9",
-			wantAdjusted:  true,
+			pythonVersion: "3.11",
+			wantAdjusted:  false,
 		},
 		{
-			name: "Python 3.10 with compatible tools",
+			name: "Python 3.13 with compatible tools",
 			toolVersions: map[string]string{
-				"ansible":      ">=10.0.0",
-				"molecule":     ">=24.0.0",
+				"ansible":      ">=13.0.0",
+				"molecule":     ">=25.0.0",
 				"ansible-lint": ">=24.0.0",
 			},
-			pythonVersion: "3.10",
+			pythonVersion: "3.13",
 			wantAdjusted:  false,
 		},
 	}
@@ -128,14 +128,14 @@ func TestGetRecommendedVersions(t *testing.T) {
 		wantMolecule  string
 	}{
 		{
-			name:          "Python 3.9",
-			pythonVersion: "3.9",
-			wantAnsible:   ">=9.0.0",
-			wantMolecule:  ">=6.0.0",
+			name:          "Python 3.11",
+			pythonVersion: "3.11",
+			wantAnsible:   ">=10.0.0",
+			wantMolecule:  ">=24.0.0",
 		},
 		{
-			name:          "Python 3.10",
-			pythonVersion: "3.10",
+			name:          "Python 3.12",
+			pythonVersion: "3.12",
 			wantAnsible:   ">=10.0.0",
 			wantMolecule:  ">=24.0.0",
 		},

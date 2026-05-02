@@ -45,7 +45,7 @@ type MoleculeOptions struct {
 func RunMolecule(opts *MoleculeOptions) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Printf("\033[33mwarning loading config: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning loading config: %v" + config.ColorReset, err)
 	}
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -79,13 +79,14 @@ func RunMolecule(opts *MoleculeOptions) error {
 }
 
 // handleWipe destroys the molecule container and removes the role folder.
-// Before removing the container, it saves DinD images and (in CI mode) copies
+// Before removing the container, it saves DinD images and (—CI mode) copies
 // the cache out of the container back to the host.
 func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMoleculePath string) error {
-	log.Printf("\033[38;2;127;255;212mWiping: running molecule destroy, removing container molecule-%s and folder %s\n\033[0m", opts.RoleFlag, roleMoleculePath)
+	log.Printf(config.ColorAquamarine + "Wiping: running molecule destroy, removing container molecule-%s and folder %s\n" + config.ColorReset, opts.RoleFlag, roleMoleculePath)
 
 	// Run molecule destroy inside the container first
 	roleDir := utils.GetRoleDirName(opts.OrgFlag, opts.RoleFlag)
+	// Best-effort: container may already be destroyed or never created.
 	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "bash", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule destroy", roleDir))
 
 	// Save DinD images before removing the container
@@ -104,11 +105,12 @@ func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMole
 	}
 
 	// Remove the container
+	// Best-effort: -f flag means failure is safe to ignore (container may not exist).
 	_ = utils.RunCommandHide(opts.CIMode, "docker", "rm", fmt.Sprintf("molecule-%s", opts.RoleFlag), "-f")
 
 	// Remove the role folder
 	if err := os.RemoveAll(roleMoleculePath); err != nil {
-		log.Printf("\033[33mwarning: failed remove role path: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed remove role path: %v" + config.ColorReset, err)
 	}
 	return nil
 }
@@ -117,11 +119,12 @@ func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMole
 func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, roleMoleculePath string) error {
 	if !opts.CIMode {
 		if err := utils.CopyRoleData(path, roleMoleculePath, opts.CIMode); err != nil {
-			log.Printf("\033[33mwarning copying data: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "warning copying data: %v" + config.ColorReset, err)
 		}
 		metaFixCmd := fmt.Sprintf(
 			`if [ -f /opt/molecule/%s/meta/main.yml ]; then sed -i 's/^\(\s*namespace:\s*\).*/\1%s/' /opt/molecule/%s/meta/main.yml; fi`,
 			roleDirName, opts.OrgFlag, roleDirName)
+		// Best-effort: meta/main.yml may not exist —all roles.
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", metaFixCmd)
 	}
 
@@ -133,7 +136,7 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 
 	err := utils.ExportLinters(cfg, linters, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
 	if err != nil {
-		log.Printf("\033[33mwarning exporting linters: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning exporting linters: %v" + config.ColorReset, err)
 	}
 
 	// Determine scenario name for tests directory
@@ -145,7 +148,7 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	// Create tests directory for verify
 	moleculeDefaultTestsPath := fmt.Sprintf("molecule/%s.%s/molecule/%s/tests", opts.OrgFlag, opts.RoleFlag, scenario)
 	if err := os.MkdirAll(moleculeDefaultTestsPath, 0o755); err != nil {
-		log.Printf("\033[33mwarning: cannot create scenario tests dir: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: cannot create scenario tests dir: %v" + config.ColorReset, err)
 	}
 	defaultTestsDir := moleculeDefaultTestsPath
 	log.Printf("Default tests dir: %s", defaultTestsDir)
@@ -174,12 +177,13 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	// Verify molecule.yml exists inside container before running
 	if opts.CIMode {
 		checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
-		log.Printf("Checking molecule.yml in container...")
+		log.Printf("Checking molecule.yml —container...")
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", checkCmd); err != nil {
-			log.Printf("\033[31mmolecule.yml not found in container at /opt/molecule/%s/molecule/default/\033[0m", roleDirName)
-			log.Printf("\033[33mListing container directory structure:\033[0m")
+			log.Printf(config.ColorRed+"molecule.yml not found —container at /opt/molecule/%s/molecule/default/"+config.ColorReset, roleDirName)
+			log.Printf(config.ColorYellow + "Listing container directory structure:" + config.ColorReset)
+			// Best-effort debug listing — output shown regardless of success/failure.
 			_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
-			os.Exit(1)
+			return fmt.Errorf("molecule.yml not found —container at /opt/molecule/%s/molecule/default/", roleDirName)
 		}
 	}
 
@@ -197,10 +201,10 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	}
 	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule converge", roleDirName, galaxyInstall, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
-		log.Printf("\033[31mConverge failed: %v\033[0m", err)
-		os.Exit(1)
+		log.Printf(config.ColorRed+"Converge failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("converge failed: %w", err)
 	}
-	log.Printf("\033[32mConverge Done Successfully!\033[0m")
+	log.Printf(config.ColorGreen + "Converge Done Successfully!" + config.ColorReset)
 
 	// Fix permissions on molecule directory for Unix systems (inside container)
 	if runtime.GOOS != "windows" {
@@ -209,7 +213,7 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 		log.Printf("User UID: %d, GID: %d", uid, gid)
 		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
-			log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "warning: failed to fix permissions: %v" + config.ColorReset, err)
 		}
 	}
 
@@ -220,21 +224,25 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 func runLint(opts *MoleculeOptions, roleDirName string) error {
 	cmdStr := fmt.Sprintf(`cd ./%s && yamllint . -c .yamllint && ansible-lint -c .ansible-lint `, roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
-		log.Printf("\033[31mLint failed: %v\033[0m", err)
-		os.Exit(1)
+		log.Printf(config.ColorRed+"Lint failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("lint failed: %w", err)
 	}
-	log.Printf("\033[32mLint Done Successfully!\033[0m")
+	log.Printf(config.ColorGreen + "Lint Done Successfully!" + config.ColorReset)
 	return nil
 }
 
 // runVerify handles test source resolution (local/remote/diffusion) and runs molecule verify.
 func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, roleMoleculePath, scenario string) error {
+	if cfg.TestsConfig == nil {
+		log.Printf(config.ColorYellow + "warning: no tests config found, defaulting to diffusion" + config.ColorReset)
+		cfg.TestsConfig = &config.TestsSettings{Type: config.TestsTypeDiffusion}
+	}
 	switch cfg.TestsConfig.Type {
 	case config.TestsTypeLocal:
 		verifyLocalTests(opts, path, roleMoleculePath, scenario)
 	case config.TestsTypeRemote:
 		if len(cfg.TestsConfig.RemoteRepositories) == 0 {
-			return fmt.Errorf("\033[31mno remote repository configured for tests type 'remote'\033[0m")
+			return fmt.Errorf("no remote repository configured for tests type 'remote'")
 		}
 		verifyRemoteTests(opts, cfg, roleMoleculePath, scenario)
 	case config.TestsTypeDiffusion:
@@ -242,7 +250,7 @@ func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, rol
 			return err
 		}
 	default:
-		return fmt.Errorf("\033[31munknown tests type: %s\033[0m", cfg.TestsConfig.Type)
+		return fmt.Errorf("unknown tests type: %s", cfg.TestsConfig.Type)
 	}
 
 	// run molecule verify
@@ -252,10 +260,10 @@ func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, rol
 	}
 	cmdStr := fmt.Sprintf("cd ./%s && %smolecule verify", roleDirName, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
-		log.Printf("\033[31mVerify failed: %v\033[0m", err)
-		os.Exit(1)
+		log.Printf(config.ColorRed+"Verify failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("verify failed: %w", err)
 	}
-	log.Printf("\033[32mVerify Done Successfully!\033[0m")
+	log.Printf(config.ColorGreen + "Verify Done Successfully!" + config.ColorReset)
 	return nil
 }
 
@@ -271,14 +279,14 @@ func verifyLocalTests(opts *MoleculeOptions, path, roleMoleculePath, scenario st
 			cp -rf /tmp/repo/tests /opt/molecule/%s.%s/molecule/%s/
 		`, opts.OrgFlag, opts.RoleFlag, scenario)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
-			log.Printf("\033[33mwarning: failed to copy tests in CI mode: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "warning: failed to copy tests —CI mode: %v" + config.ColorReset, err)
 		}
 	} else {
 		if utils.Exists(testsSrc) {
 			testsDst := filepath.Join(roleMoleculePath, config.MoleculeDir, scenario, config.TestsDir)
 			utils.CopyIfExists(testsSrc, testsDst)
 		} else {
-			log.Printf("\033[33mtests/ directory not found, skipping copy\033[0m")
+			log.Printf(config.ColorYellow + "tests/ directory not found, skipping copy" + config.ColorReset)
 		}
 	}
 }
@@ -286,7 +294,7 @@ func verifyLocalTests(opts *MoleculeOptions, path, roleMoleculePath, scenario st
 // verifyRemoteTests clones test files from remote repositories.
 func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePath, scenario string) {
 	for _, remoteRepo := range cfg.TestsConfig.RemoteRepositories {
-		log.Printf("\033[32mInstalling test files from remote repository: %s\033[0m", remoteRepo)
+		log.Printf(config.ColorGreen + "Installing test files from remote repository: %s" + config.ColorReset, remoteRepo)
 
 		if !opts.TestsOverWrite {
 			if opts.CIMode {
@@ -299,7 +307,7 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				fi
 			`, opts.OrgFlag, opts.RoleFlag, scenario, remoteRepo)
 				if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
-					log.Printf("\033[33mwarning: failed to clone remote tests in CI mode: %v\033[0m", err)
+					log.Printf(config.ColorYellow + "warning: failed to clone remote tests —CI mode: %v" + config.ColorReset, err)
 				}
 			} else {
 				testsDst := filepath.Join(roleMoleculePath, config.MoleculeDir, scenario, config.TestsDir)
@@ -309,10 +317,10 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 					mkdir -p tests && cd tests && git clone %s;
 				`, filepath.Join(roleMoleculePath, config.MoleculeDir, scenario), remoteRepo)
 					if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
-						log.Printf("\033[33mwarning: failed to clone remote tests: %v\033[0m", err)
+						log.Printf(config.ColorYellow + "warning: failed to clone remote tests: %v" + config.ColorReset, err)
 					}
 				} else {
-					log.Printf("\033[33mTests directory already exists, skipping clone\033[0m")
+					log.Printf(config.ColorYellow + "Tests directory already exists, skipping clone" + config.ColorReset)
 				}
 			}
 		} else {
@@ -321,20 +329,22 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 				cmdRemoteTests := fmt.Sprintf(`
 				cd /opt/molecule/%s.%s/molecule/%s && \
 				rm -rf tests && \
-			  mkdir -p tests && cd tests && git clone %s
+				mkdir -p tests && cd tests && git clone %s
 			`, opts.OrgFlag, opts.RoleFlag, scenario, remoteRepo)
 				if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
-					log.Printf("\033[33mwarning: failed to clone remote tests in CI mode: %v\033[0m", err)
+					log.Printf(config.ColorYellow + "warning: failed to clone remote tests —CI mode: %v" + config.ColorReset, err)
 				}
 			} else {
 				testsDst := filepath.Join(roleMoleculePath, config.MoleculeDir, scenario, config.TestsDir)
-				_ = os.RemoveAll(testsDst)
+				if err := os.RemoveAll(testsDst); err != nil {
+				log.Printf(config.ColorYellow+"warning: failed to remove tests directory before overwrite: %v"+config.ColorReset, err)
+				}
 				cmdRemoteTests := fmt.Sprintf(`
 				cd %s && \
 				git clone %s tests
 			`, filepath.Join(roleMoleculePath, config.MoleculeDir, scenario), remoteRepo)
 				if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemoteTests); err != nil {
-					log.Printf("\033[33mwarning: failed to clone remote tests: %v\033[0m", err)
+					log.Printf(config.ColorYellow + "warning: failed to clone remote tests: %v" + config.ColorReset, err)
 				}
 			}
 		}
@@ -343,30 +353,30 @@ func verifyRemoteTests(opts *MoleculeOptions, cfg *config.Config, roleMoleculePa
 
 // verifyDiffusionTests clones/updates diffusion-managed test files.
 func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario string) error {
-	log.Printf("\033[32mUsing diffusion-managed test files\033[0m")
+	log.Printf(config.ColorGreen + "Using diffusion-managed test files" + config.ColorReset)
 
 	diffusionTestsPath := "/tmp/diffusion-tests-repo"
 	if !opts.TestsOverWrite {
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf(`ls %s`, diffusionTestsPath)); err != nil {
-			log.Printf("\033[32mCloning diffusion tests repository...\033[0m")
+			log.Printf(config.ColorGreen + "Cloning diffusion tests repository..." + config.ColorReset)
 			if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "git", opts.CIMode, "clone", "https://github.com/Polar-Team/diffusion-ansible-tests-role.git", diffusionTestsPath); err != nil {
-				return fmt.Errorf("\033[31mfailed to clone diffusion tests repository: %w\033[0m", err)
+				return fmt.Errorf("failed to clone diffusion tests repository: %w", err)
 			}
 		} else {
-			log.Printf("\033[32mUpdating diffusion tests repository...\033[0m")
+			log.Printf(config.ColorGreen + "Updating diffusion tests repository..." + config.ColorReset)
 			cmdPullCommand := fmt.Sprintf(`cd %s && git pull`, diffusionTestsPath)
 			if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdPullCommand); err != nil {
-				log.Printf("\033[33mwarning: failed to update diffusion tests repository: %v\033[0m", err)
+				log.Printf(config.ColorYellow + "warning: failed to update diffusion tests repository: %v" + config.ColorReset, err)
 			}
 		}
 	} else {
 		cmdRemove := fmt.Sprintf("rm -rf %s", diffusionTestsPath)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdRemove); err != nil {
-			return fmt.Errorf("\033[33mwarning: failed to remove existing diffusion tests repository: %v\033[0m", err)
+			return fmt.Errorf("failed to remove existing diffusion tests repository: %w", err)
 		}
-		log.Printf("\033[32mCloning diffusion tests repository (overwrite mode)...\033[0m")
+		log.Printf(config.ColorGreen + "Cloning diffusion tests repository (overwrite mode)..." + config.ColorReset)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "git", opts.CIMode, "clone", "https://github.com/Polar-Team/diffusion-ansible-tests-role.git", diffusionTestsPath); err != nil {
-			return fmt.Errorf("\033[31mfailed to clone diffusion tests repository: %w\033[0m", err)
+			return fmt.Errorf("failed to clone diffusion tests repository: %w", err)
 		}
 	}
 
@@ -376,7 +386,7 @@ func verifyDiffusionTests(opts *MoleculeOptions, roleMoleculePath, scenario stri
 		config.MoleculeDir, scenario, config.TestsDir)
 	cmdCopy := fmt.Sprintf(`mkdir -p %s && cp -rf %s/. %s`, destPath, diffusionTestsPath, destPath)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdCopy); err != nil {
-		log.Printf("\033[33mwarning: failed to copy diffusion tests: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed to copy diffusion tests: %v" + config.ColorReset, err)
 	}
 
 	return nil
@@ -390,10 +400,10 @@ func runIdempotence(opts *MoleculeOptions, roleDirName string) error {
 	}
 	cmdStr := fmt.Sprintf("cd ./%s && %smolecule idempotence", roleDirName, tagEnv)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
-		log.Printf("\033[31mIdempotence failed: %v\033[0m", err)
-		os.Exit(1)
+		log.Printf(config.ColorRed+"Idempotence failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("idempotence failed: %w", err)
 	}
-	log.Printf("\033[32mIdempotence Done Successfully!\033[0m")
+	log.Printf(config.ColorGreen + "Idempotence Done Successfully!" + config.ColorReset)
 	return nil
 }
 
@@ -401,10 +411,10 @@ func runIdempotence(opts *MoleculeOptions, roleDirName string) error {
 func runDestroy(opts *MoleculeOptions, roleDirName string) error {
 	cmdStr := fmt.Sprintf("cd ./%s && molecule destroy", roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
-		log.Printf("\033[31mDestroy failed: %v\033[0m", err)
-		os.Exit(1)
+		log.Printf(config.ColorRed+"Destroy failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("destroy failed: %w", err)
 	}
-	log.Printf("\033[32mDestroy Done Successfully!\033[0m")
+	log.Printf(config.ColorGreen + "Destroy Done Successfully!" + config.ColorReset)
 	return nil
 }
 
@@ -413,7 +423,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	// check if container exists
 	err := exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", opts.RoleFlag)).Run()
 	if err == nil {
-		fmt.Printf("\033[38;2;127;255;212mContainer molecule-%s already exists. To purge use --wipe.\n\033[0m", opts.RoleFlag)
+		fmt.Printf(config.ColorAquamarine + "Container molecule-%s already exists. To purge use --wipe.\n" + config.ColorReset, opts.RoleFlag)
 	} else {
 		// Container does not exist — set up credentials, auth, and run it
 		if err := setupCredentials(opts, cfg); err != nil {
@@ -457,26 +467,27 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		}
 	}
 
-	// ensure role exists (skip in CI mode - already handled)
+	// ensure role exists (skip —CI mode - already handled)
 	if !opts.CIMode {
 		ensureRole(opts, roleMoleculePath)
 	}
 
-	// docker exec login to registry inside container (provider-specific)
+	// docker exec log—to registry inside container (provider-specific)
 	loginInsideContainer(opts, cfg)
 
-	// copy files into molecule structure (skip in CI mode - already handled)
+	// copy files into molecule structure (skip —CI mode - already handled)
 	if !opts.CIMode {
 		if err := utils.CopyRoleData(path, roleMoleculePath, opts.CIMode); err != nil {
-			log.Printf("\033[33mcopy role data warning: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "copy role data warning: %v" + config.ColorReset, err)
 		}
 		err := utils.ExportLinters(cfg, roleMoleculePath, opts.CIMode, opts.RoleFlag, opts.OrgFlag)
 		if err != nil {
-			log.Printf("\033[33mexport linters warning: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "export linters warning: %v" + config.ColorReset, err)
 		}
 		metaFixCmd := fmt.Sprintf(
 			`if [ -f /opt/molecule/%s/meta/main.yml ]; then sed -i 's/^\(\s*namespace:\s*\).*/\1%s/' /opt/molecule/%s/meta/main.yml; fi`,
 			roleDirName, opts.OrgFlag, roleDirName)
+		// Best-effort: meta/main.yml may not exist —all roles.
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", metaFixCmd)
 	}
 
@@ -491,26 +502,34 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	}
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", opts.RoleFlag)).Run()
 	if err == nil {
-		// container exists
-		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode)
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall))
+		// container exists — best-effort uv-sync, then converge
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
+			log.Printf(config.ColorYellow+"warning: uv-sync failed (container-exists path): %v"+config.ColorReset, err)
+		}
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall)); err != nil {
+			log.Printf(config.ColorYellow+"warning: converge failed (container-exists path): %v"+config.ColorReset, err)
+		}
 	} else {
 		// Sync UV dependencies with pyproject.toml from diffusion
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
-			log.Printf("\033[33mWarning: uv-sync failed: %v\033[0m", err)
-			log.Printf("\033[33mContinuing with existing dependencies...\033[0m")
+			log.Printf(config.ColorYellow+"Warning: uv-sync failed: %v"+config.ColorReset, err)
+			log.Printf(config.ColorYellow + "Continuing with existing dependencies..." + config.ColorReset)
 		}
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName))
-		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall))
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName)); err != nil {
+			log.Printf(config.ColorYellow+"warning: molecule create failed: %v"+config.ColorReset, err)
+		}
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall)); err != nil {
+			log.Printf(config.ColorYellow+"warning: converge failed: %v"+config.ColorReset, err)
+		}
 	}
 
-	// Fix permissions on molecule directory for Unix systems (skip in CI mode - no volume mount)
+	// Fix permissions on molecule directory for Unix systems (skip —CI mode - no volume mount)
 	if !opts.CIMode && runtime.GOOS != "windows" {
 		uid := os.Getuid()
 		gid := os.Getgid()
 		chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule", uid, gid)
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
-			log.Printf("\033[33mwarning: failed to fix permissions: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "warning: failed to fix permissions: %v" + config.ColorReset, err)
 		}
 	}
 
@@ -524,7 +543,7 @@ func setupCredentials(opts *MoleculeOptions, cfg *config.Config) error {
 			index := i + 1
 			creds, err := secrets.GetArtifactCredentials(&source, cfg.HashicorpVault)
 			if err != nil {
-				log.Printf("\033[33mwarning: failed to load credentials for '%s': %v\033[0m", source.Name, err)
+				log.Printf(config.ColorYellow + "warning: failed to load credentials for '%s': %v" + config.ColorReset, source.Name, err)
 				continue
 			}
 
@@ -538,27 +557,27 @@ func setupCredentials(opts *MoleculeOptions, cfg *config.Config) error {
 				log.Printf("Failed to set GIT_URL_%d: %v", index, err)
 			}
 
-			log.Printf("\033[32mLoaded credentials for artifact source '%s' (GIT_*_%d)\033[0m", source.Name, index)
+			log.Printf(config.ColorGreen + "Loaded credentials for artifact source '%s' (GIT_*_%d)" + config.ColorReset, source.Name, index)
 		}
 	} else if cfg.HashicorpVault != nil && cfg.HashicorpVault.HashicorpVaultIntegration && cfg.HashicorpVault.SecretKV2Path != "" {
-		log.Println("\033[31mERROR: Legacy Vault configuration detected but is no longer supported.\033[0m")
-		log.Println("\033[33mPlease migrate to artifact_sources configuration.\033[0m")
-		log.Println("\033[33mSee MIGRATION_GUIDE.md for instructions.\033[0m")
-		log.Println("\033[33mUse 'diffusion artifact add' to configure artifact sources with Vault.\033[0m")
-		os.Exit(1)
+		log.Println(config.ColorRed + "ERROR: Legacy Vault configuration detected but is no longer supported." + config.ColorReset)
+		log.Println(config.ColorYellow + "Please migrate to artifact_sources configuration." + config.ColorReset)
+		log.Println(config.ColorYellow + "See MIGRATION_GUIDE.md for instructions." + config.ColorReset)
+		log.Println(config.ColorYellow + "Use 'diffusion artifact add' to configure artifact sources with Vault." + config.ColorReset)
+		return fmt.Errorf("legacy Vault configuration (secret_kv2_path) is no longer supported; migrate to artifact_sources")
 	} else {
-		log.Println("\033[35mNo artifact sources configured. Use public repositories or 'diffusion artifact add' to configure.\033[0m")
+		log.Println(config.ColorMagenta + "No artifact sources configured. Use public repositories or 'diffusion artifact add' to configure." + config.ColorReset)
 	}
 	return nil
 }
 
-// setupRegistryAuth initializes CLI and performs docker login based on registry provider.
+// setupRegistryAuth initializes CLI and performs docker log—based on registry provider.
 // When oidc is true, it reads credentials from environment variables instead of calling cloud CLIs.
 func setupRegistryAuth(cfg *config.Config, oidc bool, ciMode bool) {
 	provider := cfg.ContainerRegistry.RegistryProvider
 	if oidc {
 		if err := registry.OidcInit(provider); err != nil {
-			log.Printf("\033[31mOIDC init error: %v\033[0m", err)
+			log.Printf(config.ColorRed + "OIDC init error: %v" + config.ColorReset, err)
 			return
 		}
 	}
@@ -566,37 +585,37 @@ func setupRegistryAuth(cfg *config.Config, oidc bool, ciMode bool) {
 	case config.RegistryProviderYC:
 		if !oidc {
 			if err := registry.YcCliInit(); err != nil {
-				log.Printf("\033[33myc init warning: %v\033[0m", err)
+				log.Printf(config.ColorYellow + "yc init warning: %v" + config.ColorReset, err)
 			}
 		}
 		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "iam", "--password", os.Getenv("TOKEN")); err != nil {
-			log.Printf("\033[33mdocker login to registry failed: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "docker log—to registry failed: %v" + config.ColorReset, err)
 		}
 	case config.RegistryProviderAWS:
 		if !oidc {
 			if err := registry.AwsCliInit(cfg.ContainerRegistry.RegistryServer); err != nil {
-				log.Printf("\033[33maws ecr init warning: %v\033[0m", err)
+				log.Printf(config.ColorYellow + "aws ecr init warning: %v" + config.ColorReset, err)
 			}
 		} else {
 			region := os.Getenv("AWS_REGION")
-			log.Printf("\033[32mOIDC AWS: using region %s from environment\033[0m", region)
+			log.Printf(config.ColorGreen + "OIDC AWS: using region %s from environment" + config.ColorReset, region)
 		}
 		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "AWS", "--password", os.Getenv("TOKEN")); err != nil {
-			log.Printf("\033[33mdocker login to AWS ECR registry failed: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "docker log—to AWS ECR registry failed: %v" + config.ColorReset, err)
 		}
 	case config.RegistryProviderGCP:
 		if !oidc {
 			if err := registry.GcpCliInit(cfg.ContainerRegistry.RegistryServer); err != nil {
-				log.Printf("\033[33mgcloud init warning: %v\033[0m", err)
+				log.Printf(config.ColorYellow + "gcloud init warning: %v" + config.ColorReset, err)
 			}
 		}
 		if err := utils.RunCommandHide(ciMode, "docker", "login", cfg.ContainerRegistry.RegistryServer, "--username", "oauth2accesstoken", "--password", os.Getenv("TOKEN")); err != nil {
-			log.Printf("\033[33mdocker login to GCP registry failed: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "docker log—to GCP registry failed: %v" + config.ColorReset, err)
 		}
 	case config.RegistryProviderPublic:
-		log.Printf("\033[35mUsing public registry, skipping CLI initialization and authentication\033[0m")
+		log.Printf(config.ColorMagenta + "Using public registry, skipping CLI initialization and authentication" + config.ColorReset)
 	default:
-		log.Printf("\033[33mUnknown registry provider '%s', skipping CLI initialization\033[0m", provider)
+		log.Printf(config.ColorYellow + "Unknown registry provider '%s', skipping CLI initialization" + config.ColorReset, provider)
 	}
 }
 
@@ -625,21 +644,21 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 	lockFile, err := dependency.LoadLockFile()
 	if err == nil && lockFile != nil && lockFile.Python != nil && lockFile.Python.Pinned != "" {
 		pythonVersion = lockFile.Python.Pinned
-		log.Printf("\033[32mUsing Python version from lock file: %s\033[0m", pythonVersion)
+		log.Printf(config.ColorGreen + "Using Python version from lock file: %s" + config.ColorReset, pythonVersion)
 	} else {
-		log.Printf("\033[33mNo lock file found, using default Python version: %s\033[0m", pythonVersion)
+		log.Printf(config.ColorYellow + "No lock file found, using default Python version: %s" + config.ColorReset, pythonVersion)
 	}
 	args = append(args, "-e", fmt.Sprintf("PYTHON_PINNED_VERSION=%s", pythonVersion))
 
 	// Generate and pass pyproject.toml configuration
 	pyprojectContent, err := dependency.GeneratePyProjectFromCurrentConfig()
 	if err != nil {
-		log.Printf("\033[33mwarning: failed to generate pyproject.toml config: %v\033[0m", err)
-		log.Printf("\033[33mContainer will use default dependencies\033[0m")
+		log.Printf(config.ColorYellow + "warning: failed to generate pyproject.toml config: %v" + config.ColorReset, err)
+		log.Printf(config.ColorYellow + "Container will use default dependencies" + config.ColorReset)
 	} else {
 		pyprojectEncoded := base64.StdEncoding.EncodeToString([]byte(pyprojectContent))
 		args = append(args, "-e", "PYPROJECT_TOML_CONTENT="+pyprojectEncoded)
-		log.Printf("\033[32mPassing pyproject.toml configuration to container\033[0m")
+		log.Printf(config.ColorGreen + "Passing pyproject.toml configuration to container" + config.ColorReset)
 	}
 
 	// CI Mode: Pass git remote and commit SHA for cloning inside container
@@ -689,10 +708,10 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 			"-e", "ROLE_NAME="+opts.RoleFlag,
 			"-e", "ORG_NAME="+opts.OrgFlag,
 		)
-		log.Printf("\033[32mCI Mode: Will clone %s (branch: %s, commit: %s) inside container\033[0m", gitRemote, gitBranch, gitSha[:8])
+		log.Printf(config.ColorGreen + "CI Mode: Will clone %s (branch: %s, commit: %s) inside container" + config.ColorReset, gitRemote, gitBranch, gitSha[:8])
 	}
 
-	// Add cgroup mount only if it exists (may not be available in WSL2)
+	// Add cgroup mount only if it exists (may not be available —WSL2)
 	if _, err := os.Stat("/sys/fs/cgroup"); err == nil {
 		args = append(args, "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw")
 	}
@@ -701,28 +720,28 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 	if !opts.CIMode && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
 		cacheDir, err := cache.EnsureCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 		if err != nil {
-			log.Printf("\033[33mwarning: failed to create cache directory: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "warning: failed to create cache directory: %v" + config.ColorReset, err)
 		} else {
 			// Roles and collections cache (always mounted when cache is enabled)
 			rolesDir := filepath.Join(cacheDir, config.CacheRolesDir)
 			collectionsDir := filepath.Join(cacheDir, config.CacheCollectionsDir)
 
 			if err := os.MkdirAll(rolesDir, 0755); err != nil {
-				log.Printf("\033[33mwarning: failed to create roles cache directory: %v\033[0m", err)
+				log.Printf(config.ColorYellow + "warning: failed to create roles cache directory: %v" + config.ColorReset, err)
 			}
 			if err := os.MkdirAll(collectionsDir, 0755); err != nil {
-				log.Printf("\033[33mwarning: failed to create collections cache directory: %v\033[0m", err)
+				log.Printf(config.ColorYellow + "warning: failed to create collections cache directory: %v" + config.ColorReset, err)
 			}
 
 			args = append(args, "-v", fmt.Sprintf("%s:%s", rolesDir, config.ContainerRolesCachePath))
 			args = append(args, "-v", fmt.Sprintf("%s:%s", collectionsDir, config.ContainerCollectionsCachePath))
-			log.Printf("\033[32mCache enabled: mounting roles and collections from %s\033[0m", cacheDir)
+			log.Printf(config.ColorGreen + "Cache enabled: mounting roles and collections from %s" + config.ColorReset, cacheDir)
 
 			// UV/Python package cache mount
 			if cfg.CacheConfig.UVCache {
 				uvDir, err := cache.EnsureUVCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 				if err != nil {
-					log.Printf("\033[33mwarning: failed to create UV cache directory: %v\033[0m", err)
+					log.Printf(config.ColorYellow + "warning: failed to create UV cache directory: %v" + config.ColorReset, err)
 				} else {
 					// On Windows, mount to a staging path (precache) instead of the real
 					// cache path. NTFS-mounted volumes are too slow for UV operations.
@@ -733,7 +752,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 						uvContainerPath = config.ContainerUVPrecachePath
 					}
 					args = append(args, "-v", fmt.Sprintf("%s:%s", uvDir, uvContainerPath))
-					log.Printf("\033[32mUV cache enabled: mounting %s -> %s\033[0m", uvDir, uvContainerPath)
+					log.Printf(config.ColorGreen + "UV cache enabled: mounting %s -> %s" + config.ColorReset, uvDir, uvContainerPath)
 				}
 			}
 
@@ -741,10 +760,10 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 			if cfg.CacheConfig.DockerCache {
 				dockerDir, err := cache.EnsureDockerCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 				if err != nil {
-					log.Printf("\033[33mwarning: failed to create Docker cache directory: %v\033[0m", err)
+					log.Printf(config.ColorYellow + "warning: failed to create Docker cache directory: %v" + config.ColorReset, err)
 				} else {
 					args = append(args, "-v", fmt.Sprintf("%s:%s", dockerDir, config.ContainerDockerCachePath))
-					log.Printf("\033[32mDocker cache enabled: mounting %s -> %s\033[0m", dockerDir, config.ContainerDockerCachePath)
+					log.Printf(config.ColorGreen + "Docker cache enabled: mounting %s -> %s" + config.ColorReset, dockerDir, config.ContainerDockerCachePath)
 				}
 			}
 		}
@@ -769,18 +788,18 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 	cmd := exec.Command("docker", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("\033[31mdocker run failed: %v\033[0m", err)
+		log.Printf(config.ColorRed + "docker run failed: %v" + config.ColorReset, err)
 		if len(output) > 0 {
-			log.Printf("\033[31mDocker error output: %s\033[0m", string(output))
+			log.Printf(config.ColorRed + "Docker error output: %s" + config.ColorReset, string(output))
 		}
 
 		// Check for common WSL2 credential helper issue
 		if strings.Contains(string(output), "docker-credential-desktop.exe") {
-			log.Printf("\033[33m\nWSL2 Docker credential issue detected!\033[0m")
-			log.Printf("\033[33mTo fix this, edit ~/.docker/config.json and either:\033[0m")
-			log.Printf("\033[33m  1. Remove the 'credsStore' line, OR\033[0m")
-			log.Printf("\033[33m  2. Change 'credsStore': 'desktop.exe' to 'credsStore': 'desktop'\033[0m")
-			log.Printf("\033[33m\nExample fix: sed -i 's/desktop.exe/desktop/g' ~/.docker/config.json\033[0m")
+			log.Printf(config.ColorYellow + "\nWSL2 Docker credential issue detected!" + config.ColorReset)
+			log.Printf(config.ColorYellow + "To fix this, edit ~/.docker/config.json and either:" + config.ColorReset)
+			log.Printf(config.ColorYellow + "  1. Remove the 'credsStore' line, OR" + config.ColorReset)
+			log.Printf(config.ColorYellow + "  2. Change 'credsStore': 'desktop.exe' to 'credsStore': 'desktop'" + config.ColorReset)
+			log.Printf(config.ColorYellow + "\nExample fix: sed -i 's/desktop.exe/desktop/g' ~/.docker/config.json" + config.ColorReset)
 		}
 
 		return err
@@ -791,7 +810,7 @@ func runContainer(opts *MoleculeOptions, cfg *config.Config, path, roleDirName s
 
 // setupCIRepository clones the repo and sets up role files inside the container.
 func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) error {
-	log.Printf("\033[32mCI Mode: Setting up repository inside container...\033[0m")
+	log.Printf(config.ColorGreen + "CI Mode: Setting up repository inside container..." + config.ColorReset)
 
 	// GIT_BRANCH is now reliable for both push and pull_request events:
 	// - push: resolved from git rev-parse --abbrev-ref HEAD
@@ -800,34 +819,37 @@ func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) erro
 	// checkout lands on the correct branch tip.
 	cloneCmd := `cd /tmp && rm -rf repo && git clone --single-branch --branch "$GIT_BRANCH" "$GIT_REMOTE" repo`
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cloneCmd); err != nil {
-		return fmt.Errorf("failed to clone repository in container: %w", err)
+		return fmt.Errorf("failed to clone repository —container: %w", err)
 	}
-	log.Printf("\033[32mCI Mode: Repository cloned to /tmp/repo (commit: $GIT_SHA)\033[0m")
+	log.Printf(config.ColorGreen + "CI Mode: Repository cloned to /tmp/repo (commit: $GIT_SHA)" + config.ColorReset)
 
 	mkdirCmd := fmt.Sprintf("mkdir -p /opt/molecule/%s", roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", mkdirCmd); err != nil {
-		return fmt.Errorf("failed to create role directory in container: %w", err)
+		return fmt.Errorf("failed to create role directory —container: %w", err)
 	}
 
 	copyDirs := []string{"tasks", "defaults", "meta", "handlers", "templates", "files", "vars"}
 	for _, dir := range copyDirs {
 		copyCmd := fmt.Sprintf("if [ -d /tmp/repo/%s ]; then cp -r /tmp/repo/%s /opt/molecule/%s/; fi", dir, dir, roleDirName)
+		// Best-effort: role subdirs (tasks, defaults, etc.) may not all exist.
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyCmd)
 	}
 
-	// Lowercase the namespace field in meta/main.yml inside the container so it
+	// Lowercase the namespace field —meta/main.yml inside the container so it
 	// matches the lowercased roleDirName used for the directory structure.
 	metaFixCmd := fmt.Sprintf(
 		`if [ -f /opt/molecule/%s/meta/main.yml ]; then sed -i 's/^\(\s*namespace:\s*\).*/\1%s/' /opt/molecule/%s/meta/main.yml; fi`,
 		roleDirName, opts.OrgFlag, roleDirName)
+	// Best-effort: meta/main.yml may not exist —all roles.
 	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", metaFixCmd)
 
 	copyScenarios := fmt.Sprintf("mkdir -p /opt/molecule/%s/molecule && if [ -d /tmp/repo/scenarios ]; then cp -r /tmp/repo/scenarios/. /opt/molecule/%s/molecule/; fi", roleDirName, roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyScenarios); err != nil {
-		return fmt.Errorf("failed to copy scenarios in container: %w", err)
+		return fmt.Errorf("failed to copy scenarios —container: %w", err)
 	}
 
 	copyLintCmd := fmt.Sprintf("if [ -f /tmp/repo/.ansible-lint ]; then cp /tmp/repo/.ansible-lint /opt/molecule/%s/; fi && if [ -f /tmp/repo/.yamllint ]; then cp /tmp/repo/.yamllint /opt/molecule/%s/; fi", roleDirName, roleDirName)
+	// Best-effort: linter config files may not be present —the repository.
 	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", copyLintCmd)
 
 	// Copy host-side files that may have been updated by commands like
@@ -842,9 +864,9 @@ func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) erro
 		if _, err := os.Stat(hostFile); err == nil {
 			dest := fmt.Sprintf("%s:/opt/molecule/%s/%s", containerName, roleDirName, fname)
 			if cpErr := exec.Command("docker", "cp", hostFile, dest).Run(); cpErr != nil {
-				log.Printf("\033[33mwarning: failed to copy %s into container: %v\033[0m", fname, cpErr)
+				log.Printf(config.ColorYellow + "warning: failed to copy %s into container: %v" + config.ColorReset, fname, cpErr)
 			} else {
-				log.Printf("\033[32mCI Mode: copied host %s into container\033[0m", fname)
+				log.Printf(config.ColorGreen + "CI Mode: copied host %s into container" + config.ColorReset, fname)
 			}
 		}
 	}
@@ -859,23 +881,24 @@ func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) erro
 			if _, err := os.Stat(reqFile); err == nil {
 				dest := fmt.Sprintf("%s:/opt/molecule/%s/molecule/%s/requirements.yml", containerName, roleDirName, entry.Name())
 				if cpErr := exec.Command("docker", "cp", reqFile, dest).Run(); cpErr != nil {
-					log.Printf("\033[33mwarning: failed to copy scenarios/%s/requirements.yml into container: %v\033[0m", entry.Name(), cpErr)
+					log.Printf(config.ColorYellow + "warning: failed to copy scenarios/%s/requirements.yml into container: %v" + config.ColorReset, entry.Name(), cpErr)
 				} else {
-					log.Printf("\033[32mCI Mode: copied host scenarios/%s/requirements.yml into container\033[0m", entry.Name())
+					log.Printf(config.ColorGreen + "CI Mode: copied host scenarios/%s/requirements.yml into container" + config.ColorReset, entry.Name())
 				}
 			}
 		}
 	}
 
-	log.Printf("\033[32mCI Mode: Role files copied to /opt/molecule/%s\033[0m", roleDirName)
+	log.Printf(config.ColorGreen + "CI Mode: Role files copied to /opt/molecule/%s" + config.ColorReset, roleDirName)
 
 	verifyCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", verifyCmd); err != nil {
-		log.Printf("\033[31mCI Mode: molecule.yml not found!\033[0m")
+		log.Printf(config.ColorRed + "CI Mode: molecule.yml not found!" + config.ColorReset)
+		// Best-effort debug listing — output shown regardless of success/failure.
 		_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
-		return fmt.Errorf("molecule.yml not found in container")
+		return fmt.Errorf("molecule.yml not found —container")
 	}
-	log.Printf("\033[32mCI Mode: Setup complete!\033[0m")
+	log.Printf(config.ColorGreen + "CI Mode: Setup complete!" + config.ColorReset)
 
 	return nil
 }
@@ -883,12 +906,12 @@ func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) erro
 // ensureRole initializes or validates the role directory inside the container.
 func ensureRole(opts *MoleculeOptions, roleMoleculePath string) {
 	if utils.Exists(roleMoleculePath) {
-		fmt.Println("\033[35mThis role already exists in molecule\033[0m")
+		fmt.Println(config.ColorMagenta + "This role already exists —molecule" + config.ColorReset)
 	} else {
 		if err := utils.DockerExecInteractive(
 			opts.RoleFlag, "/bin/sh", opts.CIMode,
 			"-c", fmt.Sprintf("ansible-galaxy role init %s.%s", opts.OrgFlag, opts.RoleFlag)); err != nil {
-			log.Printf("\033[33mrole init warning: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "role init warning: %v" + config.ColorReset, err)
 		}
 
 		// Fix ownership inside container after role init (Unix systems only)
@@ -897,37 +920,43 @@ func ensureRole(opts *MoleculeOptions, roleMoleculePath string) {
 			gid := os.Getgid()
 			chownCmd := fmt.Sprintf("chown -R %d:%d /opt/molecule/%s.%s", uid, gid, opts.OrgFlag, opts.RoleFlag)
 			if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", chownCmd); err != nil {
-				log.Printf("\033[33mwarning: failed to fix ownership after role init: %v\033[0m", err)
+				log.Printf(config.ColorYellow + "warning: failed to fix ownership after role init: %v" + config.ColorReset, err)
 			}
 		}
 
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("rm -f %s.%s/*/*", opts.OrgFlag, opts.RoleFlag)); err != nil {
-			log.Printf("\033[33mclean role dir warning: %v\033[0m", err)
+			log.Printf(config.ColorYellow + "clean role dir warning: %v" + config.ColorReset, err)
 		}
 	}
 }
 
-// loginInsideContainer performs docker login inside the container (provider-specific).
+// loginInsideContainer performs docker log—inside the container (provider-specific).
 func loginInsideContainer(opts *MoleculeOptions, cfg *config.Config) {
 	switch cfg.ContainerRegistry.RegistryProvider {
 	case config.RegistryProviderYC:
-		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", `echo $TOKEN | docker login cr.yandex --username iam --password-stdin`)
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", `echo $TOKEN | docker log—cr.yandex --username iam --password-stdin`); err != nil {
+			log.Printf(config.ColorYellow+"warning: docker log—inside container (YC) failed: %v"+config.ColorReset, err)
+		}
 	case config.RegistryProviderAWS:
-		loginCmd := fmt.Sprintf(`echo $TOKEN | docker login %s --username AWS --password-stdin`, cfg.ContainerRegistry.RegistryServer)
-		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", loginCmd)
+		loginCmd := fmt.Sprintf(`echo $TOKEN | docker log—%s --username AWS --password-stdin`, cfg.ContainerRegistry.RegistryServer)
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", loginCmd); err != nil {
+			log.Printf(config.ColorYellow+"warning: docker log—inside container (AWS) failed: %v"+config.ColorReset, err)
+		}
 	case config.RegistryProviderGCP:
-		loginCmd := fmt.Sprintf(`echo $TOKEN | docker login %s --username oauth2accesstoken --password-stdin`, cfg.ContainerRegistry.RegistryServer)
-		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", loginCmd)
+		loginCmd := fmt.Sprintf(`echo $TOKEN | docker log—%s --username oauth2accesstoken --password-stdin`, cfg.ContainerRegistry.RegistryServer)
+		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", loginCmd); err != nil {
+			log.Printf(config.ColorYellow+"warning: docker log—inside container (GCP) failed: %v"+config.ColorReset, err)
+		}
 	case config.RegistryProviderPublic:
-		log.Printf("\033[35mUsing public registry, skipping authentication\033[0m")
+		log.Printf(config.ColorMagenta + "Using public registry, skipping authentication" + config.ColorReset)
 	default:
-		log.Printf("\033[33mUnknown registry provider '%s', skipping authentication\033[0m", cfg.ContainerRegistry.RegistryProvider)
+		log.Printf(config.ColorYellow+"Unknown registry provider '%s', skipping authentication"+config.ColorReset, cfg.ContainerRegistry.RegistryProvider)
 	}
 }
 
 // copyCacheIntoContainer copies cached roles, collections, UV packages, and Docker
 // image tarballs FROM the host cache directory INTO the running container using
-// "docker cp". This is used in CI mode where volume mounts (-v) are unavailable.
+// "docker cp". This is used —CI mode where volume mounts (-v) are unavailable.
 func copyCacheIntoContainer(opts *MoleculeOptions, cfg *config.Config) {
 	if cfg.CacheConfig == nil || !cfg.CacheConfig.Enabled || cfg.CacheConfig.CacheID == "" {
 		return
@@ -935,7 +964,7 @@ func copyCacheIntoContainer(opts *MoleculeOptions, cfg *config.Config) {
 
 	cacheDir, err := cache.GetCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 	if err != nil {
-		log.Printf("\033[33mwarning: failed to resolve cache directory: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed to resolve cache directory: %v" + config.ColorReset, err)
 		return
 	}
 
@@ -950,13 +979,14 @@ func copyCacheIntoContainer(opts *MoleculeOptions, cfg *config.Config) {
 		}
 		// Ensure target directory exists inside container
 		mkdirCmd := fmt.Sprintf("mkdir -p %s", containerPath)
+		// Best-effort: mkdir -p never fails on a running container.
 		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", mkdirCmd)
 
 		src := hostPath + string(os.PathSeparator) + "."
 		if err := exec.Command("docker", "cp", src, containerName+":"+containerPath).Run(); err != nil {
-			log.Printf("\033[33mwarning: failed to copy %s cache into container: %v\033[0m", label, err)
+			log.Printf(config.ColorYellow + "warning: failed to copy %s cache into container: %v" + config.ColorReset, label, err)
 		} else {
-			log.Printf("\033[32mCI cache: copied %s into container\033[0m", label)
+			log.Printf(config.ColorGreen + "CI cache: copied %s into container" + config.ColorReset, label)
 		}
 	}
 
@@ -978,7 +1008,7 @@ func copyCacheIntoContainer(opts *MoleculeOptions, cfg *config.Config) {
 
 // copyCacheFromContainer copies cached roles, collections, UV packages, and
 // Docker image tarballs FROM the running container back to the host cache
-// directory using "docker cp". Called in CI mode during --wipe, before the
+// directory using "docker cp". Called —CI mode during --wipe, before the
 // container is removed.
 func copyCacheFromContainer(opts *MoleculeOptions, cfg *config.Config) {
 	if cfg.CacheConfig == nil || !cfg.CacheConfig.Enabled || cfg.CacheConfig.CacheID == "" {
@@ -987,7 +1017,7 @@ func copyCacheFromContainer(opts *MoleculeOptions, cfg *config.Config) {
 
 	cacheDir, err := cache.EnsureCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 	if err != nil {
-		log.Printf("\033[33mwarning: failed to ensure cache directory: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed to ensure cache directory: %v" + config.ColorReset, err)
 		return
 	}
 
@@ -997,15 +1027,15 @@ func copyCacheFromContainer(opts *MoleculeOptions, cfg *config.Config) {
 	copyDir := func(containerPath, hostSubdir, label string) {
 		hostPath := filepath.Join(cacheDir, hostSubdir)
 		if err := os.MkdirAll(hostPath, 0755); err != nil {
-			log.Printf("\033[33mwarning: failed to create host cache dir for %s: %v\033[0m", label, err)
+			log.Printf(config.ColorYellow + "warning: failed to create host cache dir for %s: %v" + config.ColorReset, label, err)
 			return
 		}
 
 		src := containerName + ":" + containerPath + "/."
 		if err := exec.Command("docker", "cp", src, hostPath).Run(); err != nil {
-			log.Printf("\033[33mwarning: failed to copy %s cache from container: %v\033[0m", label, err)
+			log.Printf(config.ColorYellow + "warning: failed to copy %s cache from container: %v" + config.ColorReset, label, err)
 		} else {
-			log.Printf("\033[32mCI cache: saved %s from container\033[0m", label)
+			log.Printf(config.ColorGreen + "CI cache: saved %s from container" + config.ColorReset, label)
 		}
 	}
 
@@ -1029,8 +1059,8 @@ func copyCacheFromContainer(opts *MoleculeOptions, cfg *config.Config) {
 //
 //	docker exec <container> docker load -i /root/.cache/docker/images.tar
 //
-// This works in both CI and non-CI modes — the tarball is either volume-mounted
-// (non-CI) or copied in via copyCacheIntoContainer (CI).
+// This works —both CI and non-CI modes — the tarball is either volume-mounted
+// (non-CI) or copied —via copyCacheIntoContainer (CI).
 func loadDinDImages(opts *MoleculeOptions) {
 	// Container paths are always Linux — use forward slashes, never filepath.Join.
 	tarballPath := fmt.Sprintf("%s/%s", config.ContainerDockerCachePath, config.DockerImageTarball)
@@ -1038,7 +1068,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 	// Check if the tarball exists inside the container
 	checkCmd := fmt.Sprintf("test -f %s", tarballPath)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
-		log.Printf("\033[33mNo cached Docker images found at %s, skipping load\033[0m", tarballPath)
+		log.Printf(config.ColorYellow + "No cached Docker images found at %s, skipping load" + config.ColorReset, tarballPath)
 		return
 	}
 
@@ -1055,11 +1085,11 @@ func loadDinDImages(opts *MoleculeOptions) {
 			dockerReady = true
 			break
 		}
-		log.Printf("\033[33mWaiting for DinD daemon to start... (%d/%d)\033[0m", i+1, maxRetries)
+		log.Printf(config.ColorYellow + "Waiting for DinD daemon to start... (%d/%d)" + config.ColorReset, i+1, maxRetries)
 		time.Sleep(2 * time.Second)
 	}
 	if !dockerReady {
-		log.Printf("\033[33mwarning: DinD daemon did not start in time, skipping image load\033[0m")
+		log.Printf(config.ColorYellow + "warning: DinD daemon did not start —time, skipping image load" + config.ColorReset)
 		return
 	}
 
@@ -1071,12 +1101,12 @@ func loadDinDImages(opts *MoleculeOptions) {
 	cmd := exec.Command("docker", execFlags...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("\033[33mwarning: failed to load DinD images from cache (%s): %v\033[0m", tarballPath, err)
+		log.Printf(config.ColorYellow + "warning: failed to load DinD images from cache (%s): %v" + config.ColorReset, tarballPath, err)
 		if len(output) > 0 {
-			log.Printf("\033[33mDocker load output: %s\033[0m", strings.TrimSpace(string(output)))
+			log.Printf(config.ColorYellow + "Docker load output: %s" + config.ColorReset, strings.TrimSpace(string(output)))
 		}
 	} else {
-		log.Printf("\033[32mDinD images loaded from cache\033[0m")
+		log.Printf(config.ColorGreen + "DinD images loaded from cache" + config.ColorReset)
 	}
 }
 
@@ -1087,7 +1117,7 @@ func loadDinDImages(opts *MoleculeOptions) {
 //	docker exec <container> docker images --format '{{.Repository}}:{{.Tag}}'
 //	docker exec <container> docker save -o /root/.cache/docker/images.tar <image1> <image2> ...
 //
-// This works in both CI and non-CI modes. In non-CI mode the tarball persists
+// This works —both CI and non-CI modes. In non-CI mode the tarball persists
 // on the host automatically via the volume mount. In CI mode the caller must
 // follow up with copyCacheFromContainer to pull it out.
 func saveDinDImages(opts *MoleculeOptions) {
@@ -1102,7 +1132,7 @@ func saveDinDImages(opts *MoleculeOptions) {
 		`docker images --format '{{.Repository}}:{{.Tag}}'`}
 	out, err := exec.Command("docker", execFlags...).Output()
 	if err != nil {
-		log.Printf("\033[33mwarning: failed to list DinD images: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed to list DinD images: %v" + config.ColorReset, err)
 		return
 	}
 
@@ -1117,23 +1147,24 @@ func saveDinDImages(opts *MoleculeOptions) {
 	}
 
 	if len(images) == 0 {
-		log.Printf("\033[33mNo DinD images to cache\033[0m")
+		log.Printf(config.ColorYellow + "No DinD images to cache" + config.ColorReset)
 		return
 	}
 
-	log.Printf("\033[32mSaving %d DinD image(s) to cache: %s\033[0m", len(images), strings.Join(images, ", "))
+	log.Printf(config.ColorGreen + "Saving %d DinD image(s) to cache: %s" + config.ColorReset, len(images), strings.Join(images, ", "))
 
 	// Ensure the cache directory exists inside the container
 	mkdirCmd := fmt.Sprintf("mkdir -p %s", config.ContainerDockerCachePath)
+	// Best-effort: mkdir -p never fails on a running container.
 	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", mkdirCmd)
 
 	// Container paths are always Linux — use forward slashes, never filepath.Join.
 	tarballPath := fmt.Sprintf("%s/%s", config.ContainerDockerCachePath, config.DockerImageTarball)
 	saveCmd := fmt.Sprintf("docker save %s > %s", strings.Join(images, " "), tarballPath)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", saveCmd); err != nil {
-		log.Printf("\033[33mwarning: failed to save DinD images to cache: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed to save DinD images to cache: %v" + config.ColorReset, err)
 	} else {
-		log.Printf("\033[32mDinD images saved to %s\033[0m", tarballPath)
+		log.Printf(config.ColorGreen + "DinD images saved to %s" + config.ColorReset, tarballPath)
 	}
 }
 
@@ -1150,16 +1181,16 @@ func loadUVPrecache(opts *MoleculeOptions) {
 	// Check if tarball exists
 	checkCmd := fmt.Sprintf("test -f %s", tarball)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
-		log.Printf("\033[33mNo UV cache tarball found at %s, skipping\033[0m", tarball)
+		log.Printf(config.ColorYellow + "No UV cache tarball found at %s, skipping" + config.ColorReset, tarball)
 		return
 	}
 
 	// Extract tarball into native cache path
 	extractCmd := fmt.Sprintf("mkdir -p %s && tar xf %s -C %s", cachePath, tarball, cachePath)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", extractCmd); err != nil {
-		log.Printf("\033[33mwarning: failed to extract UV cache tarball: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed to extract UV cache tarball: %v" + config.ColorReset, err)
 	} else {
-		log.Printf("\033[32mUV cache extracted from tarball into native cache\033[0m")
+		log.Printf(config.ColorGreen + "UV cache extracted from tarball into native cache" + config.ColorReset)
 	}
 }
 
@@ -1176,15 +1207,15 @@ func saveUVCacheToPrecache(opts *MoleculeOptions) {
 	// Check if cache has any content
 	checkCmd := fmt.Sprintf("test -d %s && [ \"$(ls -A %s 2>/dev/null)\" ]", cachePath, cachePath)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", checkCmd); err != nil {
-		log.Printf("\033[33mUV cache is empty, skipping save\033[0m")
+		log.Printf(config.ColorYellow + "UV cache is empty, skipping save" + config.ColorReset)
 		return
 	}
 
 	// Archive cache into a single tarball on the NTFS mount
 	archiveCmd := fmt.Sprintf("tar cf %s -C %s .", tarball, cachePath)
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", archiveCmd); err != nil {
-		log.Printf("\033[33mwarning: failed to archive UV cache to tarball: %v\033[0m", err)
+		log.Printf(config.ColorYellow + "warning: failed to archive UV cache to tarball: %v" + config.ColorReset, err)
 	} else {
-		log.Printf("\033[32mUV cache archived to %s (synced to host)\033[0m", tarball)
+		log.Printf(config.ColorGreen + "UV cache archived to %s (synced to host)" + config.ColorReset, tarball)
 	}
 }

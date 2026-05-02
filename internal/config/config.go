@@ -208,19 +208,7 @@ func SaveConfig(config *Config) error {
 	}
 	configPath := filepath.Join(projectDir, "diffusion.toml")
 
-	var configMap *Config
-
-	// Read existing config if present
-	data, err := os.ReadFile(configPath)
-	if err == nil {
-		_ = toml.Unmarshal(data, &configMap)
-	} else {
-		configMap = nil
-	}
-
-	configMap = config
-
-	newData, err := toml.Marshal(configMap)
+	newData, err := toml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
