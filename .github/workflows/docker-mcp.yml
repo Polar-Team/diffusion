@@ -1,15 +1,18 @@
-name: Docker Build - MCP Server
+name: Build and Publish MCP Server
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "v*"
+    branches:
+      - main
     paths:
-      - 'mcp-server/**'
-      - '.github/workflows/docker-mcp.yml'
+      - "mcp/**"
+      - ".github/workflows/docker-mcp.yml"
   pull_request:
     paths:
-      - 'mcp-server/**'
-      - '.github/workflows/docker-mcp.yml'
+      - "mcp/**"
+      - ".github/workflows/docker-mcp.yml"
   workflow_dispatch:
 
 env:
@@ -17,70 +20,189 @@ env:
   IMAGE_NAME: diffusion-mcp-server
 
 jobs:
-  build:
+  check-tag:
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check tag validity
+        id: check
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          if [[ "$TAG_NAME" == *"alpha"* ]] || [[ "$TAG_NAME" == *"beta"* ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ---------------------------------------------------------------
+  # Build per-architecture images and push to GHCR
+  # ---------------------------------------------------------------
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: check-tag
+    if: always() && (needs.check-tag.outputs.should_run == 'true' || needs.check-tag.result == 'skipped')
     permissions:
       contents: read
       packages: write
-
+    strategy:
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set image owner lowercase
         id: owner
         run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare diffusion Go source for build context
+        run: |
+          cd mcp
+          mkdir -p diffusion_src
+          cp -r ../cmd diffusion_src/cmd
+          cp -r ../internal diffusion_src/internal
+          cp ../go.mod diffusion_src/go.mod
+          cp ../go.sum diffusion_src/go.sum
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=host
 
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
+      - name: Get platform suffix
+        id: platform
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          echo "suffix=${PLATFORM##*/}" >> $GITHUB_OUTPUT
+
+      - name: Build and push by platform
+        uses: docker/build-push-action@v6
         with:
-          context: ./mcp
-          platforms: linux/amd64,linux/arm64
+          context: mcp
+          platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            DIFFUSION_VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ steps.platform.outputs.suffix }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:latest-${{ steps.platform.outputs.suffix }}
+          cache-from: type=gha,scope=mcp-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=mcp-${{ matrix.platform }}
 
-      - name: Build local image for testing
-        uses: docker/build-push-action@v5
+  # ---------------------------------------------------------------
+  # Create multi-arch manifest (tag pushes only)
+  # ---------------------------------------------------------------
+  create-manifest:
+    runs-on: ubuntu-latest
+    needs: [check-tag, build-and-push]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.check-tag.outputs.should_run == 'true'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set image owner lowercase
+        id: owner
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
         with:
-          context: ./mcp
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest for version tag
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} \
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-amd64 \
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-arm64
+
+      - name: Create and push manifest for latest tag
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:latest-amd64 \
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:latest-arm64
+
+  # ---------------------------------------------------------------
+  # Test the built image
+  # ---------------------------------------------------------------
+  test-image:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: always() && needs.build-and-push.result == 'success'
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set image owner lowercase
+        id: owner
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare diffusion Go source for build context
+        run: |
+          cd mcp
+          mkdir -p diffusion_src
+          cp -r ../cmd diffusion_src/cmd
+          cp -r ../internal diffusion_src/internal
+          cp ../go.mod diffusion_src/go.mod
+          cp ../go.sum diffusion_src/go.sum
+
+      - name: Build local test image
+        uses: docker/build-push-action@v6
+        with:
+          context: mcp
           load: true
           tags: ${{ env.IMAGE_NAME }}:test
-          cache-from: type=gha
+          cache-from: type=gha,scope=mcp-linux/amd64
 
-      - name: Test image
+      - name: Test MCP server module
         run: |
-          docker run --rm ${{ env.IMAGE_NAME }}:test --version
+          docker run --rm ${{ env.IMAGE_NAME }}:test \
+            python -c "from diffusion_mcp.server import mcp; print('MCP server OK')"
 
-      - name: Run dive check
+      - name: Test Docker CLI
+        run: docker run --rm ${{ env.IMAGE_NAME }}:test docker --version
+
+      - name: Test diffusion binary
+        run: docker run --rm ${{ env.IMAGE_NAME }}:test diffusion --version
+
+      - name: Test project mount
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/project ${{ env.IMAGE_NAME }}:test \
+            sh -c "test -f /project/diffusion.toml && echo 'Project mount OK' || echo 'No diffusion.toml — expected if not in role root'"
+
+      - name: Run dive efficiency check
         run: |
           DIVE_VERSION=$(curl -sL https://api.github.com/repos/wagoodman/dive/releases/latest | jq -r '.tag_name' | sed 's/^v//')
-          pushd /tmp
-          wget -q "https://github.com/wagoodman/dive/releases/download/v${DIVE_VERSION}/dive_${DIVE_VERSION}_linux_amd64.tar.gz"
-          tar xzf "dive_${DIVE_VERSION}_linux_amd64.tar.gz"
-          popd
-          CI=true /tmp/dive ${{ env.IMAGE_NAME }}:test --ci-config ${{ github.workspace }}/mcp/.dive-ci
+          curl -fOL "https://github.com/wagoodman/dive/releases/download/v${DIVE_VERSION}/dive_${DIVE_VERSION}_linux_amd64.deb"
+          sudo apt install ./dive_${DIVE_VERSION}_linux_amd64.deb
+          CI=true dive ${{ env.IMAGE_NAME }}:test --ci-config mcp/.dive-ci

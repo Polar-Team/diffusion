@@ -25,7 +25,10 @@ An MCP (Model Context Protocol) server for managing and troubleshooting Diffusio
 
 ## Container Image
 
-Pre-built multi-arch images are published to GHCR:
+Pre-built multi-arch images are published to GHCR. Each image includes:
+- **diffusion CLI binary** (compiled from Go source)
+- **diffusion-mcp Python server** (FastMCP)
+- **Docker CE CLI** (for container management tools)
 
 ```
 ghcr.io/polar-team/diffusion-mcp-server:latest-amd64
@@ -43,9 +46,14 @@ ghcr.io/polar-team/diffusion-mcp-server:{version}
 
 ### Run from Docker
 
+The container needs two mounts:
+1. **Docker socket** — for container management tools (`list_molecule_containers`, `docker_exec_in_molecule`, etc.)
+2. **Project directory** — for reading `diffusion.toml`, `molecule.yml`, `verify.yml`, running `diffusion` CLI commands
+
 ```bash
-# The container needs access to the host Docker socket for container management tools
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+docker run --rm -i \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v $(pwd):/project \
   ghcr.io/polar-team/diffusion-mcp-server:latest
 ```
 
@@ -104,6 +112,7 @@ Add to your `.kiro/settings/mcp.json` or `~/.kiro/settings/mcp.json`:
       "args": [
         "run", "--rm", "-i",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", "${workspaceFolder}:/project",
         "ghcr.io/polar-team/diffusion-mcp-server:latest"
       ],
       "disabled": false,
@@ -117,7 +126,8 @@ Add to your `.kiro/settings/mcp.json` or `~/.kiro/settings/mcp.json`:
         "check_docker_environment",
         "get_cache_status",
         "list_molecule_scenarios",
-        "get_requirements_yml"
+        "get_requirements_yml",
+        "get_server_version"
       ]
     }
   }
@@ -134,6 +144,7 @@ Add to your `.kiro/settings/mcp.json` or `~/.kiro/settings/mcp.json`:
       "args": [
         "run", "--rm", "-i",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", "/path/to/your/role:/project",
         "ghcr.io/polar-team/diffusion-mcp-server:latest"
       ]
     }
@@ -201,12 +212,11 @@ uv run mcp dev diffusion_mcp/server.py
 
 ## CI/CD
 
-The GitHub Actions workflow (`.github/workflows/build-and-publish.yml`) runs on tag pushes (`v*`):
+The GitHub Actions workflow (`.github/workflows/docker-mcp.yml`) runs on pushes to `mcp/**`, tag pushes (`v*`), and PRs:
 
-1. **build-and-push** — Builds per-architecture images (`amd64`, `arm64`) and pushes to GHCR
-2. **create-manifest** — Creates multi-arch manifest lists for `:latest` and `:{version}` tags
-3. **dive-analysis** — Validates image efficiency (≥96%, ≤25MB wasted)
-4. **test-image** — Smoke tests the published image (module load + Docker CLI check)
+1. **build-and-push** — Prepares Go source context, builds per-architecture images (`amd64`, `arm64`), pushes to GHCR
+2. **create-manifest** — Creates multi-arch manifest lists for `:latest` and `:{version}` tags (tag pushes only)
+3. **test-image** — Smoke tests: MCP module load, Docker CLI, diffusion binary, project mount, dive efficiency check
 
 ## License
 
