@@ -119,6 +119,10 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		if err := utils.CopyRoleData(path, roleMoleculePath, opts.CIMode); err != nil {
 			log.Printf("\033[33mwarning copying data: %v\033[0m", err)
 		}
+		metaFixCmd := fmt.Sprintf(
+			`if [ -f /opt/molecule/%s/meta/main.yml ]; then sed -i 's/^\(\s*namespace:\s*\).*/\1%s/' /opt/molecule/%s/meta/main.yml; fi`,
+			roleDirName, opts.OrgFlag, roleDirName)
+		_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", metaFixCmd)
 	}
 
 	linters := roleMoleculePath
