@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 
 	"github.com/spf13/cobra"
@@ -63,6 +64,7 @@ func Execute() {
 	rootCmd.AddCommand(NewDepsCmd(cli))
 
 	if err := rootCmd.Execute(); err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }

@@ -257,6 +257,10 @@ func RunCommandHide(ciMode bool, name string, args ...string) error {
 }
 
 func ExportLinters(cfg *config.Config, roleMoleculePath string, CIMode bool, roleFlag string, orgFlag string) error {
+	if cfg.YamlLintConfig == nil || cfg.YamlLintConfig.Rules == nil || cfg.AnsibleLintConfig == nil {
+		log.Printf(config.ColorYellow + "warning: linter config incomplete, skipping export" + config.ColorReset)
+		return nil
+	}
 
 	yamlrules := config.YamlLintRulesExport{
 		Anchors:             cfg.YamlLintConfig.Rules.Anchors,
@@ -476,13 +480,13 @@ func CopyRoleData(basePath, roleMoleculePath string, ciMode bool) error {
 	// Validate that scenarios/default directory exists
 	scenariosPath := filepath.Join(basePath, config.ScenariosDir, config.DefaultScenario)
 	if _, err := os.Stat(scenariosPath); os.IsNotExist(err) {
-		return fmt.Errorf("\033[31mscenarios/default directory not found in %s\n\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create the directory structure manually:\n   mkdir -p scenarios/default\n   # Add molecule.yml, converge.yml, verify.yml to scenarios/default/\033[0m", basePath)
+		return fmt.Errorf("scenarios/default directory not found in %s\n\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create the directory structure manually:\n   mkdir -p scenarios/default\n   # Add molecule.yml, converge.yml, verify.yml to scenarios/default/", basePath)
 	}
 
 	// Validate that molecule.yml exists
 	moleculeYml := filepath.Join(scenariosPath, "molecule.yml")
 	if _, err := os.Stat(moleculeYml); os.IsNotExist(err) {
-		return fmt.Errorf("\033[31mscenarios/default/molecule.yml not found in %s\n\nThis file is required for Molecule testing.\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create molecule.yml manually in scenarios/default/\033[0m", basePath)
+		return fmt.Errorf("scenarios/default/molecule.yml not found in %s\n\nThis file is required for Molecule testing.\nTo fix this:\n1. Initialize a new role: diffusion role --init\n2. Or create molecule.yml manually in scenarios/default/", basePath)
 	}
 
 	if !ciMode {
@@ -530,7 +534,7 @@ func CopyRoleData(basePath, roleMoleculePath string, ciMode bool) error {
 				log.Printf("  - %s (isDir: %v)", entry.Name(), entry.IsDir())
 			}
 		}
-		return fmt.Errorf("\033[31mFailed to copy molecule.yml to container.\nSource: %s\nDestination: %s\n\nThis may be a permission or file system issue in CI/CD.\nTry running with --ci flag: diffusion molecule --ci --converge\033[0m", moleculeYml, copiedMoleculeYml)
+		return fmt.Errorf("failed to copy molecule.yml to container.\nSource: %s\nDestination: %s\n\nThis may be a permission or file system issue in CI/CD.\nTry running with --ci flag: diffusion molecule --ci --converge", moleculeYml, copiedMoleculeYml)
 	}
 
 	return nil

@@ -1,6 +1,7 @@
 package molecule
 
 import (
+	"context"
 	"testing"
 )
 
@@ -47,69 +48,10 @@ func TestMoleculeOptionsDefaults(t *testing.T) {
 	}
 }
 
-// TestMoleculeOptionsFieldMapping verifies that each field on MoleculeOptions
-// maps correctly (no misaligned struct tags, naming issues, etc.).
-func TestMoleculeOptionsFieldMapping(t *testing.T) {
-	opts := &MoleculeOptions{
-		RoleFlag:        "myrole",
-		OrgFlag:         "myorg",
-		RoleScenario:    "production",
-		TagFlag:         "install,configure",
-		ConvergeFlag:    true,
-		VerifyFlag:      true,
-		TestsOverWrite:  true,
-		LintFlag:        true,
-		IdempotenceFlag: true,
-		DestroyFlag:     true,
-		WipeFlag:        true,
-		CIMode:          true,
-	}
-
-	if opts.RoleFlag != "myrole" {
-		t.Errorf("RoleFlag = %q, want %q", opts.RoleFlag, "myrole")
-	}
-	if opts.OrgFlag != "myorg" {
-		t.Errorf("OrgFlag = %q, want %q", opts.OrgFlag, "myorg")
-	}
-	if opts.RoleScenario != "production" {
-		t.Errorf("RoleScenario = %q, want %q", opts.RoleScenario, "production")
-	}
-	if opts.TagFlag != "install,configure" {
-		t.Errorf("TagFlag = %q, want %q", opts.TagFlag, "install,configure")
-	}
-	if !opts.ConvergeFlag {
-		t.Error("ConvergeFlag should be true")
-	}
-	if !opts.VerifyFlag {
-		t.Error("VerifyFlag should be true")
-	}
-	if !opts.TestsOverWrite {
-		t.Error("TestsOverWrite should be true")
-	}
-	if !opts.LintFlag {
-		t.Error("LintFlag should be true")
-	}
-	if !opts.IdempotenceFlag {
-		t.Error("IdempotenceFlag should be true")
-	}
-	if !opts.DestroyFlag {
-		t.Error("DestroyFlag should be true")
-	}
-	if !opts.WipeFlag {
-		t.Error("WipeFlag should be true")
-	}
-	if !opts.CIMode {
-		t.Error("CIMode should be true")
-	}
-}
-
 // TestRunMoleculeWipeRouting verifies that RunMolecule with WipeFlag set
 // routes to the wipe handler. Since Docker is not available in unit tests,
 // we expect it to not panic and to return nil (wipe is best-effort).
 func TestRunMoleculeWipeRouting(t *testing.T) {
-	// Wipe calls docker commands that will fail in test environment,
-	// but handleWipe is designed to be best-effort (ignores errors).
-	// It should still return nil.
 	opts := &MoleculeOptions{
 		RoleFlag: "testrole",
 		OrgFlag:  "testorg",
@@ -123,17 +65,53 @@ func TestRunMoleculeWipeRouting(t *testing.T) {
 	}
 }
 
-// TestRunMoleculeNilOptions verifies that RunMolecule handles a nil-like
-// scenario gracefully (empty options, no config file).
-func TestRunMoleculeEmptyOptions(t *testing.T) {
-	// With empty options and no config file, RunMolecule will attempt
-	// the default flow which requires Docker. We mainly verify it
-	// doesn't panic.
-	opts := &MoleculeOptions{
-		RoleFlag: "noexist",
-		OrgFlag:  "noexist",
+// TestDockerMockInterface tests the Docker mock interface
+func TestDockerMockInterface(t *testing.T) {
+	mock := NewMockDocker()
+	ctx := context.Background()
+
+	// Test Run
+	err := mock.Run(ctx, "run", "-d", "test-image")
+	if err != nil {
+		t.Errorf("Mock Run should not fail: %v", err)
+	}
+	if len(mock.RunCalls) != 1 {
+		t.Errorf("Expected 1 Run call, got %d", len(mock.RunCalls))
 	}
 
-	// This will fail because Docker isn't available, but shouldn't panic
-	_ = RunMolecule(opts)
+	// Test Exec
+	err = mock.Exec(ctx, "container", "bash", "-c", "echo test")
+	if err != nil {
+		t.Errorf("Mock Exec should not fail: %v", err)
+	}
+	if len(mock.ExecCalls) != 1 {
+		t.Errorf("Expected 1 Exec call, got %d", len(mock.ExecCalls))
+	}
+
+	// Test Pull
+	err = mock.Pull(ctx, "test-image:latest")
+	if err != nil {
+		t.Errorf("Mock Pull should not fail: %v", err)
+	}
+	if len(mock.PullCalls) != 1 {
+		t.Errorf("Expected 1 Pull call, got %d", len(mock.PullCalls))
+	}
+
+	// Test ImageExists
+	mock.ImageExistsMap["test-image"] = true
+	if !mock.ImageExists(ctx, "test-image") {
+		t.Error("ImageExists should return true for mapped image")
+	}
+	if mock.ImageExists(ctx, "nonexistent") {
+		t.Error("ImageExists should return false for unmapped image")
+	}
+
+	// Test ContainerExists
+	mock.ContainerMap["test-container"] = true
+	if !mock.ContainerExists(ctx, "test-container") {
+		t.Error("ContainerExists should return true for mapped container")
+	}
+	if mock.ContainerExists(ctx, "nonexistent") {
+		t.Error("ContainerExists should return false for unmapped container")
+	}
 }

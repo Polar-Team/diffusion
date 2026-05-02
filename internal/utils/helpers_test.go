@@ -552,3 +552,95 @@ func BenchmarkExists(b *testing.B) {
 		_ = Exists(tmpFile.Name())
 	}
 }
+func TestExists_SimpleCase(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "test-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	if !Exists(tmpFile.Name()) {
+		t.Error("expected file to exist")
+	}
+
+	if Exists("nonexistent-file-12345") {
+		t.Error("expected nonexistent file to not exist")
+	}
+}
+
+func TestParseCollectionString_AdditionalCases(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantName    string
+		wantVersion string
+	}{
+		{"simple", "simple", ""},
+		{"name=1.0", "name", "=1.0"},
+		{"name>1.0", "name", ">1.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			gotName, gotVersion := ParseCollectionString(tt.input)
+			if gotName != tt.wantName || gotVersion != tt.wantVersion {
+				t.Errorf("ParseCollectionString(%q) = (%q, %q), want (%q, %q)", 
+					tt.input, gotName, gotVersion, tt.wantName, tt.wantVersion)
+			}
+		})
+	}
+}
+func TestValidateRegistryProvider_AllCases(t *testing.T) {
+	validProviders := []string{"YC", "AWS", "GCP", "Public"}
+	for _, provider := range validProviders {
+		t.Run(provider, func(t *testing.T) {
+			if err := ValidateRegistryProvider(provider); err != nil {
+				t.Errorf("expected %s to be valid, got error: %v", provider, err)
+			}
+		})
+	}
+
+	invalidProviders := []string{"invalid", "azure", "docker", "", "INVALID"}
+	for _, provider := range invalidProviders {
+		t.Run(provider, func(t *testing.T) {
+			if err := ValidateRegistryProvider(provider); err == nil {
+				t.Errorf("expected %s to be invalid", provider)
+			}
+		})
+	}
+}
+
+func TestValidateTestsType_AllCases(t *testing.T) {
+	validTypes := []string{"local", "remote", "diffusion"}
+	for _, testsType := range validTypes {
+		t.Run(testsType, func(t *testing.T) {
+			if err := ValidateTestsType(testsType); err != nil {
+				t.Errorf("expected %s to be valid, got error: %v", testsType, err)
+			}
+		})
+	}
+
+	invalidTypes := []string{"invalid", "custom", "", "INVALID"}
+	for _, testsType := range invalidTypes {
+		t.Run(testsType, func(t *testing.T) {
+			if err := ValidateTestsType(testsType); err == nil {
+				t.Errorf("expected %s to be invalid", testsType)
+			}
+		})
+	}
+}
+
+func TestGetImageURL_Construction(t *testing.T) {
+	registry := &config.ContainerRegistry{
+		RegistryServer:        "test.registry.com",
+		MoleculeContainerName: "test-container",
+		MoleculeContainerTag:  "v1.0.0",
+	}
+
+	expected := "test.registry.com/test-container:v1.0.0"
+	result := GetImageURL(registry)
+
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
+	}
+}

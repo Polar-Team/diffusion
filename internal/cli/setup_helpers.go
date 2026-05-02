@@ -48,16 +48,12 @@ func AnsibleGalaxyInit() (string, error) {
 
 	err = utils.RunCommandHide(false, "docker", args...)
 
-	perms := []string{
-		"run",
-	}
-
 	if permissions != "" {
-		perms := append(perms,
+		perms := []string{"run",
 			"-v", fmt.Sprintf("%s:/ansible", currentDir),
 			"-w", "/ansible",
 			fmt.Sprintf("ghcr.io/polar-team/diffusion-molecule-container:%s", utils.GetDefaultMoleculeTag()),
-			"chown", "-R", permissions, roleName)
+			"chown", "-R", permissions, roleName}
 		err = utils.RunCommandHide(false, "docker", perms...)
 	}
 
@@ -137,7 +133,7 @@ verifier:
 	// Create molecule.yml
 	moleculePath := filepath.Join(currentDir, roleName, "scenarios", "default", "molecule.yml")
 	if err := os.WriteFile(moleculePath, []byte(molecule_content), 0644); err != nil {
-		return "", fmt.Errorf("failed to create converge.yml: %w", err)
+		return "", fmt.Errorf("failed to create molecule.yml: %w", err)
 	}
 	// Create verify.yml
 	verifyPath := filepath.Join(currentDir, roleName, "scenarios", "default", "verify.yml")
