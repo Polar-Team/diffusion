@@ -65,7 +65,7 @@ jobs:
           docker run --rm ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }} --version
 
       - name: Run dive check
-        uses: MartinHeinz/dive-action@v1
+        uses: MartinHeinz/dive-action@v0.1.0
         with:
           image: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          config-file: ${{ github.workspace }}/.dive-ci.yml
+          config: ${{ github.workspace }}/mcp/.dive-ci
