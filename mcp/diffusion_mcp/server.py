@@ -144,7 +144,7 @@ def get_lock_file(project_path: str = "") -> str:
         return "No diffusion.lock found. Run 'diffusion deps lock' to generate one."
 
     try:
-        data = _load_toml(lock_path)
+        data = _load_yaml(lock_path)
         return json.dumps(data, indent=2, default=str)
     except Exception as e:
         return f"Error reading diffusion.lock: {e}"
@@ -307,7 +307,10 @@ def get_container_logs(role: str, tail: int = 100) -> str:
 
 
 @mcp.tool()
-def check_molecule_yml(project_path: str = "", scenario: str = "default") -> str:
+def check_molecule_yml(
+    project_path: str = "",
+    scenario: str = "default",
+) -> str:
     """Validate a molecule.yml scenario file and report issues.
 
     Checks for: driver config, platform definitions, provisioner settings,
@@ -1155,77 +1158,6 @@ def check_docker_environment() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool: get_cache_status
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-def get_cache_status(project_path: str = "") -> str:
-    """Get Diffusion cache status and details for a project.
-
-    Reads cache configuration from diffusion.toml and checks cache directories.
-
-    Args:
-        project_path: Path to the project root (auto-detected if empty).
-    """
-    root = Path(project_path) if project_path else _find_project_root()
-    if root is None:
-        return "Error: Could not find project root."
-
-    toml_path = root / "diffusion.toml"
-    if not toml_path.exists():
-        return "No diffusion.toml found."
-
-    try:
-        data = _load_toml(toml_path)
-    except Exception as e:
-        return f"Error reading diffusion.toml: {e}"
-
-    cache_cfg = data.get("cache", {})
-    if not cache_cfg:
-        return json.dumps(
-            {"enabled": False, "detail": "No [cache] section in diffusion.toml"},
-            indent=2,
-        )
-
-    result = {
-        "enabled": cache_cfg.get("enabled", False),
-        "cache_id": cache_cfg.get("cache_id", "not set"),
-        "cache_path": cache_cfg.get("cache_path", "default (~/.diffusion/cache)"),
-        "docker_cache": cache_cfg.get("docker_cache", False),
-        "uv_cache": cache_cfg.get("uv_cache", False),
-    }
-
-    # Check if cache directory exists
-    cache_id = cache_cfg.get("cache_id", "")
-    if cache_id:
-        # Diffusion stores caches under role_<cache_id>, not <cache_id> directly.
-        dir_name = f"role_{cache_id}"
-        default_cache_base = Path.home() / ".diffusion" / "cache" / dir_name
-        custom_path = cache_cfg.get("cache_path", "")
-        cache_base = Path(custom_path) / dir_name if custom_path else default_cache_base
-
-        if cache_base.exists():
-            subdirs = {}
-            for subdir in ["roles", "collections", "uv", "docker"]:
-                sd = cache_base / subdir
-                if sd.exists():
-                    files = list(sd.rglob("*"))
-                    total_size = sum(f.stat().st_size for f in files if f.is_file())
-                    subdirs[subdir] = {
-                        "files": len(files),
-                        "size_mb": round(total_size / (1024 * 1024), 2),
-                    }
-                else:
-                    subdirs[subdir] = "not present"
-            result["cache_contents"] = subdirs
-        else:
-            result["cache_directory"] = f"{cache_base} (does not exist)"
-
-    return json.dumps(result, indent=2)
-
-
-# ---------------------------------------------------------------------------
 # Tool: troubleshoot_molecule_container
 # ---------------------------------------------------------------------------
 
@@ -1512,9 +1444,7 @@ def run_diffusion_command(
         "show",
         "deps check",
         "deps resolve",
-        "cache status",
-        "cache list",
-        "artifact list",
+        "role",
         "--version",
     }
 

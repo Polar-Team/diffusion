@@ -18,6 +18,21 @@ env:
   IMAGE_NAME: diffusion-mcp-server
 
 jobs:
+  # ---------------------------------------------------------------
+  # Lint Dockerfile with hadolint
+  # ---------------------------------------------------------------
+  hadolint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: mcp/Dockerfile
+          config: mcp/.hadolint.yaml
+
   check-tag:
     runs-on: ubuntu-latest
     outputs:

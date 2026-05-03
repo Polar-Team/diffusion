@@ -1,0 +1,18 @@
+---
+# Hadolint configuration for MCP server Dockerfile
+# https://github.com/hadolint/hadolint
+
+# Ignore rules that don't apply to our multi-stage build
+ignored:
+  - DL3009  # Delete the apt-get lists after installing (we do this)
+  - DL3015  # Avoid additional packages by specifying --no-install-recommends (we do this)
+  - SC2086  # Double quote to prevent globbing (false positive with our ARG usage)
+
+# Trusted registries for base images
+trustedRegistries:
+  - docker.io
+  - golang
+  - python
+
+# Failure threshold
+failure-threshold: error
