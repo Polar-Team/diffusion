@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "diffusion": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", "./diffusion_tests:/project",
+        "diffusion-mcp-server:local"
+      ],
+      "autoApprove": [
+        "get_diffusion_config",
+        "get_lock_file",
+        "get_diffusion_cli_reference",
+        "get_server_version",
+        "get_requirements_yml",
+        "list_molecule_containers",
+        "list_molecule_scenarios",
+        "check_molecule_yml",
+        "check_verify_yml",
+        "check_docker_environment",
+        "run_diffusion_command"
+      ]
+    }
+  }
+}
