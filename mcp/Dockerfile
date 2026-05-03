@@ -15,8 +15,11 @@
 #     ghcr.io/polar-team/diffusion-mcp-server:latest
 # -------------------------------------------------------------------
 
+# DO NOT EDIT BELOW - VERSIONS MANAGED BY update-mcp-dockerfile.yml
 ARG GO_VERSION="1.25.4"
-ARG PYTHON_VERSION="3.13-slim"
+ARG PYTHON_VERSION="3.13.1-slim"
+ARG UV_VERSION="0.5.11"
+# DO NOT EDIT ABOVE - VERSIONS MANAGED BY update-mcp-dockerfile.yml
 
 # ---- stage 1: compile the diffusion Go binary ----
 FROM golang:${GO_VERSION} AS go-builder
@@ -38,21 +41,17 @@ RUN CGO_ENABLED=0 go build \
 # ---- stage 2: install Python deps into a venv ----
 FROM python:${PYTHON_VERSION} AS py-builder
 
+ARG UV_VERSION
+
 COPY pyproject.toml README.md /src/
 COPY diffusion_mcp/ /src/diffusion_mcp/
 
-RUN pip install --no-cache-dir uv && \
+RUN pip install --no-cache-dir "uv==${UV_VERSION}" && \
     uv venv /opt/venv && \
     uv pip install --python /opt/venv/bin/python /src && \
     rm -rf /root/.cache /tmp/*
 
-# ---- stage 3: final runtime image ----
-FROM python:${PYTHON_VERSION}
-
-LABEL maintainer="Daniel Dalavurak"
-LABEL org.label-schema.vendor="Polar Team"
-LABEL org.label-schema.name="diffusion-mcp-server"
-LABEL org.label-schema.description="MCP server for managing and troubleshooting Diffusion CLI environments"
+FROM python:${PYTHON_VERSION} as docker-builder
 
 # Install Docker CLI (needed for container management tools)
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -71,6 +70,18 @@ RUN apt-get update && \
     apt-get purge -y gnupg && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/* /tmp/*
+
+# ---- stage 3: final runtime image ----
+FROM python:${PYTHON_VERSION}
+
+LABEL maintainer="Daniel Dalavurak"
+LABEL org.label-schema.vendor="Polar Team"
+LABEL org.label-schema.name="diffusion-mcp-server"
+LABEL org.label-schema.description="MCP server for managing and troubleshooting Diffusion CLI environments"
+
+
+# Copy Docker CLI binary from docker-builder (statically linked, no extra libs needed)
+COPY --from=docker-builder /usr/bin/docker /usr/bin/docker
 
 # Copy diffusion binary from Go builder
 COPY --from=go-builder /usr/local/bin/diffusion /usr/local/bin/diffusion

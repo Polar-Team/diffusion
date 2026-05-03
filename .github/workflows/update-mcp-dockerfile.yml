@@ -1,0 +1,87 @@
+name: Update MCP Dockerfile Versions
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Weekly on Monday at 6 AM UTC
+  workflow_dispatch:
+
+jobs:
+  update-versions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest versions
+        id: versions
+        run: |
+          # Get Go version
+          GO_VERSION=$(curl -s https://go.dev/VERSION?m=text | sed 's/go//')
+          echo "go_version=$GO_VERSION" >> $GITHUB_OUTPUT
+          
+          # Get Python version (latest 3.13.x)
+          PYTHON_VERSION=$(curl -s https://registry.hub.docker.com/v2/repositories/library/python/tags/?page_size=100 | \
+            jq -r '.results[].name' | grep -E '^3\.13\.[0-9]+-slim$' | sort -V | tail -1)
+          echo "python_version=$PYTHON_VERSION" >> $GITHUB_OUTPUT
+          
+          # Get UV version
+          UV_VERSION=$(curl -s https://api.github.com/repos/astral-sh/uv/releases/latest | jq -r '.tag_name')
+          echo "uv_version=$UV_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update Dockerfile
+        run: |
+          DOCKERFILE="mcp/Dockerfile"
+          
+          # Update versions between the markers
+          sed -i '/# DO NOT EDIT BELOW/,/# DO NOT EDIT ABOVE/{
+            s/ARG GO_VERSION="[^"]*"/ARG GO_VERSION="${{ steps.versions.outputs.go_version }}"/
+            s/ARG PYTHON_VERSION="[^"]*"/ARG PYTHON_VERSION="${{ steps.versions.outputs.python_version }}"/
+            s/ARG UV_VERSION="[^"]*"/ARG UV_VERSION="${{ steps.versions.outputs.uv_version }}"/
+          }' "$DOCKERFILE"
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet mcp/Dockerfile; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            chore(mcp): update Dockerfile versions
+            
+            - Go: ${{ steps.versions.outputs.go_version }}
+            - Python: ${{ steps.versions.outputs.python_version }}
+            - UV: ${{ steps.versions.outputs.uv_version }}
+          title: "chore(mcp): update Dockerfile versions"
+          body: |
+            ## MCP Dockerfile Version Updates
+            
+            This PR updates the pinned versions in the MCP server Dockerfile:
+            
+            | Component | Version |
+            |-----------|---------|
+            | Go | `${{ steps.versions.outputs.go_version }}` |
+            | Python | `${{ steps.versions.outputs.python_version }}` |
+            | UV | `${{ steps.versions.outputs.uv_version }}` |
+            
+            **Automated by:** `update-mcp-dockerfile.yml`
+            **Hadolint compliance:** Critical versions are pinned, Docker CLI uses latest stable
+          branch: chore/update-mcp-dockerfile-versions
+          delete-branch: true
+          labels: |
+            dependencies
+            mcp
+            automated
