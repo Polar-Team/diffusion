@@ -6,7 +6,7 @@
         "run", "--rm", "-i",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-v", "./diffusion_tests:/project",
-        "diffusion-mcp-server:local"
+        "ghcr.io/polar-team/diffusion-mcp-server:latest-amd64"
       ],
       "autoApprove": [
         "get_diffusion_config",
