@@ -51,6 +51,15 @@ func TestMoleculeCommand(t *testing.T) {
 	if cmd.RunE == nil {
 		t.Error("expected RunE to be set")
 	}
+	
+	// Test scenario flag is registered
+	scenarioFlag := cmd.Flags().Lookup("scenario")
+	if scenarioFlag == nil {
+		t.Error("expected --scenario flag to be registered")
+	}
+	if scenarioFlag.Shorthand != "s" {
+		t.Errorf("expected scenario flag shorthand 's', got %q", scenarioFlag.Shorthand)
+	}
 }
 
 // TestArtifactCommand tests artifact command structure

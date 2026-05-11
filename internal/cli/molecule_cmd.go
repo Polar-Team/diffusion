@@ -165,6 +165,7 @@ func NewMoleculeCmd(cli *CLI) *cobra.Command {
 
 	molCmd.Flags().StringVarP(&cli.RoleFlag, "role", "r", cli.RoleFlag, "role name")
 	molCmd.Flags().StringVarP(&cli.OrgFlag, "org", "o", cli.OrgFlag, "organization prefix")
+	molCmd.Flags().StringVarP(&cli.RoleScenario, "scenario", "s", "", "molecule scenario name (default: 'default')")
 	molCmd.Flags().StringVarP(&cli.TagFlag, "tag", "t", "", "Ansible tags to run (comma-separated, e.g., 'install,configure')")
 	molCmd.Flags().BoolVar(&cli.ConvergeFlag, "converge", false, "run molecule converge")
 	molCmd.Flags().BoolVar(&cli.VerifyFlag, "verify", false, "run molecule verify")
