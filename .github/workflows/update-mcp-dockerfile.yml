@@ -22,17 +22,29 @@ jobs:
         id: versions
         run: |
           # Get Go version
-          GO_VERSION=$(curl -s https://go.dev/VERSION?m=text | sed 's/go//')
-          echo "go_version=${GO_VERSION}" >> "$GITHUB_OUTPUT"
+          GO_VERSION=$(curl -s https://go.dev/VERSION?m=text | sed 's/go//' | tr -d '\n')
+          if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "Error: Invalid Go version format: $GO_VERSION"
+            exit 1
+          fi
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
           
           # Get Python version (latest 3.13.x)
           PYTHON_VERSION=$(curl -s https://registry.hub.docker.com/v2/repositories/library/python/tags/?page_size=100 | \
-            jq -r '.results[].name' | grep -E '^3\.13\.[0-9]+-slim$' | sort -V | tail -1)
-          echo "python_version=${PYTHON_VERSION}" >> "$GITHUB_OUTPUT"
+            jq -r '.results[].name' | grep -E '^3\.13\.[0-9]+-slim$' | sort -V | tail -1 | tr -d '\n')
+          if [[ ! "$PYTHON_VERSION" =~ ^3\.13\.[0-9]+-slim$ ]]; then
+            echo "Error: Invalid Python version format: $PYTHON_VERSION"
+            exit 1
+          fi
+          echo "python_version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
           
           # Get UV version
-          UV_VERSION=$(curl -s https://api.github.com/repos/astral-sh/uv/releases/latest | jq -r '.tag_name')
-          echo "uv_version=${UV_VERSION}" >> "$GITHUB_OUTPUT"
+          UV_VERSION=$(curl -s https://api.github.com/repos/astral-sh/uv/releases/latest | jq -r '.tag_name' | tr -d '\n')
+          if [[ ! "$UV_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Invalid UV version format: $UV_VERSION"
+            exit 1
+          fi
+          echo "uv_version=$UV_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Update Dockerfile
         run: |
