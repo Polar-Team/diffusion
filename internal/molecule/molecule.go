@@ -39,6 +39,14 @@ type MoleculeOptions struct {
 	ForceFlag       bool
 }
 
+// scenarioFlag returns " -s <scenario>" if scenario is non-default, otherwise empty string.
+func scenarioFlag(opts *MoleculeOptions) string {
+	if opts.RoleScenario != "" && opts.RoleScenario != config.DefaultScenario {
+		return fmt.Sprintf(" -s %s", opts.RoleScenario)
+	}
+	return ""
+}
+
 // RunMolecule is the core function that implements the molecule workflow.
 // It handles wipe, converge, lint, verify, idempotence, destroy and the
 // default create/converge flow.
@@ -87,7 +95,7 @@ func handleWipe(opts *MoleculeOptions, cfg *config.Config, roleDirName, roleMole
 	// Run molecule destroy inside the container first
 	roleDir := utils.GetRoleDirName(opts.OrgFlag, opts.RoleFlag)
 	// Best-effort: container may already be destroyed or never created.
-	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "bash", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule destroy", roleDir))
+	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "bash", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule destroy%s", roleDir, scenarioFlag(opts)))
 
 	// Save DinD images before removing the container
 	if cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.DockerCache {
@@ -199,7 +207,7 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	if opts.ForceFlag {
 		galaxyInstall = fmt.Sprintf("ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && ", scenario)
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule converge", roleDirName, galaxyInstall, tagEnv)
+	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule converge%s", roleDirName, galaxyInstall, tagEnv, scenarioFlag(opts))
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf(config.ColorRed+"Converge failed: %v"+config.ColorReset, err)
 		return fmt.Errorf("converge failed: %w", err)
@@ -258,7 +266,7 @@ func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, rol
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && %smolecule verify", roleDirName, tagEnv)
+	cmdStr := fmt.Sprintf("cd ./%s && %smolecule verify%s", roleDirName, tagEnv, scenarioFlag(opts))
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf(config.ColorRed+"Verify failed: %v"+config.ColorReset, err)
 		return fmt.Errorf("verify failed: %w", err)
@@ -398,7 +406,7 @@ func runIdempotence(opts *MoleculeOptions, roleDirName string) error {
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && %smolecule idempotence", roleDirName, tagEnv)
+	cmdStr := fmt.Sprintf("cd ./%s && %smolecule idempotence%s", roleDirName, tagEnv, scenarioFlag(opts))
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf(config.ColorRed+"Idempotence failed: %v"+config.ColorReset, err)
 		return fmt.Errorf("idempotence failed: %w", err)
@@ -409,7 +417,7 @@ func runIdempotence(opts *MoleculeOptions, roleDirName string) error {
 
 // runDestroy runs molecule destroy inside the container.
 func runDestroy(opts *MoleculeOptions, roleDirName string) error {
-	cmdStr := fmt.Sprintf("cd ./%s && molecule destroy", roleDirName)
+	cmdStr := fmt.Sprintf("cd ./%s && molecule destroy%s", roleDirName, scenarioFlag(opts))
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf(config.ColorRed+"Destroy failed: %v"+config.ColorReset, err)
 		return fmt.Errorf("destroy failed: %w", err)
@@ -506,7 +514,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
 			log.Printf(config.ColorYellow+"warning: uv-sync failed (container-exists path): %v"+config.ColorReset, err)
 		}
-		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall)); err != nil {
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge%s", roleDirName, galaxyInstall, scenarioFlag(opts))); err != nil {
 			log.Printf(config.ColorYellow+"warning: converge failed (container-exists path): %v"+config.ColorReset, err)
 		}
 	} else {
@@ -515,10 +523,10 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 			log.Printf(config.ColorYellow+"Warning: uv-sync failed: %v"+config.ColorReset, err)
 			log.Printf(config.ColorYellow + "Continuing with existing dependencies..." + config.ColorReset)
 		}
-		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create", roleDirName)); err != nil {
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create%s", roleDirName, scenarioFlag(opts))); err != nil {
 			log.Printf(config.ColorYellow+"warning: molecule create failed: %v"+config.ColorReset, err)
 		}
-		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge", roleDirName, galaxyInstall)); err != nil {
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge%s", roleDirName, galaxyInstall, scenarioFlag(opts))); err != nil {
 			log.Printf(config.ColorYellow+"warning: converge failed: %v"+config.ColorReset, err)
 		}
 	}
