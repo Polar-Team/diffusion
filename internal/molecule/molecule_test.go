@@ -115,3 +115,40 @@ func TestDockerMockInterface(t *testing.T) {
 		t.Error("ContainerExists should return false for unmapped container")
 	}
 }
+
+// TestScenarioFlag tests the scenarioFlag helper function
+func TestScenarioFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		scenario string
+		want     string
+	}{
+		{
+			name:     "empty scenario",
+			scenario: "",
+			want:     "",
+		},
+		{
+			name:     "default scenario",
+			scenario: "default",
+			want:     "",
+		},
+		{
+			name:     "custom scenario",
+			scenario: "production",
+			want:     " -s production",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &MoleculeOptions{
+				RoleScenario: tt.scenario,
+			}
+			got := scenarioFlag(opts)
+			if got != tt.want {
+				t.Errorf("scenarioFlag() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
