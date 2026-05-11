@@ -16,9 +16,9 @@
 # -------------------------------------------------------------------
 
 # DO NOT EDIT BELOW - VERSIONS MANAGED BY update-mcp-dockerfile.yml
-ARG GO_VERSION="1.25.4"
-ARG PYTHON_VERSION="3.13.1-slim"
-ARG UV_VERSION="0.5.11"
+ARG GO_VERSION="1.26.3time 2026-05-04T20:36:18Z"
+ARG PYTHON_VERSION="3.13.13-slim"
+ARG UV_VERSION="0.11.13"
 # DO NOT EDIT ABOVE - VERSIONS MANAGED BY update-mcp-dockerfile.yml
 
 # ---- stage 1: compile the diffusion Go binary ----
