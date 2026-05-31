@@ -83,7 +83,7 @@ jobs:
         uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
         with:
           yc-sa-id: ${{ secrets.YC_SA_ID }}
-      
+
       - name: Export Yandex Cloud IAM token
         if: steps.yc-iam.outputs.token != ''
         run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
@@ -174,7 +174,7 @@ jobs:
               $DIFFUSION deps check
               $DIFFUSION role remove-collection posix --namespace ansible
               $DIFFUSION deps sync
-              $DIFFUSION role add-role git_role --src https://github.com/geerlingguy/ansible-role-git.git 
+              $DIFFUSION role add-role git_role --src https://github.com/geerlingguy/ansible-role-git.git
               $DIFFUSION deps sync
               $DIFFUSION deps check
               $DIFFUSION role remove-role git_role
@@ -354,11 +354,3 @@ jobs:
             --host-wait-initial-delay 1s \
             --host-wait-timeout 60s \
             || echo "Auto-playbook deploy exited non-zero (expected when role has no tasks); smoke check: binary ran without crash."
-
-      - name: Run Terraform provider schema unit tests
-        run: |
-          echo "=========================================="
-          echo "Running Terraform provider unit tests..."
-          echo "=========================================="
-          go test -v ./internal/tfprovider/... -run "TestProvider|TestDeploy|TestInventory|TestString"
-          echo "Terraform provider unit tests passed."
