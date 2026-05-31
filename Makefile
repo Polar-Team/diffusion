@@ -1,8 +1,9 @@
 # Diffusion Makefile
 # Build configuration for cross-platform compilation
 
-# Binary name
+# Binary names
 BINARY_NAME=diffusion
+PROVIDER_NAME=diffusion-terraform-provider
 
 # Version - extract semver from git tags (x.x.x format only)
 # Strips git commit info and dirty flag, keeps only version number
@@ -10,6 +11,7 @@ VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null | sed -E 's/^v
 
 # Build flags
 LDFLAGS=-ldflags "-s -w -X diffusion/internal/cli.Version=$(VERSION)"
+PROVIDER_LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
 
 # Output directory
 BIN_DIR=./bin
@@ -42,14 +44,18 @@ else
     COLOR_BLUE=\033[34m
 endif
 
-.PHONY: all build clean test dist help linux darwin windows \
+.PHONY: all build build-provider clean test dist dist-provider dist-all help linux darwin windows \
         linux-amd64 linux-arm64 linux-arm \
         darwin-amd64 darwin-arm64 \
         windows-amd64 windows-arm64 windows-arm \
+        provider-linux provider-darwin provider-windows \
+        provider-linux-amd64 provider-linux-arm64 provider-linux-arm \
+        provider-darwin-amd64 provider-darwin-arm64 \
+        provider-windows-amd64 provider-windows-arm64 provider-windows-arm \
         version
 
 # Default target
-all: build
+all: build build-provider
 
 # Show version information
 version:
@@ -100,6 +106,13 @@ build:
 	@go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)$(shell go env GOEXE) ./cmd/diffusion
 	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(BINARY_NAME)$(shell go env GOEXE)$(COLOR_RESET)"
 
+# Build Terraform provider for current platform
+build-provider:
+	@echo "$(COLOR_GREEN)Building $(PROVIDER_NAME) for $(GOOS)/$(GOARCH)...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)$(shell go env GOEXE) ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)$(shell go env GOEXE)$(COLOR_RESET)"
+
 # Build for all platforms
 dist: clean linux darwin windows
 	@echo ""
@@ -107,6 +120,16 @@ dist: clean linux darwin windows
 	@echo ""
 	@echo "$(COLOR_BOLD)Built binaries:$(COLOR_RESET)"
 	@ls -lh $(BIN_DIR)/ 2>/dev/null || dir $(BIN_DIR)
+
+# Build Terraform provider for all platforms
+dist-provider: provider-linux provider-darwin provider-windows
+	@echo ""
+	@echo "$(COLOR_BOLD)$(COLOR_GREEN)✓ Provider distribution build complete!$(COLOR_RESET)"
+
+# Build both diffusion and the provider for all platforms
+dist-all: dist dist-provider
+	@echo ""
+	@echo "$(COLOR_BOLD)$(COLOR_GREEN)✓ Full distribution build complete!$(COLOR_RESET)"
 
 # Linux builds
 linux: linux-amd64 linux-arm64 linux-arm
@@ -170,6 +193,62 @@ test:
 	@echo "$(COLOR_YELLOW)Running tests...$(COLOR_RESET)"
 	@go test -v ./...
 	@echo "$(COLOR_GREEN)✓ Tests passed$(COLOR_RESET)"
+
+# ─── Terraform Provider platform targets ─────────────────────────────────────
+
+provider-linux: provider-linux-amd64 provider-linux-arm64 provider-linux-arm
+
+provider-linux-amd64:
+	@echo "$(COLOR_YELLOW)Building provider for Linux AMD64...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=linux GOARCH=amd64 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-linux-amd64 ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-linux-amd64$(COLOR_RESET)"
+
+provider-linux-arm64:
+	@echo "$(COLOR_YELLOW)Building provider for Linux ARM64...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=linux GOARCH=arm64 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-linux-arm64 ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-linux-arm64$(COLOR_RESET)"
+
+provider-linux-arm:
+	@echo "$(COLOR_YELLOW)Building provider for Linux ARM...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=linux GOARCH=arm GOARM=7 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-linux-arm ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-linux-arm$(COLOR_RESET)"
+
+provider-darwin: provider-darwin-amd64 provider-darwin-arm64
+
+provider-darwin-amd64:
+	@echo "$(COLOR_YELLOW)Building provider for macOS AMD64 (Intel)...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=darwin GOARCH=amd64 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-darwin-amd64 ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-darwin-amd64$(COLOR_RESET)"
+
+provider-darwin-arm64:
+	@echo "$(COLOR_YELLOW)Building provider for macOS ARM64 (Apple Silicon)...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=darwin GOARCH=arm64 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-darwin-arm64 ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-darwin-arm64$(COLOR_RESET)"
+
+provider-windows: provider-windows-amd64 provider-windows-arm64 provider-windows-arm
+
+provider-windows-amd64:
+	@echo "$(COLOR_YELLOW)Building provider for Windows AMD64...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=windows GOARCH=amd64 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-windows-amd64.exe ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-windows-amd64.exe$(COLOR_RESET)"
+
+provider-windows-arm64:
+	@echo "$(COLOR_YELLOW)Building provider for Windows ARM64...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=windows GOARCH=arm64 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-windows-arm64.exe ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-windows-arm64.exe$(COLOR_RESET)"
+
+provider-windows-arm:
+	@echo "$(COLOR_YELLOW)Building provider for Windows ARM...$(COLOR_RESET)"
+	@mkdir -p $(BIN_DIR)
+	@GOOS=windows GOARCH=arm GOARM=7 go build $(PROVIDER_LDFLAGS) -o $(BIN_DIR)/$(PROVIDER_NAME)-windows-arm.exe ./cmd/diffusion-terraform-provider
+	@echo "$(COLOR_GREEN)✓ Built: $(BIN_DIR)/$(PROVIDER_NAME)-windows-arm.exe$(COLOR_RESET)"
 
 # Clean build artifacts
 clean:

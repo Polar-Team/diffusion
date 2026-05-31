@@ -185,13 +185,13 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	// Verify molecule.yml exists inside container before running
 	if opts.CIMode {
 		checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
-		log.Printf("Checking molecule.yml —container...")
+		log.Printf("Checking molecule.yml in container...")
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", checkCmd); err != nil {
-			log.Printf(config.ColorRed+"molecule.yml not found —container at /opt/molecule/%s/molecule/default/"+config.ColorReset, roleDirName)
+			log.Printf(config.ColorRed+"molecule.yml not found  in container at /opt/molecule/%s/molecule/default/"+config.ColorReset, roleDirName)
 			log.Printf(config.ColorYellow + "Listing container directory structure:" + config.ColorReset)
 			// Best-effort debug listing — output shown regardless of success/failure.
 			_ = utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("ls -laR /opt/molecule/%s/", roleDirName))
-			return fmt.Errorf("molecule.yml not found —container at /opt/molecule/%s/molecule/default/", roleDirName)
+			return fmt.Errorf("molecule.yml not found in container at /opt/molecule/%s/molecule/default/", roleDirName)
 		}
 	}
 
@@ -914,7 +914,7 @@ func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) erro
 // ensureRole initializes or validates the role directory inside the container.
 func ensureRole(opts *MoleculeOptions, roleMoleculePath string) {
 	if utils.Exists(roleMoleculePath) {
-		fmt.Println(config.ColorMagenta + "This role already exists —molecule" + config.ColorReset)
+		fmt.Println(config.ColorMagenta + "This role already exists  in molecule" + config.ColorReset)
 	} else {
 		if err := utils.DockerExecInteractive(
 			opts.RoleFlag, "/bin/sh", opts.CIMode,
