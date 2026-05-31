@@ -266,6 +266,7 @@ jobs:
           git config user.name "CI"
           git add .
           git commit -m "init"
+          git branch -M main
 
       - name: Create debug playbook
         run: |

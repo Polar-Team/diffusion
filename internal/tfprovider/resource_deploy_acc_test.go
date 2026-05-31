@@ -89,6 +89,7 @@ collections: []
 
 	runCmd(t, dir, "git", "add", ".")
 	runCmd(t, dir, "git", "commit", "-m", "init")
+	runCmd(t, dir, "git", "branch", "-M", "main")
 
 	return "file://" + filepath.ToSlash(dir)
 }
