@@ -205,30 +205,30 @@ jobs:
               DEPLOY_FIXTURE="/tmp/diffusion-deploy-fixture"
               mkdir -p "$DEPLOY_FIXTURE/meta"
 
-              cat > "$DEPLOY_FIXTURE/diffusion.lock" <<LOCKEOF
-version: "1.0"
-generated: "2024-01-01T00:00:00Z"
-hash: "ci-deploy-fixture"
-python:
-  min: "3.11"
-  max: "3.13"
-  pinned: "3.13"
-roles: []
-collections: []
-tools: []
-LOCKEOF
+              printf '%s\n' \
+                'version: "1.0"' \
+                'generated: "2024-01-01T00:00:00Z"' \
+                'hash: "ci-deploy-fixture"' \
+                'python:' \
+                '  min: "3.11"' \
+                '  max: "3.13"' \
+                '  pinned: "3.13"' \
+                'roles: []' \
+                'collections: []' \
+                'tools: []' \
+                > "$DEPLOY_FIXTURE/diffusion.lock"
 
-              cat > "$DEPLOY_FIXTURE/meta/main.yml" <<METAEOF
-galaxy_info:
-  role_name: deploy_test
-  namespace: ci
-  author: CI
-  description: Deploy smoke test fixture
-  license: MIT
-  min_ansible_version: "2.10"
-  platforms: []
-collections: []
-METAEOF
+              printf '%s\n' \
+                'galaxy_info:' \
+                '  role_name: deploy_test' \
+                '  namespace: ci' \
+                '  author: CI' \
+                '  description: Deploy smoke test fixture' \
+                '  license: MIT' \
+                '  min_ansible_version: "2.10"' \
+                '  platforms: []' \
+                'collections: []' \
+                > "$DEPLOY_FIXTURE/meta/main.yml"
 
               git -C "$DEPLOY_FIXTURE" init
               git -C "$DEPLOY_FIXTURE" config user.email "ci@ci.com"
@@ -237,16 +237,16 @@ METAEOF
               git -C "$DEPLOY_FIXTURE" commit -m "init"
               git -C "$DEPLOY_FIXTURE" branch -M main
 
-              cat > /tmp/deploy-test.yml <<PLAYBOOKEOF
----
-- name: "diffusion deploy smoke test"
-  hosts: all
-  gather_facts: false
-  tasks:
-    - name: smoke check
-      ansible.builtin.debug:
-        msg: "diffusion deploy E2E test passed on ${{ matrix.os }}"
-PLAYBOOKEOF
+              printf '%s\n' \
+                '---' \
+                '- name: diffusion deploy smoke test' \
+                '  hosts: all' \
+                '  gather_facts: false' \
+                '  tasks:' \
+                '    - name: smoke check' \
+                '      ansible.builtin.debug:' \
+                '        msg: diffusion deploy E2E test passed' \
+                > /tmp/deploy-test.yml
 
               ROLE_SOURCE="scm=git,version=main,url=file://${DEPLOY_FIXTURE}"
 
