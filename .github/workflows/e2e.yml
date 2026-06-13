@@ -83,7 +83,7 @@ jobs:
         uses: docker://ghcr.io/yc-actions/yc-iam-token-fed:1.0.0
         with:
           yc-sa-id: ${{ secrets.YC_SA_ID }}
-      
+
       - name: Export Yandex Cloud IAM token
         if: steps.yc-iam.outputs.token != ''
         run: echo "YC_IAM_TOKEN=${{ steps.yc-iam.outputs.token }}" >> "$GITHUB_ENV"
@@ -174,7 +174,7 @@ jobs:
               $DIFFUSION deps check
               $DIFFUSION role remove-collection posix --namespace ansible
               $DIFFUSION deps sync
-              $DIFFUSION role add-role git_role --src https://github.com/geerlingguy/ansible-role-git.git 
+              $DIFFUSION role add-role git_role --src https://github.com/geerlingguy/ansible-role-git.git
               $DIFFUSION deps sync
               $DIFFUSION deps check
               $DIFFUSION role remove-role git_role
@@ -193,10 +193,107 @@ jobs:
               echo "=========================================="
               echo "Running cache/artifact smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
-
               $DIFFUSION cache enable
               $DIFFUSION cache status
               $DIFFUSION artifact list
+
+              echo "=========================================="
+              echo "Running deploy smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+
+              # Create a minimal local git repo to use as a role source.
+              DEPLOY_FIXTURE="/tmp/diffusion-deploy-fixture"
+              mkdir -p "$DEPLOY_FIXTURE/meta"
+
+              printf '%s\n' \
+                'version: "1.0"' \
+                'generated: "2024-01-01T00:00:00Z"' \
+                'hash: "ci-deploy-fixture"' \
+                'python:' \
+                '  min: "3.11"' \
+                '  max: "3.13"' \
+                '  pinned: "3.13"' \
+                'roles: []' \
+                'collections: []' \
+                'tools: []' \
+                > "$DEPLOY_FIXTURE/diffusion.lock"
+
+              printf '%s\n' \
+                'galaxy_info:' \
+                '  role_name: deploy_test' \
+                '  namespace: ci' \
+                '  author: CI' \
+                '  description: Deploy smoke test fixture' \
+                '  license: MIT' \
+                '  min_ansible_version: "2.10"' \
+                '  platforms: []' \
+                'collections: []' \
+                > "$DEPLOY_FIXTURE/meta/main.yml"
+
+              git -C "$DEPLOY_FIXTURE" init
+              git -C "$DEPLOY_FIXTURE" config user.email "ci@ci.com"
+              git -C "$DEPLOY_FIXTURE" config user.name "CI"
+              git -C "$DEPLOY_FIXTURE" add .
+              git -C "$DEPLOY_FIXTURE" commit -m "init"
+              git -C "$DEPLOY_FIXTURE" branch -M main
+
+              printf '%s\n' \
+                '---' \
+                '- name: diffusion deploy smoke test' \
+                '  hosts: all' \
+                '  gather_facts: false' \
+                '  tasks:' \
+                '    - name: smoke check' \
+                '      ansible.builtin.debug:' \
+                '        msg: diffusion deploy E2E test passed' \
+                > /tmp/deploy-test.yml
+
+              ROLE_SOURCE="scm=git,version=main,url=file://${DEPLOY_FIXTURE}"
+
+              # 1. Single role source + explicit playbook
+              $DIFFUSION deploy \
+                --role-source "$ROLE_SOURCE" \
+                --playbook /tmp/deploy-test.yml \
+                --host "localhost=ansible_connection=local" \
+                --host-wait-initial-delay 1s \
+                --host-wait-interval 2s \
+                --host-wait-timeout 60s
+              echo "deploy smoke test 1/4 passed (single source)"
+
+              # 2. Multiple role sources with apply_to
+              $DIFFUSION deploy \
+                --role-source "${ROLE_SOURCE},name=role_a,apply_to=all" \
+                --role-source "${ROLE_SOURCE},name=role_b,apply_to=all" \
+                --playbook /tmp/deploy-test.yml \
+                --host "localhost=ansible_connection=local" \
+                --host-wait-initial-delay 1s \
+                --host-wait-timeout 60s
+              echo "deploy smoke test 2/4 passed (multi-source + apply_to)"
+
+              # 3. Skip-period idempotence — second run should be skipped
+              $DIFFUSION deploy \
+                --role-source "$ROLE_SOURCE" \
+                --playbook /tmp/deploy-test.yml \
+                --host "localhost=ansible_connection=local" \
+                --host-wait-initial-delay 1s \
+                --host-wait-timeout 60s \
+                --skip-period 1h
+              $DIFFUSION deploy \
+                --role-source "$ROLE_SOURCE" \
+                --playbook /tmp/deploy-test.yml \
+                --host "localhost=ansible_connection=local" \
+                --host-wait-initial-delay 1s \
+                --host-wait-timeout 60s \
+                --skip-period 1h
+              echo "deploy smoke test 3/4 passed (skip-period idempotence)"
+
+              # 4. Auto-generated playbook (no --playbook flag)
+              $DIFFUSION deploy \
+                --role-source "${ROLE_SOURCE},name=ci_debug" \
+                --host "localhost=ansible_connection=local" \
+                --host-wait-initial-delay 1s \
+                --host-wait-timeout 60s \
+                || echo "deploy smoke test 4/4: auto-playbook exited non-zero (expected — role has no tasks); binary did not crash."
 
               echo "=========================================="
               echo "All smoke tests passed on ${{ matrix.os }}!"

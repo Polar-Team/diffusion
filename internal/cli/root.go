@@ -62,6 +62,7 @@ func Execute() {
 	rootCmd.AddCommand(NewMoleculeCmd(cli))
 	rootCmd.AddCommand(NewShowCmd(cli))
 	rootCmd.AddCommand(NewDepsCmd(cli))
+	rootCmd.AddCommand(NewDeployCmd(cli))
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
