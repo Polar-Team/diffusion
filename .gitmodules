@@ -4,3 +4,6 @@
 [submodule "diffusion-molecule-container"]
 	path = diffusion-molecule-container
 	url = https://github.com/Polar-Team/diffusion-molecule-container.git
+[submodule "terraform-provider-diffusion"]
+	path = terraform-provider-diffusion
+	url = https://github.com/Polar-Team/terraform-provider-diffusion.git
