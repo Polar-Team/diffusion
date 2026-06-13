@@ -221,6 +221,8 @@ runs:
       if: steps.deps-check.outputs.sync-required == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule converge"
         diffusion molecule --ci --scenario ${{ inputs.scenario }} --force
@@ -230,24 +232,30 @@ runs:
       if: steps.deps-check.outputs.sync-required == 'true' && inputs.run-lint == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule lint"
-        diffusion molecule --ci ${{ inputs.scenario }} --lint
+        diffusion molecule --ci --scenario ${{ inputs.scenario }} --lint
         echo "::endgroup::"
 
     - name: Run verify
       if: steps.deps-check.outputs.sync-required == 'true' && inputs.run-verify == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule verify"
-        diffusion molecule --ci ${{ inputs.scenario }} --verify
+        diffusion molecule --ci --scenario ${{ inputs.scenario }} --verify
         echo "::endgroup::"
 
     - name: Run idempotence
       if: steps.deps-check.outputs.sync-required == 'true' && inputs.run-idempotence == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule idempotence"
         diffusion molecule --ci --scenario ${{ inputs.scenario }} --idempotence
