@@ -7,11 +7,14 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"diffusion/internal/config"
 	"diffusion/internal/utils"
+
+	"gopkg.in/yaml.v3"
 )
 
 // WaitConfig holds the configuration for the host reachability wait phase.
@@ -97,20 +100,51 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 	// Pass through SSH-related env vars from the deploy config.
 	args = appendDeployEnvArgs(args, cfg)
 
-	// Mount SSH keys directory if the inventory references key files.
+	// Mount the user's ~/.ssh directory.
 	if sshDir := sshKeyDir(); sshDir != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
 	}
 
+	// Mount any additional SSH key directories referenced in the inventory.
+	// This handles keys outside ~/.ssh (e.g. project-local generated keys from Terraform).
+	extraDirs := extractSSHKeyDirs(inventoryPath)
+	for i, dir := range extraDirs {
+		containerPath := fmt.Sprintf("/probe/ssh-keys-%d", i)
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", dir, containerPath))
+	}
+
 	args = append(args, image)
 
-	// The container entrypoint: ansible ping with a short per-host timeout.
-	args = append(args,
-		"ansible", "all",
-		"-i", "/probe/inventory.yml",
-		"-m", "ansible.builtin.ping",
-		"--timeout", "5",
-	)
+	// Build the container command: rewrite inventory key paths, then run ansible ping.
+	if len(extraDirs) > 0 {
+		// Use a shell wrapper to sed-replace host paths with container paths in the inventory.
+		sedExpr := ""
+		for i, dir := range extraDirs {
+			containerPath := fmt.Sprintf("/probe/ssh-keys-%d", i)
+			// Escape slashes for sed (handle both forward and backslash paths).
+			hostEscaped := strings.ReplaceAll(dir, "/", "\\/")
+			containerEscaped := strings.ReplaceAll(containerPath, "/", "\\/")
+			sedExpr += fmt.Sprintf("s/%s/%s/g;", hostEscaped, containerEscaped)
+			// Also handle Windows backslash paths that might end up in YAML.
+			hostWinEscaped := strings.ReplaceAll(strings.ReplaceAll(dir, "\\", "/"), "/", "\\/")
+			if hostWinEscaped != hostEscaped {
+				sedExpr += fmt.Sprintf("s/%s/%s/g;", hostWinEscaped, containerEscaped)
+			}
+		}
+		shellCmd := fmt.Sprintf(
+			"cp /probe/inventory.yml /tmp/inventory.yml && sed -i '%s' /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5",
+			sedExpr,
+		)
+		args = append(args, "sh", "-c", shellCmd)
+	} else {
+		// No extra mounts needed — run ansible ping directly.
+		args = append(args,
+			"ansible", "all",
+			"-i", "/probe/inventory.yml",
+			"-m", "ansible.builtin.ping",
+			"--timeout", "5",
+		)
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout = io.Discard
@@ -170,4 +204,65 @@ func ParseWaitDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid duration %q: use Go duration format (e.g. \"10s\", \"5m\", \"1h\"): %w", s, err)
 	}
 	return d, nil
+}
+
+// extractSSHKeyDirs parses the inventory YAML and returns unique directory paths
+// for any ansible_ssh_private_key_file values that are NOT under ~/.ssh.
+// These directories need to be mounted into the container.
+func extractSSHKeyDirs(inventoryPath string) []string {
+	data, err := os.ReadFile(inventoryPath)
+	if err != nil {
+		return nil
+	}
+
+	// Parse inventory to extract host vars.
+	var inv map[string]interface{}
+	if err := yaml.Unmarshal(data, &inv); err != nil {
+		return nil
+	}
+
+	sshHome := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		sshHome = filepath.Join(home, ".ssh")
+	}
+
+	seen := make(map[string]bool)
+	var dirs []string
+
+	// Walk the inventory tree looking for ansible_ssh_private_key_file values.
+	walkInventoryForKeyFiles(inv, sshHome, seen, &dirs)
+
+	return dirs
+}
+
+// walkInventoryForKeyFiles recursively walks the inventory structure to find
+// ansible_ssh_private_key_file values.
+func walkInventoryForKeyFiles(obj interface{}, sshHome string, seen map[string]bool, dirs *[]string) {
+	switch v := obj.(type) {
+	case map[string]interface{}:
+		for k, val := range v {
+			if k == "ansible_ssh_private_key_file" {
+				if s, ok := val.(string); ok && s != "" {
+					dir := filepath.Dir(s)
+					// Normalize path separators.
+					dir = filepath.ToSlash(dir)
+					sshHomeNorm := filepath.ToSlash(sshHome)
+					// Skip if it's already under ~/.ssh (mounted separately).
+					if sshHome != "" && (dir == sshHomeNorm || strings.HasPrefix(dir, sshHomeNorm+"/")) {
+						continue
+					}
+					if !seen[dir] {
+						seen[dir] = true
+						*dirs = append(*dirs, dir)
+					}
+				}
+			} else {
+				walkInventoryForKeyFiles(val, sshHome, seen, dirs)
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			walkInventoryForKeyFiles(item, sshHome, seen, dirs)
+		}
+	}
 }
