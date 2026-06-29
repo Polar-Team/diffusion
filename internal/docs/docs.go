@@ -144,19 +144,32 @@ func scanYAMLFile(filePath, sourceName string, varMap map[string]*RoleVariable) 
 			}
 		}
 
-		// For multi-line values, skip the indented block to find description comment
+		// For multi-line values, collect the indented block as the default value
+		// and look for description comment after the block
 		description := ""
 		if isMultiLine {
-			// Skip indented lines (the list/map contents)
+			// Collect indented lines as the default value representation
 			j := i + 1
+			var multiLineItems []string
 			for j < len(lines) {
 				nextRaw := lines[j]
-				if nextRaw == "" || (len(nextRaw) > 0 && (nextRaw[0] == ' ' || nextRaw[0] == '\t')) {
-					j++
-					continue
+				// Stop at non-indented, non-empty lines
+				if nextRaw != "" && len(nextRaw) > 0 && nextRaw[0] != ' ' && nextRaw[0] != '\t' {
+					break
 				}
-				break
+				// Collect non-empty indented lines
+				trimmed := strings.TrimSpace(nextRaw)
+				if trimmed != "" {
+					multiLineItems = append(multiLineItems, trimmed)
+				}
+				j++
 			}
+
+			// Build a compact representation of the multi-line default value
+			if len(multiLineItems) > 0 {
+				defaultValue = formatMultiLineDefault(multiLineItems)
+			}
+
 			// Check if the line after the block is a description comment
 			if j < len(lines) {
 				nextLine := strings.TrimSpace(lines[j])
@@ -200,6 +213,42 @@ func scanYAMLFile(filePath, sourceName string, varMap map[string]*RoleVariable) 
 	}
 
 	return nil
+}
+
+// formatMultiLineDefault converts collected indented YAML lines into a compact
+// single-line representation for display in the documentation table.
+// Lists become: [item1, item2, ...], Maps become: {key1: val1, key2: val2, ...}
+func formatMultiLineDefault(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	// Detect if it's a list (items start with "- ")
+	isList := true
+	for _, item := range items {
+		if !strings.HasPrefix(item, "- ") && !strings.HasPrefix(item, "-\t") {
+			isList = false
+			break
+		}
+	}
+
+	if isList {
+		var listItems []string
+		for _, item := range items {
+			val := strings.TrimPrefix(item, "- ")
+			val = strings.TrimPrefix(val, "-\t")
+			val = strings.TrimSpace(val)
+			listItems = append(listItems, val)
+		}
+		return "[" + strings.Join(listItems, ", ") + "]"
+	}
+
+	// Otherwise treat as map/dict (key: value pairs)
+	var mapItems []string
+	for _, item := range items {
+		mapItems = append(mapItems, strings.TrimSpace(item))
+	}
+	return "{" + strings.Join(mapItems, ", ") + "}"
 }
 
 // scanTemplatesDir scans Jinja2 template files for {{ variable }} references

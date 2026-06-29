@@ -105,7 +105,7 @@ func runDocs(rolePath string, dryRun bool) error {
 	}
 
 	if dryRun {
-		fmt.Println("\n--- Generated Documentation (dry-run) ---\n")
+		fmt.Print("\n--- Generated Documentation (dry-run) ---\n\n")
 		section := docs.GenerateVariablesSection(variables)
 		fmt.Println(section)
 		return nil
