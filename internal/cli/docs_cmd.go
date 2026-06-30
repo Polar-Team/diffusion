@@ -82,30 +82,30 @@ func runDocs(rolePath string, dryRun bool) error {
 	}
 
 	// Scan for variables
-	fmt.Printf("Scanning role variables in: %s\n", rolePath)
+	fmt.Fprintf(os.Stderr, "Scanning role variables in: %s\n", rolePath)
 	variables, err := docs.ScanRoleVariables(rolePath)
 	if err != nil {
 		return fmt.Errorf("failed to scan role variables: %w", err)
 	}
 
-	fmt.Printf("Found %d variable(s)\n", len(variables))
+	fmt.Fprintf(os.Stderr, "Found %d variable(s)\n", len(variables))
 
 	if len(variables) == 0 {
-		fmt.Println("No variables found. Ensure your role has defaults/main.yml, vars/main.yml, or template files.")
+		fmt.Fprintln(os.Stderr, "No variables found. Ensure your role has defaults/main.yml, vars/main.yml, or template files.")
 		return nil
 	}
 
-	// Print summary
+	// Print summary to stderr (informational output)
 	for _, v := range variables {
 		typeStr := v.Type
 		if typeStr == "" {
 			typeStr = "untyped"
 		}
-		fmt.Printf("  - %s (%s) [source: %s]\n", v.Name, typeStr, v.Source)
+		fmt.Fprintf(os.Stderr, "  - %s (%s) [source: %s]\n", v.Name, typeStr, v.Source)
 	}
 
 	if dryRun {
-		fmt.Print("\n--- Generated Documentation (dry-run) ---\n\n")
+		// Dry-run: output the generated section to stdout (data output)
 		section := docs.GenerateVariablesSection(variables)
 		fmt.Println(section)
 		return nil
@@ -116,6 +116,6 @@ func runDocs(rolePath string, dryRun bool) error {
 		return fmt.Errorf("failed to update README.md: %w", err)
 	}
 
-	fmt.Printf("\nREADME.md updated successfully with %d variable(s)\n", len(variables))
+	fmt.Fprintf(os.Stderr, "\nREADME.md updated successfully with %d variable(s)\n", len(variables))
 	return nil
 }
