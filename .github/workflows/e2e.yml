@@ -255,7 +255,8 @@ jobs:
                 > "$DOCS_FIXTURE/README.md"
 
               # 1. Dry-run mode: should output docs without writing
-              $DIFFUSION docs --path "$DOCS_FIXTURE" --dry-run | grep -q "app_name"
+              $DIFFUSION docs --path "$DOCS_FIXTURE" --dry-run > /tmp/docs-dry-run-output.txt
+              grep -q "app_name" /tmp/docs-dry-run-output.txt
               echo "docs smoke test 1/5 passed (dry-run outputs variables)"
 
               # 2. Generate docs: should update README.md
