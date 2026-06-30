@@ -207,29 +207,29 @@ jobs:
 
               printf '%s\n' \
                 '---' \
-                '#—| string' \
+                '#-| string' \
                 'app_name: "my-app"' \
-                '#—? The application name' \
+                '#-? The application name' \
                 '' \
-                '#—| int' \
+                '#-| int' \
                 'app_port: 8080' \
-                '#—? TCP port the application listens on' \
+                '#-? TCP port the application listens on' \
                 '' \
-                '#—| bool' \
+                '#-| bool' \
                 'app_debug: false' \
-                '#—? Enable debug mode' \
+                '#-? Enable debug mode' \
                 '' \
-                '#—| list' \
+                '#-| list' \
                 'app_packages:' \
                 '  - nginx' \
                 '  - curl' \
-                '#—? System packages to install' \
+                '#-? System packages to install' \
                 '' \
-                '#—| map' \
+                '#-| map' \
                 'app_config:' \
                 '  log_level: info' \
                 '  workers: 4' \
-                '#—? Application configuration' \
+                '#-? Application configuration' \
                 '' \
                 'untyped_var: hello' \
                 > "$DOCS_FIXTURE/defaults/main.yml"
