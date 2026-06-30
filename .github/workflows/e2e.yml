@@ -198,6 +198,94 @@ jobs:
               $DIFFUSION artifact list
 
               echo "=========================================="
+              echo "Running docs smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+
+              # Create a fixture role with annotated variables
+              DOCS_FIXTURE="/tmp/diffusion-docs-fixture"
+              mkdir -p "$DOCS_FIXTURE/defaults" "$DOCS_FIXTURE/templates" "$DOCS_FIXTURE/tasks"
+
+              printf '%s\n' \
+                '---' \
+                '#—| string' \
+                'app_name: "my-app"' \
+                '#—? The application name' \
+                '' \
+                '#—| int' \
+                'app_port: 8080' \
+                '#—? TCP port the application listens on' \
+                '' \
+                '#—| bool' \
+                'app_debug: false' \
+                '#—? Enable debug mode' \
+                '' \
+                '#—| list' \
+                'app_packages:' \
+                '  - nginx' \
+                '  - curl' \
+                '#—? System packages to install' \
+                '' \
+                '#—| map' \
+                'app_config:' \
+                '  log_level: info' \
+                '  workers: 4' \
+                '#—? Application configuration' \
+                '' \
+                'untyped_var: hello' \
+                > "$DOCS_FIXTURE/defaults/main.yml"
+
+              printf '%s\n' \
+                'server {' \
+                '    listen {{ app_port }};' \
+                '    server_name {{ app_name }};' \
+                '    proxy_pass http://localhost:{{ backend_port }};' \
+                '}' \
+                > "$DOCS_FIXTURE/templates/app.conf.j2"
+
+              printf '%s\n' \
+                '---' \
+                '- name: Deploy app' \
+                '  command: "deploy {{ deploy_env }}"' \
+                > "$DOCS_FIXTURE/tasks/main.yml"
+
+              printf '%s\n' \
+                '# Docs Fixture Role' \
+                '' \
+                'A test role for docs generation.' \
+                > "$DOCS_FIXTURE/README.md"
+
+              # 1. Dry-run mode: should output docs without writing
+              $DIFFUSION docs --path "$DOCS_FIXTURE" --dry-run | grep -q "app_name"
+              echo "docs smoke test 1/5 passed (dry-run outputs variables)"
+
+              # 2. Generate docs: should update README.md
+              $DIFFUSION docs --path "$DOCS_FIXTURE"
+              grep -q "<!-- begin role_variables -->" "$DOCS_FIXTURE/README.md"
+              grep -q "<!-- end role_variables -->" "$DOCS_FIXTURE/README.md"
+              echo "docs smoke test 2/5 passed (markers inserted)"
+
+              # 3. Verify typed variables are documented
+              grep -q "app_name" "$DOCS_FIXTURE/README.md"
+              grep -q "string" "$DOCS_FIXTURE/README.md"
+              grep -q "The application name" "$DOCS_FIXTURE/README.md"
+              echo "docs smoke test 3/5 passed (typed variables documented)"
+
+              # 4. Verify multiline defaults are shown
+              grep -q "\[nginx, curl\]" "$DOCS_FIXTURE/README.md"
+              grep -q "{log_level: info, workers: 4}" "$DOCS_FIXTURE/README.md"
+              echo "docs smoke test 4/5 passed (multiline defaults shown)"
+
+              # 5. Idempotent: running again should not duplicate
+              $DIFFUSION docs --path "$DOCS_FIXTURE"
+              COUNT=$(grep -c "<!-- begin role_variables -->" "$DOCS_FIXTURE/README.md")
+              if [ "$COUNT" -ne 1 ]; then
+                echo "ERROR: expected 1 begin marker, got $COUNT" && exit 1
+              fi
+              echo "docs smoke test 5/5 passed (idempotent replacement)"
+
+              rm -rf "$DOCS_FIXTURE"
+
+              echo "=========================================="
               echo "Running deploy smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
 
