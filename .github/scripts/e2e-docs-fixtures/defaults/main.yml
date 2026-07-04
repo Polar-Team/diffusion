@@ -1,0 +1,26 @@
+---
+#—| string
+app_name: "my-app"
+#—? The application name
+
+#—| int
+app_port: 8080
+#—? TCP port for the application
+
+#—| list
+packages:
+  - nginx
+  - curl
+#—? System packages to install
+
+#—| string
+#—! db_password
+#—? Database password - required, no default
+
+#—| string
+#—! api_key
+#—? API key for external service
+
+#—| int
+#—& http_timeout
+#—? HTTP timeout - optional, default set in Jinja2 logic

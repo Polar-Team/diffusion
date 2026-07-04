@@ -1,0 +1,4 @@
+---
+#—| string
+app_name: "overridden"
+#—? Should be flagged as duplicate
