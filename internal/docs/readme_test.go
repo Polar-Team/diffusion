@@ -54,21 +54,20 @@ func TestGenerateVariablesSection_SingleVariable(t *testing.T) {
 	}
 }
 
-
 func TestGenerateVariablesSection_MultipleVariables(t *testing.T) {
 	vars := []RoleVariable{
-		{Name: "app_name", Type: "string", Default: `"my-app"`, Description: "App name"},
-		{Name: "app_port", Type: "int", Default: "8080", Description: "Port number"},
-		{Name: "debug", Type: "bool", Default: "false", Description: "Debug mode"},
+		{Name: "app_name", Type: "string", Default: `"my-app"`, Description: "App name", Source: "defaults/main.yml"},
+		{Name: "app_port", Type: "int", Default: "8080", Description: "Port number", Source: "defaults/main.yml"},
+		{Name: "debug", Type: "bool", Default: "false", Description: "Debug mode", Source: "defaults/main.yml"},
 	}
 
 	section := GenerateVariablesSection(vars)
 
 	// Check table header
-	if !strings.Contains(section, "| Variable | Type | Default | Description |") {
+	if !strings.Contains(section, "| Variable | Type | Default | Source | Description |") {
 		t.Error("section should contain table header")
 	}
-	if !strings.Contains(section, "|----------|------|---------|-------------|") {
+	if !strings.Contains(section, "|----------|------|---------|--------|-------------|") {
 		t.Error("section should contain table separator")
 	}
 
@@ -97,18 +96,18 @@ func TestGenerateVariablesSection_MissingFields(t *testing.T) {
 	lines := strings.Split(section, "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "minimal_var") {
-			// Should have "-" for type, default, and description
+			// Should have "-" for type, default, source, and description
 			parts := strings.Split(line, "|")
-			// parts[2] is Type, parts[3] is Default, parts[4] is Description
-			if len(parts) >= 5 {
+			// parts[2] is Type, parts[3] is Default, parts[4] is Source, parts[5] is Description
+			if len(parts) >= 6 {
 				if strings.TrimSpace(parts[2]) != "-" {
 					t.Errorf("minimal_var type should be '-', got %q", strings.TrimSpace(parts[2]))
 				}
 				if strings.TrimSpace(parts[3]) != "-" {
 					t.Errorf("minimal_var default should be '-', got %q", strings.TrimSpace(parts[3]))
 				}
-				if strings.TrimSpace(parts[4]) != "-" {
-					t.Errorf("minimal_var description should be '-', got %q", strings.TrimSpace(parts[4]))
+				if strings.TrimSpace(parts[5]) != "-" {
+					t.Errorf("minimal_var description should be '-', got %q", strings.TrimSpace(parts[5]))
 				}
 			}
 		}
@@ -127,7 +126,6 @@ func TestGenerateVariablesSection_PipeEscaping(t *testing.T) {
 		t.Error("pipe character in default should be escaped with backslash")
 	}
 }
-
 
 func TestUpdateReadme_CreatesNewFile(t *testing.T) {
 	roleDir := t.TempDir()
@@ -205,7 +203,6 @@ func TestUpdateReadme_AppendsToExisting(t *testing.T) {
 		t.Error("appended section should contain my_var")
 	}
 }
-
 
 func TestUpdateReadme_ReplacesExistingMarkers(t *testing.T) {
 	roleDir := t.TempDir()
@@ -317,7 +314,7 @@ func TestUpdateReadme_Idempotent(t *testing.T) {
 	}
 
 	// Should only have ONE table header
-	headerCount := strings.Count(contentStr, "| Variable | Type | Default | Description |")
+	headerCount := strings.Count(contentStr, "| Variable | Type | Default | Source | Description |")
 	if headerCount != 1 {
 		t.Errorf("expected 1 table header, got %d", headerCount)
 	}
@@ -346,7 +343,6 @@ func TestUpdateReadme_EmptyVariables(t *testing.T) {
 		t.Error("empty variables should produce 'no variables' message")
 	}
 }
-
 
 func TestUpdateReadme_NoTrailingNewlineInExisting(t *testing.T) {
 	roleDir := t.TempDir()

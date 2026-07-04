@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"diffusion/internal/docs"
 
@@ -27,9 +28,19 @@ The command scans:
   - tasks/ — task files for {{ variable }} references
 
 Variable annotations (placed in defaults/main.yml or vars/main.yml):
-  #—| <type>         Type annotation (above the variable declaration)
+  #—| <type>         Type annotation (above the variable or #—! marker)
   variable: value    The variable declaration itself
-  #—? <description>  Description annotation (below the variable declaration)
+  #—? <description>  Description annotation (below the variable or #—! marker)
+
+Required variable marker (no YAML declaration needed):
+  #—| <type>         Type annotation (optional, above)
+  #—! variable_name  Marks variable as required — no default value
+  #—? <description>  Description annotation (optional, below)
+
+Optional variable marker (default set in Jinja2 logic, no YAML declaration):
+  #—| <type>         Type annotation (optional, above)
+  #—& variable_name  Marks variable as optional — default handled in templates
+  #—? <description>  Description annotation (optional, below)
 
 Supported types: string, int, bool, list, map, float, dict, path, etc.
 
@@ -101,7 +112,47 @@ func runDocs(rolePath string, dryRun bool) error {
 		if typeStr == "" {
 			typeStr = "untyped"
 		}
-		fmt.Fprintf(os.Stderr, "  - %s (%s) [source: %s]\n", v.Name, typeStr, v.Source)
+		if v.IsDuplicate {
+			fmt.Fprintf(os.Stderr, "  \033[31m⚠ %s (%s) [source: %s] — DUPLICATE in: %s\033[0m\n",
+				v.Name, typeStr, v.Source, joinSources(v.AllSources))
+		} else if v.Required {
+			fmt.Fprintf(os.Stderr, "  \033[33m* %s (%s) [source: %s] — REQUIRED\033[0m\n",
+				v.Name, typeStr, v.Source)
+		} else if v.Optional {
+			fmt.Fprintf(os.Stderr, "  \033[36m~ %s (%s) [source: %s] — OPTIONAL\033[0m\n",
+				v.Name, typeStr, v.Source)
+		} else {
+			fmt.Fprintf(os.Stderr, "  - %s (%s) [source: %s]\n", v.Name, typeStr, v.Source)
+		}
+	}
+
+	// Print duplicate summary warning
+	duplicateCount := 0
+	requiredCount := 0
+	optionalCount := 0
+	for _, v := range variables {
+		if v.IsDuplicate {
+			duplicateCount++
+		}
+		if v.Required {
+			requiredCount++
+		}
+		if v.Optional {
+			optionalCount++
+		}
+	}
+	if requiredCount > 0 || optionalCount > 0 {
+		fmt.Fprintf(os.Stderr, "\n")
+		if requiredCount > 0 {
+			fmt.Fprintf(os.Stderr, "\033[33m* %d required variable(s) — must be provided by the user (no default).\033[0m\n", requiredCount)
+		}
+		if optionalCount > 0 {
+			fmt.Fprintf(os.Stderr, "\033[36m~ %d optional variable(s) — default handled in Jinja2 logic.\033[0m\n", optionalCount)
+		}
+	}
+	if duplicateCount > 0 {
+		fmt.Fprintf(os.Stderr, "\n\033[31m⚠ WARNING: %d variable(s) declared in multiple YAML sources (duplicates).\033[0m\n", duplicateCount)
+		fmt.Fprintf(os.Stderr, "\033[31m  Values from defaults/ take priority. Consider removing duplicate declarations.\033[0m\n")
 	}
 
 	if dryRun {
@@ -118,4 +169,9 @@ func runDocs(rolePath string, dryRun bool) error {
 
 	fmt.Fprintf(os.Stderr, "\nREADME.md updated successfully with %d variable(s)\n", len(variables))
 	return nil
+}
+
+// joinSources joins multiple source names into a comma-separated string.
+func joinSources(sources []string) string {
+	return strings.Join(sources, ", ")
 }

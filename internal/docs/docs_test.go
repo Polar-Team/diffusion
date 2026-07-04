@@ -3,6 +3,7 @@ package docs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,7 +40,6 @@ func TestIsBuiltinVariable(t *testing.T) {
 		})
 	}
 }
-
 
 func TestFormatMultiLineDefault(t *testing.T) {
 	tests := []struct {
@@ -93,7 +93,6 @@ func TestFormatMultiLineDefault(t *testing.T) {
 		})
 	}
 }
-
 
 func TestScanYAMLFile_SimpleVariables(t *testing.T) {
 	dir := t.TempDir()
@@ -172,7 +171,6 @@ debug_mode: false
 	}
 }
 
-
 func TestScanYAMLFile_MultiLineValues(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "main.yml")
@@ -235,7 +233,6 @@ config:
 		t.Errorf("config.Description = %q, want %q", v.Description, "Application configuration")
 	}
 }
-
 
 func TestScanYAMLFile_NoAnnotations(t *testing.T) {
 	dir := t.TempDir()
@@ -309,7 +306,6 @@ top_level: works
 	}
 }
 
-
 func TestScanYAMLFile_DashTypeComment(t *testing.T) {
 	// Test that regular dash (-) also works for type comments, not just em-dash (—)
 	dir := t.TempDir()
@@ -368,7 +364,6 @@ func TestScanYAMLFile_EmptyFile(t *testing.T) {
 		t.Errorf("expected 0 variables, got %d", len(varMap))
 	}
 }
-
 
 func TestScanFileForJinja2Vars(t *testing.T) {
 	dir := t.TempDir()
@@ -440,7 +435,6 @@ func TestScanFileForJinja2Vars_SkipsBuiltins(t *testing.T) {
 		t.Error("item should be skipped as builtin")
 	}
 }
-
 
 func TestScanFileForJinja2Vars_DoesNotOverwriteExisting(t *testing.T) {
 	dir := t.TempDir()
@@ -581,8 +575,8 @@ backend {{ backend_url }};
 		if v.Type != "" {
 			t.Errorf("backend_url.Type = %q, want empty", v.Type)
 		}
-		if v.Source != "templates" {
-			t.Errorf("backend_url.Source = %q, want %q", v.Source, "templates")
+		if v.Source != "templates/app.conf.j2" {
+			t.Errorf("backend_url.Source = %q, want %q", v.Source, "templates/app.conf.j2")
 		}
 	} else {
 		t.Error("expected backend_url in results")
@@ -593,14 +587,13 @@ backend {{ backend_url }};
 		if v.Type != "" {
 			t.Errorf("log_level.Type = %q, want empty", v.Type)
 		}
-		if v.Source != "tasks" {
-			t.Errorf("log_level.Source = %q, want %q", v.Source, "tasks")
+		if v.Source != "tasks/main.yml" {
+			t.Errorf("log_level.Source = %q, want %q", v.Source, "tasks/main.yml")
 		}
 	} else {
 		t.Error("expected log_level in results")
 	}
 }
-
 
 func TestScanRoleVariables_EmptyRole(t *testing.T) {
 	roleDir := t.TempDir()
@@ -721,7 +714,6 @@ timeout: 30 # seconds
 	}
 }
 
-
 func TestScanFileForJinja2Vars_WithFilters(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "template.j2")
@@ -792,5 +784,857 @@ func TestJinja2VarRegex(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestScanYAMLFile_RequiredMarker(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "main.yml")
+
+	content := `---
+#—| string
+app_name: "my-app"
+#—? The application name
+
+#—| string
+#—! postgres_password
+#—? Database password (required, no default)
+
+#—| int
+#—! postgres_port
+#—? PostgreSQL port number
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanYAMLFile(filePath, "defaults/main.yml", varMap)
+	if err != nil {
+		t.Fatalf("scanYAMLFile failed: %v", err)
+	}
+
+	if len(varMap) != 3 {
+		t.Fatalf("expected 3 variables, got %d", len(varMap))
+	}
+
+	// Check regular variable
+	v, ok := varMap["app_name"]
+	if !ok {
+		t.Fatal("expected app_name variable")
+	}
+	if v.Required {
+		t.Error("app_name should NOT be required")
+	}
+	if v.Default != `"my-app"` {
+		t.Errorf("app_name.Default = %q, want %q", v.Default, `"my-app"`)
+	}
+
+	// Check required variable: postgres_password
+	v, ok = varMap["postgres_password"]
+	if !ok {
+		t.Fatal("expected postgres_password variable")
+	}
+	if !v.Required {
+		t.Error("postgres_password should be required")
+	}
+	if v.Type != "string" {
+		t.Errorf("postgres_password.Type = %q, want %q", v.Type, "string")
+	}
+	if v.Description != "Database password (required, no default)" {
+		t.Errorf("postgres_password.Description = %q, want %q", v.Description, "Database password (required, no default)")
+	}
+	if v.Default != "" {
+		t.Errorf("postgres_password.Default should be empty, got %q", v.Default)
+	}
+
+	// Check required variable: postgres_port
+	v, ok = varMap["postgres_port"]
+	if !ok {
+		t.Fatal("expected postgres_port variable")
+	}
+	if !v.Required {
+		t.Error("postgres_port should be required")
+	}
+	if v.Type != "int" {
+		t.Errorf("postgres_port.Type = %q, want %q", v.Type, "int")
+	}
+	if v.Description != "PostgreSQL port number" {
+		t.Errorf("postgres_port.Description = %q, want %q", v.Description, "PostgreSQL port number")
+	}
+}
+
+func TestScanYAMLFile_RequiredMarkerDash(t *testing.T) {
+	// Test with regular dash (-) instead of em-dash (—)
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "main.yml")
+
+	content := `---
+#-| string
+#-! api_key
+#-? API key for authentication
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanYAMLFile(filePath, "defaults/main.yml", varMap)
+	if err != nil {
+		t.Fatalf("scanYAMLFile failed: %v", err)
+	}
+
+	v, ok := varMap["api_key"]
+	if !ok {
+		t.Fatal("expected api_key variable")
+	}
+	if !v.Required {
+		t.Error("api_key should be required")
+	}
+	if v.Type != "string" {
+		t.Errorf("api_key.Type = %q, want %q", v.Type, "string")
+	}
+	if v.Description != "API key for authentication" {
+		t.Errorf("api_key.Description = %q, want %q", v.Description, "API key for authentication")
+	}
+}
+
+func TestScanYAMLFile_RequiredMarkerNoAnnotations(t *testing.T) {
+	// Required marker with no type or description
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "main.yml")
+
+	content := `---
+#-! bare_required_var
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanYAMLFile(filePath, "defaults/main.yml", varMap)
+	if err != nil {
+		t.Fatalf("scanYAMLFile failed: %v", err)
+	}
+
+	v, ok := varMap["bare_required_var"]
+	if !ok {
+		t.Fatal("expected bare_required_var variable")
+	}
+	if !v.Required {
+		t.Error("bare_required_var should be required")
+	}
+	if v.Type != "" {
+		t.Errorf("bare_required_var.Type should be empty, got %q", v.Type)
+	}
+	if v.Description != "" {
+		t.Errorf("bare_required_var.Description should be empty, got %q", v.Description)
+	}
+	if v.Source != "defaults/main.yml" {
+		t.Errorf("bare_required_var.Source = %q, want %q", v.Source, "defaults/main.yml")
+	}
+}
+
+func TestScanRoleVariables_RequiredWithFullRole(t *testing.T) {
+	roleDir := t.TempDir()
+
+	// Create defaults/main.yml with both regular and required vars
+	defaultsDir := filepath.Join(roleDir, "defaults")
+	if err := os.MkdirAll(defaultsDir, 0755); err != nil {
+		t.Fatalf("failed to create defaults dir: %v", err)
+	}
+
+	defaultsContent := `---
+#—| string
+app_name: "my-app"
+#—? The application name
+
+#—| string
+#—! db_password
+#—? Database password (must be provided)
+
+#—| int
+app_port: 8080
+#—? The port number
+`
+	if err := os.WriteFile(filepath.Join(defaultsDir, "main.yml"), []byte(defaultsContent), 0644); err != nil {
+		t.Fatalf("failed to write defaults: %v", err)
+	}
+
+	// Create tasks that reference the required var
+	tasksDir := filepath.Join(roleDir, "tasks")
+	if err := os.MkdirAll(tasksDir, 0755); err != nil {
+		t.Fatalf("failed to create tasks dir: %v", err)
+	}
+
+	taskContent := `---
+- name: Configure DB
+  template:
+    content: "password={{ db_password }}"
+`
+	if err := os.WriteFile(filepath.Join(tasksDir, "main.yml"), []byte(taskContent), 0644); err != nil {
+		t.Fatalf("failed to write task: %v", err)
+	}
+
+	variables, err := ScanRoleVariables(roleDir)
+	if err != nil {
+		t.Fatalf("ScanRoleVariables failed: %v", err)
+	}
+
+	if len(variables) != 3 {
+		t.Fatalf("expected 3 variables, got %d", len(variables))
+		for _, v := range variables {
+			t.Logf("  found: %s (source: %s, required: %v)", v.Name, v.Source, v.Required)
+		}
+	}
+
+	// Check that db_password is required and retains metadata from defaults
+	varByName := make(map[string]RoleVariable)
+	for _, v := range variables {
+		varByName[v.Name] = v
+	}
+
+	dbPass, ok := varByName["db_password"]
+	if !ok {
+		t.Fatal("expected db_password in results")
+	}
+	if !dbPass.Required {
+		t.Error("db_password should be required")
+	}
+	if dbPass.Type != "string" {
+		t.Errorf("db_password.Type = %q, want %q", dbPass.Type, "string")
+	}
+	if dbPass.Description != "Database password (must be provided)" {
+		t.Errorf("db_password.Description = %q, want %q", dbPass.Description, "Database password (must be provided)")
+	}
+	if dbPass.Source != "defaults/main.yml" {
+		t.Errorf("db_password.Source = %q, want %q", dbPass.Source, "defaults/main.yml")
+	}
+
+	// Regular vars should not be required
+	if varByName["app_name"].Required {
+		t.Error("app_name should NOT be required")
+	}
+	if varByName["app_port"].Required {
+		t.Error("app_port should NOT be required")
+	}
+}
+
+func TestGenerateVariablesSection_RequiredVariable(t *testing.T) {
+	vars := []RoleVariable{
+		{Name: "app_name", Type: "string", Default: `"my-app"`, Description: "App name", Source: "defaults/main.yml"},
+		{Name: "db_password", Type: "string", Description: "Database password", Source: "defaults/main.yml", Required: true},
+	}
+
+	section := GenerateVariablesSection(vars)
+
+	// Required variable should show **required** instead of a default value
+	if !strings.Contains(section, "**required**") {
+		t.Error("section should contain '**required**' for required variables")
+	}
+
+	// Regular variable should still have its default
+	if !strings.Contains(section, "`\"my-app\"`") {
+		t.Error("section should contain the default value for app_name")
+	}
+
+	// db_password should not have a backtick-wrapped default
+	if strings.Contains(section, "`db_password`") && strings.Contains(section, "` `") {
+		t.Error("db_password should not have an empty backtick-wrapped default")
+	}
+}
+
+func TestIsExcludedVariable(t *testing.T) {
+	tests := []struct {
+		name     string
+		varName  string
+		expected bool
+	}{
+		{"underscore prefix", "_sd", true},
+		{"underscore prefix 2", "_sp", true},
+		{"underscore prefix longer", "_internal_var", true},
+		{"single underscore", "_", true},
+		{"normal variable", "app_name", false},
+		{"contains underscore middle", "my_var", false},
+		{"ends with underscore", "var_", false},
+		{"empty string", "", false},
+		{"double underscore", "__private", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isExcludedVariable(tt.varName)
+			if got != tt.expected {
+				t.Errorf("isExcludedVariable(%q) = %v, want %v", tt.varName, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestScanFileForJinja2Vars_SkipsExcludedPrefixes(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "task.yml")
+
+	content := `---
+- name: Test with internal vars
+  debug:
+    msg: "{{ app_name }} {{ _sd_internal }} {{ _sp_private }} {{ normal_var }}"
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanFileForJinja2Vars(filePath, "tasks/task.yml", varMap)
+	if err != nil {
+		t.Fatalf("scanFileForJinja2Vars failed: %v", err)
+	}
+
+	// Should find app_name and normal_var
+	if _, ok := varMap["app_name"]; !ok {
+		t.Error("expected app_name to be found")
+	}
+	if _, ok := varMap["normal_var"]; !ok {
+		t.Error("expected normal_var to be found")
+	}
+
+	// Should NOT find _sd_internal or _sp_private
+	if _, ok := varMap["_sd_internal"]; ok {
+		t.Error("_sd_internal should be excluded (underscore prefix)")
+	}
+	if _, ok := varMap["_sp_private"]; ok {
+		t.Error("_sp_private should be excluded (underscore prefix)")
+	}
+}
+
+func TestScanFileForJinja2Vars_ExcludedVarStillKeptIfDeclared(t *testing.T) {
+	// If a variable with excluded prefix is EXPLICITLY declared in defaults,
+	// it should still be kept (the exclusion only applies to Jinja2 auto-discovery)
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "template.j2")
+
+	content := `{{ _special_var }}`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// Pre-populate varMap with explicit declaration from defaults
+	varMap := map[string]*RoleVariable{
+		"_special_var": {
+			Name:        "_special_var",
+			Type:        "string",
+			Default:     "declared",
+			Description: "Explicitly declared underscore var",
+			Source:      "defaults/main.yml",
+			AllSources:  []string{"defaults/main.yml"},
+		},
+	}
+
+	err := scanFileForJinja2Vars(filePath, "templates/template.j2", varMap)
+	if err != nil {
+		t.Fatalf("scanFileForJinja2Vars failed: %v", err)
+	}
+
+	// Should still exist — the exclusion doesn't remove already-declared vars
+	v, ok := varMap["_special_var"]
+	if !ok {
+		t.Fatal("_special_var should still be in varMap (was explicitly declared)")
+	}
+	if v.Source != "defaults/main.yml" {
+		t.Errorf("_special_var.Source should remain 'defaults/main.yml', got %q", v.Source)
+	}
+}
+
+func TestScanRoleVariables_SourceIncludesFileName(t *testing.T) {
+	roleDir := t.TempDir()
+
+	// Create defaults/main.yml
+	defaultsDir := filepath.Join(roleDir, "defaults")
+	if err := os.MkdirAll(defaultsDir, 0755); err != nil {
+		t.Fatalf("failed to create defaults dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(defaultsDir, "main.yml"), []byte("---\napp_name: test\n"), 0644); err != nil {
+		t.Fatalf("failed to write defaults: %v", err)
+	}
+
+	// Create tasks/deploy.yml with a Jinja2 reference
+	tasksDir := filepath.Join(roleDir, "tasks")
+	if err := os.MkdirAll(tasksDir, 0755); err != nil {
+		t.Fatalf("failed to create tasks dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "deploy.yml"), []byte("---\n- debug: msg=\"{{ deploy_host }}\"\n"), 0644); err != nil {
+		t.Fatalf("failed to write task: %v", err)
+	}
+
+	// Create templates/nginx.conf.j2
+	templatesDir := filepath.Join(roleDir, "templates")
+	if err := os.MkdirAll(templatesDir, 0755); err != nil {
+		t.Fatalf("failed to create templates dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templatesDir, "nginx.conf.j2"), []byte("server_name {{ server_host }};\n"), 0644); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	variables, err := ScanRoleVariables(roleDir)
+	if err != nil {
+		t.Fatalf("ScanRoleVariables failed: %v", err)
+	}
+
+	varByName := make(map[string]RoleVariable)
+	for _, v := range variables {
+		varByName[v.Name] = v
+	}
+
+	// Check that sources include the file name
+	if v, ok := varByName["app_name"]; ok {
+		if v.Source != "defaults/main.yml" {
+			t.Errorf("app_name.Source = %q, want %q", v.Source, "defaults/main.yml")
+		}
+	} else {
+		t.Error("expected app_name")
+	}
+
+	if v, ok := varByName["deploy_host"]; ok {
+		if v.Source != "tasks/deploy.yml" {
+			t.Errorf("deploy_host.Source = %q, want %q", v.Source, "tasks/deploy.yml")
+		}
+	} else {
+		t.Error("expected deploy_host")
+	}
+
+	if v, ok := varByName["server_host"]; ok {
+		if v.Source != "templates/nginx.conf.j2" {
+			t.Errorf("server_host.Source = %q, want %q", v.Source, "templates/nginx.conf.j2")
+		}
+	} else {
+		t.Error("expected server_host")
+	}
+}
+
+func TestScanFileForJinja2Vars_ForLoopIteratorExcluded(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "template.j2")
+
+	content := `{% for item in my_packages %}
+  install {{ item }}
+{% endfor %}
+
+{% for key, value in my_config.items() %}
+  {{ key }} = {{ value }}
+{% endfor %}
+
+{{ app_name }}
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanFileForJinja2Vars(filePath, "templates/template.j2", varMap)
+	if err != nil {
+		t.Fatalf("scanFileForJinja2Vars failed: %v", err)
+	}
+
+	// "item", "key", "value" are iterators — should NOT be in varMap
+	if _, ok := varMap["item"]; ok {
+		t.Error("'item' is a for-loop iterator, should NOT be a role variable")
+	}
+	if _, ok := varMap["key"]; ok {
+		t.Error("'key' is a for-loop iterator, should NOT be a role variable")
+	}
+	if _, ok := varMap["value"]; ok {
+		t.Error("'value' is a for-loop iterator, should NOT be a role variable")
+	}
+
+	// "my_packages" and "my_config" are the source variables — SHOULD be in varMap
+	if _, ok := varMap["my_packages"]; !ok {
+		t.Error("'my_packages' is a for-loop source variable, should be a role variable")
+	}
+	if _, ok := varMap["my_config"]; !ok {
+		t.Error("'my_config' is a for-loop source variable, should be a role variable")
+	}
+
+	// "app_name" is a regular {{ }} reference — SHOULD be in varMap
+	if _, ok := varMap["app_name"]; !ok {
+		t.Error("'app_name' should be a role variable")
+	}
+}
+
+func TestScanFileForJinja2Vars_ForLoopWithFilters(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "template.j2")
+
+	content := `{% for entry in my_list | sort %}
+  {{ entry.name }}
+{% endfor %}
+
+{% for host in server_hosts | unique %}
+  server {{ host }};
+{% endfor %}
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanFileForJinja2Vars(filePath, "templates/template.j2", varMap)
+	if err != nil {
+		t.Fatalf("scanFileForJinja2Vars failed: %v", err)
+	}
+
+	// Iterators should be excluded
+	if _, ok := varMap["entry"]; ok {
+		t.Error("'entry' is a for-loop iterator, should NOT be a role variable")
+	}
+	if _, ok := varMap["host"]; ok {
+		t.Error("'host' is a for-loop iterator, should NOT be a role variable")
+	}
+
+	// Source variables (before filter) should be included
+	if _, ok := varMap["my_list"]; !ok {
+		t.Error("'my_list' should be a role variable (for-loop source)")
+	}
+	if _, ok := varMap["server_hosts"]; !ok {
+		t.Error("'server_hosts' should be a role variable (for-loop source)")
+	}
+}
+
+func TestScanFileForJinja2Vars_SetVarExcluded(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "template.j2")
+
+	content := `{% set local_prefix = "myapp" %}
+server_name {{ local_prefix }}.example.com;
+port {{ app_port }};
+env {{ env_name }};
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanFileForJinja2Vars(filePath, "templates/template.j2", varMap)
+	if err != nil {
+		t.Fatalf("scanFileForJinja2Vars failed: %v", err)
+	}
+
+	// "local_prefix" is set locally — should NOT be a role variable
+	if _, ok := varMap["local_prefix"]; ok {
+		t.Error("'local_prefix' is a {% set %} local variable, should NOT be a role variable")
+	}
+
+	// "app_port" and "env_name" are proper role variables (referenced in {{ }})
+	if _, ok := varMap["app_port"]; !ok {
+		t.Error("'app_port' should be a role variable")
+	}
+	if _, ok := varMap["env_name"]; !ok {
+		t.Error("'env_name' should be a role variable")
+	}
+}
+
+func TestScanFileForJinja2Vars_NestedForLoops(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "template.j2")
+
+	content := `{% for server in servers %}
+  {% for port in server.ports %}
+    listen {{ port }};
+  {% endfor %}
+  name {{ server.name }};
+{% endfor %}
+{{ global_var }}
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanFileForJinja2Vars(filePath, "templates/template.j2", varMap)
+	if err != nil {
+		t.Fatalf("scanFileForJinja2Vars failed: %v", err)
+	}
+
+	// "server" and "port" are iterators — excluded
+	if _, ok := varMap["server"]; ok {
+		t.Error("'server' is a for-loop iterator, should NOT be a role variable")
+	}
+	if _, ok := varMap["port"]; ok {
+		t.Error("'port' is a for-loop iterator, should NOT be a role variable")
+	}
+
+	// "servers" is the source variable — included
+	if _, ok := varMap["servers"]; !ok {
+		t.Error("'servers' should be a role variable (for-loop source)")
+	}
+
+	// "global_var" is a regular reference — included
+	if _, ok := varMap["global_var"]; !ok {
+		t.Error("'global_var' should be a role variable")
+	}
+}
+
+func TestScanFileForJinja2Vars_ForLoopSourceDeclaredLocally(t *testing.T) {
+	// If the for-loop source is a {% set %} variable, it should NOT be treated as a role var
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "template.j2")
+
+	content := `{% set local_list = [1, 2, 3] %}
+{% for num in local_list %}
+  {{ num }}
+{% endfor %}
+{{ external_var }}
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanFileForJinja2Vars(filePath, "templates/template.j2", varMap)
+	if err != nil {
+		t.Fatalf("scanFileForJinja2Vars failed: %v", err)
+	}
+
+	// "local_list" is set locally AND used as for-loop source — NOT a role variable
+	if _, ok := varMap["local_list"]; ok {
+		t.Error("'local_list' is a locally-set variable, should NOT be a role variable")
+	}
+
+	// "num" is an iterator — NOT a role variable
+	if _, ok := varMap["num"]; ok {
+		t.Error("'num' is a for-loop iterator, should NOT be a role variable")
+	}
+
+	// "external_var" is a proper role variable
+	if _, ok := varMap["external_var"]; !ok {
+		t.Error("'external_var' should be a role variable")
+	}
+}
+
+func TestExtractBaseVariable(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple variable", "my_list", "my_list"},
+		{"with method call", "my_dict.items()", "my_dict"},
+		{"with attribute", "my_obj.attr", "my_obj"},
+		{"with filter", "my_list | sort", "my_list"},
+		{"with filter and method", "my_dict.items() | sort", "my_dict"},
+		{"range function", "range(10)", "range"},
+		{"empty string", "", ""},
+		{"number literal", "123", ""},
+		{"string literal", "'hello'", ""},
+		{"complex filter chain", "my_var | default([]) | sort", "my_var"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractBaseVariable(tt.input)
+			if got != tt.expected {
+				t.Errorf("extractBaseVariable(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestScanYAMLFile_OptionalMarker(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "main.yml")
+
+	content := `---
+#—| string
+app_name: "my-app"
+#—? The application name
+
+#—| int
+#—& http_timeout
+#—? HTTP timeout (default set via Jinja2 default filter)
+
+#—| bool
+#—& debug_enabled
+#—? Debug mode (defaults to false in template logic)
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanYAMLFile(filePath, "defaults/main.yml", varMap)
+	if err != nil {
+		t.Fatalf("scanYAMLFile failed: %v", err)
+	}
+
+	if len(varMap) != 3 {
+		t.Fatalf("expected 3 variables, got %d", len(varMap))
+	}
+
+	// Check regular variable
+	v, ok := varMap["app_name"]
+	if !ok {
+		t.Fatal("expected app_name variable")
+	}
+	if v.Required || v.Optional {
+		t.Error("app_name should NOT be required or optional (it has a default)")
+	}
+
+	// Check optional variable: http_timeout
+	v, ok = varMap["http_timeout"]
+	if !ok {
+		t.Fatal("expected http_timeout variable")
+	}
+	if !v.Optional {
+		t.Error("http_timeout should be optional")
+	}
+	if v.Required {
+		t.Error("http_timeout should NOT be required")
+	}
+	if v.Type != "int" {
+		t.Errorf("http_timeout.Type = %q, want %q", v.Type, "int")
+	}
+	if v.Description != "HTTP timeout (default set via Jinja2 default filter)" {
+		t.Errorf("http_timeout.Description = %q", v.Description)
+	}
+
+	// Check optional variable: debug_enabled
+	v, ok = varMap["debug_enabled"]
+	if !ok {
+		t.Fatal("expected debug_enabled variable")
+	}
+	if !v.Optional {
+		t.Error("debug_enabled should be optional")
+	}
+	if v.Type != "bool" {
+		t.Errorf("debug_enabled.Type = %q, want %q", v.Type, "bool")
+	}
+}
+
+func TestScanYAMLFile_OptionalMarkerDash(t *testing.T) {
+	// Test with regular dash (-) instead of em-dash (—)
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "main.yml")
+
+	content := `---
+#-| string
+#-& fallback_url
+#-? Fallback URL (uses default in template)
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	varMap := make(map[string]*RoleVariable)
+	err := scanYAMLFile(filePath, "defaults/main.yml", varMap)
+	if err != nil {
+		t.Fatalf("scanYAMLFile failed: %v", err)
+	}
+
+	v, ok := varMap["fallback_url"]
+	if !ok {
+		t.Fatal("expected fallback_url variable")
+	}
+	if !v.Optional {
+		t.Error("fallback_url should be optional")
+	}
+	if v.Type != "string" {
+		t.Errorf("fallback_url.Type = %q, want %q", v.Type, "string")
+	}
+	if v.Description != "Fallback URL (uses default in template)" {
+		t.Errorf("fallback_url.Description = %q", v.Description)
+	}
+}
+
+func TestGenerateVariablesSection_OptionalVariable(t *testing.T) {
+	vars := []RoleVariable{
+		{Name: "app_name", Type: "string", Default: `"my-app"`, Description: "App name", Source: "defaults/main.yml"},
+		{Name: "db_password", Type: "string", Description: "Database password", Source: "defaults/main.yml", Required: true},
+		{Name: "http_timeout", Type: "int", Description: "Timeout", Source: "defaults/main.yml", Optional: true},
+	}
+
+	section := GenerateVariablesSection(vars)
+
+	// Required variable should show **required**
+	if !strings.Contains(section, "**required**") {
+		t.Error("section should contain '**required**' for required variables")
+	}
+
+	// Optional variable should show *optional*
+	if !strings.Contains(section, "*optional*") {
+		t.Error("section should contain '*optional*' for optional variables")
+	}
+
+	// Regular variable should still have its default
+	if !strings.Contains(section, "`\"my-app\"`") {
+		t.Error("section should contain the default value for app_name")
+	}
+}
+
+func TestScanRoleVariables_MixedRequiredOptional(t *testing.T) {
+	roleDir := t.TempDir()
+
+	defaultsDir := filepath.Join(roleDir, "defaults")
+	if err := os.MkdirAll(defaultsDir, 0755); err != nil {
+		t.Fatalf("failed to create defaults dir: %v", err)
+	}
+
+	content := `---
+#—| string
+app_name: "my-app"
+#—? App name
+
+#—| string
+#—! db_password
+#—? Database password (required)
+
+#—| int
+#—& http_timeout
+#—? HTTP timeout (optional, Jinja2 default)
+
+#—| int
+app_port: 8080
+#—? Port
+`
+	if err := os.WriteFile(filepath.Join(defaultsDir, "main.yml"), []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write defaults: %v", err)
+	}
+
+	variables, err := ScanRoleVariables(roleDir)
+	if err != nil {
+		t.Fatalf("ScanRoleVariables failed: %v", err)
+	}
+
+	if len(variables) != 4 {
+		t.Fatalf("expected 4 variables, got %d", len(variables))
+	}
+
+	varByName := make(map[string]RoleVariable)
+	for _, v := range variables {
+		varByName[v.Name] = v
+	}
+
+	// app_name: regular (has default)
+	if varByName["app_name"].Required || varByName["app_name"].Optional {
+		t.Error("app_name should be regular (not required, not optional)")
+	}
+
+	// db_password: required
+	if !varByName["db_password"].Required {
+		t.Error("db_password should be required")
+	}
+	if varByName["db_password"].Optional {
+		t.Error("db_password should NOT be optional")
+	}
+
+	// http_timeout: optional
+	if !varByName["http_timeout"].Optional {
+		t.Error("http_timeout should be optional")
+	}
+	if varByName["http_timeout"].Required {
+		t.Error("http_timeout should NOT be required")
+	}
+
+	// app_port: regular (has default)
+	if varByName["app_port"].Required || varByName["app_port"].Optional {
+		t.Error("app_port should be regular (not required, not optional)")
 	}
 }

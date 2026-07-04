@@ -198,6 +198,199 @@ jobs:
               $DIFFUSION artifact list
 
               echo "=========================================="
+              echo "Running docs smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+
+              # Create a fixture role for docs generation
+              DOCS_FIXTURE="/tmp/diffusion-docs-fixture"
+              mkdir -p "$DOCS_FIXTURE/defaults"
+              mkdir -p "$DOCS_FIXTURE/vars"
+              mkdir -p "$DOCS_FIXTURE/templates"
+              mkdir -p "$DOCS_FIXTURE/tasks"
+
+              # defaults/main.yml — typed vars, required vars, multi-line
+              printf '%s\n' \
+                '---' \
+                '#—| string' \
+                'app_name: "my-app"' \
+                '#—? The application name' \
+                '' \
+                '#—| int' \
+                'app_port: 8080' \
+                '#—? TCP port for the application' \
+                '' \
+                '#—| list' \
+                'packages:' \
+                '  - nginx' \
+                '  - curl' \
+                '#—? System packages to install' \
+                '' \
+                '#—| string' \
+                '#—! db_password' \
+                '#—? Database password (required, no default)' \
+                '' \
+                '#—| string' \
+                '#—! api_key' \
+                '#—? API key for external service' \
+                > "$DOCS_FIXTURE/defaults/main.yml"
+
+              # vars/main.yml — duplicate var (should be flagged)
+              printf '%s\n' \
+                '---' \
+                '#—| string' \
+                'app_name: "overridden"' \
+                '#—? Should be flagged as duplicate' \
+                > "$DOCS_FIXTURE/vars/main.yml"
+
+              # templates/app.conf.j2 — Jinja2 with for-loops
+              printf '%s\n' \
+                '{% for pkg in packages %}' \
+                'install {{ pkg }}' \
+                '{% endfor %}' \
+                '' \
+                '{% set local_var = "computed" %}' \
+                'server_name {{ app_name }};' \
+                'listen {{ app_port }};' \
+                'backend {{ backend_url }};' \
+                'local {{ local_var }};' \
+                '' \
+                '{% for host in server_hosts %}' \
+                '  upstream {{ host }};' \
+                '{% endfor %}' \
+                > "$DOCS_FIXTURE/templates/app.conf.j2"
+
+              # tasks/main.yml — with internal vars (should be excluded)
+              printf '%s\n' \
+                '---' \
+                '- name: Use internal var' \
+                '  debug:' \
+                '    msg: "{{ _internal_var }} {{ log_level }}"' \
+                > "$DOCS_FIXTURE/tasks/main.yml"
+
+              # Create initial README.md
+              printf '%s\n' \
+                '# Test Role' \
+                '' \
+                'A test role for docs generation.' \
+                > "$DOCS_FIXTURE/README.md"
+
+              # Test 1: dry-run should produce output without modifying README
+              echo "--- docs test 1: dry-run mode ---"
+              DRY_OUTPUT=$($DIFFUSION docs --path "$DOCS_FIXTURE" --dry-run 2>/dev/null)
+
+              # Verify table header present
+              echo "$DRY_OUTPUT" | grep -q "| Variable | Type | Default | Source | Description |" \
+                || { echo "FAIL: table header not found in dry-run output"; exit 1; }
+
+              # Verify required variable shows **required**
+              echo "$DRY_OUTPUT" | grep -q "\\*\\*required\\*\\*" \
+                || { echo "FAIL: **required** marker not found for required vars"; exit 1; }
+
+              # Verify duplicate is flagged
+              echo "$DRY_OUTPUT" | grep -q "⚠️" \
+                || { echo "FAIL: duplicate warning not found"; exit 1; }
+
+              # Verify README was NOT modified (dry-run)
+              grep -q "begin role_variables" "$DOCS_FIXTURE/README.md" \
+                && { echo "FAIL: README was modified during dry-run"; exit 1; }
+              echo "docs test 1 passed (dry-run)"
+
+              # Test 2: actual docs generation
+              echo "--- docs test 2: docs generation ---"
+              $DIFFUSION docs --path "$DOCS_FIXTURE"
+
+              # Verify README was updated with markers
+              grep -q "<!-- begin role_variables -->" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: begin marker not found in README"; exit 1; }
+              grep -q "<!-- end role_variables -->" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: end marker not found in README"; exit 1; }
+
+              # Verify typed variables from defaults appear
+              grep -q "app_name" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: app_name not in README"; exit 1; }
+              grep -q "app_port" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: app_port not in README"; exit 1; }
+              grep -q "packages" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: packages not in README"; exit 1; }
+
+              # Verify required variables
+              grep -q "db_password" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: db_password not in README"; exit 1; }
+              grep -q "api_key" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: api_key not in README"; exit 1; }
+              grep -q "\\*\\*required\\*\\*" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: **required** not in README"; exit 1; }
+
+              # Verify for-loop source variables are included
+              grep -q "server_hosts" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: server_hosts (for-loop source) not in README"; exit 1; }
+              grep -q "backend_url" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: backend_url not in README"; exit 1; }
+
+              # Verify for-loop iterators are NOT included
+              grep -q "| \`pkg\`" "$DOCS_FIXTURE/README.md" \
+                && { echo "FAIL: pkg (for-loop iterator) should NOT be in README"; exit 1; }
+              grep -q "| \`host\`" "$DOCS_FIXTURE/README.md" \
+                && { echo "FAIL: host (for-loop iterator) should NOT be in README"; exit 1; }
+
+              # Verify {% set %} local vars are NOT included
+              grep -q "| \`local_var\`" "$DOCS_FIXTURE/README.md" \
+                && { echo "FAIL: local_var (set var) should NOT be in README"; exit 1; }
+
+              # Verify underscore-prefixed vars are NOT included
+              grep -q "| \`_internal_var\`" "$DOCS_FIXTURE/README.md" \
+                && { echo "FAIL: _internal_var (excluded prefix) should NOT be in README"; exit 1; }
+
+              # Verify source includes file path
+              grep -q "defaults/main.yml" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: source file path defaults/main.yml not in README"; exit 1; }
+
+              # Verify duplicate detection
+              grep -q "⚠️" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: duplicate warning marker not in README"; exit 1; }
+              echo "docs test 2 passed (generation)"
+
+              # Test 3: idempotency — running again should produce same result
+              echo "--- docs test 3: idempotency ---"
+              cp "$DOCS_FIXTURE/README.md" /tmp/readme_first.md
+              $DIFFUSION docs --path "$DOCS_FIXTURE"
+              diff "$DOCS_FIXTURE/README.md" /tmp/readme_first.md \
+                || { echo "FAIL: docs generation is not idempotent"; exit 1; }
+              echo "docs test 3 passed (idempotency)"
+
+              # Test 4: marker replacement — existing markers get updated
+              echo "--- docs test 4: marker replacement ---"
+              printf '%s\n' \
+                '# Updated Role' \
+                '' \
+                '<!-- begin role_variables -->' \
+                'OLD CONTENT HERE' \
+                '<!-- end role_variables -->' \
+                '' \
+                '## License' \
+                'MIT' \
+                > "$DOCS_FIXTURE/README.md"
+
+              $DIFFUSION docs --path "$DOCS_FIXTURE"
+
+              # Old content should be gone
+              grep -q "OLD CONTENT HERE" "$DOCS_FIXTURE/README.md" \
+                && { echo "FAIL: old content between markers was not replaced"; exit 1; }
+
+              # New content should exist
+              grep -q "app_name" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: new content not generated after marker replacement"; exit 1; }
+
+              # Content outside markers should be preserved
+              grep -q "## License" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: content after markers was lost"; exit 1; }
+              grep -q "MIT" "$DOCS_FIXTURE/README.md" \
+                || { echo "FAIL: license text after markers was lost"; exit 1; }
+              echo "docs test 4 passed (marker replacement)"
+
+              echo "All docs smoke tests passed!"
+
+              echo "=========================================="
               echo "Running deploy smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
 

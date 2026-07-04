@@ -13,7 +13,8 @@ const (
 	EndMarker   = "<!-- end role_variables -->"
 )
 
-// GenerateVariablesSection generates a markdown table of role variables
+// GenerateVariablesSection generates a markdown table of role variables.
+// Variables declared in multiple YAML sources (duplicates) are marked with a ⚠️ indicator.
 func GenerateVariablesSection(variables []RoleVariable) string {
 	if len(variables) == 0 {
 		return fmt.Sprintf("%s\n\n## Role Variables\n\n_No variables found._\n\n%s", BeginMarker, EndMarker)
@@ -23,8 +24,8 @@ func GenerateVariablesSection(variables []RoleVariable) string {
 
 	sb.WriteString(BeginMarker)
 	sb.WriteString("\n\n## Role Variables\n\n")
-	sb.WriteString("| Variable | Type | Default | Description |\n")
-	sb.WriteString("|----------|------|---------|-------------|\n")
+	sb.WriteString("| Variable | Type | Default | Source | Description |\n")
+	sb.WriteString("|----------|------|---------|--------|-------------|\n")
 
 	for _, v := range variables {
 		varType := v.Type
@@ -33,7 +34,11 @@ func GenerateVariablesSection(variables []RoleVariable) string {
 		}
 
 		defaultVal := v.Default
-		if defaultVal == "" {
+		if v.Required {
+			defaultVal = "**required**"
+		} else if v.Optional {
+			defaultVal = "*optional*"
+		} else if defaultVal == "" {
 			defaultVal = "-"
 		} else {
 			// Escape pipe characters and backtick-wrap values
@@ -46,7 +51,32 @@ func GenerateVariablesSection(variables []RoleVariable) string {
 			description = "-"
 		}
 
-		sb.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s |\n", v.Name, varType, defaultVal, description))
+		source := v.Source
+		if source == "" {
+			source = "-"
+		}
+
+		// Mark duplicates with warning indicator
+		varName := v.Name
+		if v.IsDuplicate {
+			varName = "⚠️ " + varName
+			source = source + " ⚠️ duplicate in: " + strings.Join(v.AllSources[1:], ", ")
+		}
+
+		sb.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s | %s |\n", varName, varType, defaultVal, source, description))
+	}
+
+	// Add duplicate legend if any duplicates exist
+	hasDuplicates := false
+	for _, v := range variables {
+		if v.IsDuplicate {
+			hasDuplicates = true
+			break
+		}
+	}
+	if hasDuplicates {
+		sb.WriteString("\n> ⚠️ **Duplicates detected**: Variables marked with ⚠️ are declared in multiple YAML sources. ")
+		sb.WriteString("The value from `defaults/` takes priority. Consider removing duplicate declarations.\n")
 	}
 
 	sb.WriteString("\n")
