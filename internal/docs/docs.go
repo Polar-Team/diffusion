@@ -36,16 +36,20 @@ var descCommentRegex = regexp.MustCompile(`^#\s*[—\-]\?\s*(.+)$`)
 func ScanRoleVariables(roleDir string) ([]RoleVariable, error) {
 	varMap := make(map[string]*RoleVariable)
 
-	// 1. Scan defaults/main.yml — primary source of role variables with defaults
-	defaultsFile := filepath.Join(roleDir, "defaults", "main.yml")
-	if err := scanYAMLFile(defaultsFile, "defaults/main.yml", varMap); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("scanning defaults/main.yml: %w", err)
+	// 1. Scan all YAML files under defaults/ — role variables with defaults
+	defaultsDir := filepath.Join(roleDir, "defaults")
+	if info, err := os.Stat(defaultsDir); err == nil && info.IsDir() {
+		if err := scanYAMLDir(defaultsDir, "defaults", varMap); err != nil {
+			return nil, fmt.Errorf("scanning defaults: %w", err)
+		}
 	}
 
-	// 2. Scan vars/main.yml — role variables (higher precedence, often without defaults)
-	varsFile := filepath.Join(roleDir, "vars", "main.yml")
-	if err := scanYAMLFile(varsFile, "vars/main.yml", varMap); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("scanning vars/main.yml: %w", err)
+	// 2. Scan all YAML files under vars/ — role variables (higher precedence)
+	varsDir := filepath.Join(roleDir, "vars")
+	if info, err := os.Stat(varsDir); err == nil && info.IsDir() {
+		if err := scanYAMLDir(varsDir, "vars", varMap); err != nil {
+			return nil, fmt.Errorf("scanning vars: %w", err)
+		}
 	}
 
 	// 3. Scan template files for {{ variable }} references
@@ -74,6 +78,26 @@ func ScanRoleVariables(roleDir string) ([]RoleVariable, error) {
 	})
 
 	return variables, nil
+}
+
+// scanYAMLDir walks a directory and scans all .yml/.yaml files for variable declarations.
+func scanYAMLDir(dir, sourceName string, varMap map[string]*RoleVariable) error {
+	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == ".yml" || ext == ".yaml" {
+			// Use relative path from the dir as the source name
+			rel, _ := filepath.Rel(dir, path)
+			return scanYAMLFile(path, sourceName+"/"+rel, varMap)
+		}
+		return nil
+	})
 }
 
 // scanYAMLFile parses a YAML variable file (defaults/main.yml or vars/main.yml)
