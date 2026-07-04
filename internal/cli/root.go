@@ -63,6 +63,7 @@ func Execute() {
 	rootCmd.AddCommand(NewShowCmd(cli))
 	rootCmd.AddCommand(NewDepsCmd(cli))
 	rootCmd.AddCommand(NewDeployCmd(cli))
+	rootCmd.AddCommand(NewDocsCmd(cli))
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

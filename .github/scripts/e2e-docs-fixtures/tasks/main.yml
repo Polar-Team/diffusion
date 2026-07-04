@@ -1,0 +1,4 @@
+---
+- name: Use internal var
+  debug:
+    msg: "{{ _internal_var }} {{ log_level }}"

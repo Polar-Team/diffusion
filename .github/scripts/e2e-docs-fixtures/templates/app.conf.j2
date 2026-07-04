@@ -1,0 +1,13 @@
+{% for pkg in packages %}
+install {{ pkg }}
+{% endfor %}
+
+{% set local_var = "computed" %}
+server_name {{ app_name }};
+listen {{ app_port }};
+backend {{ backend_url }};
+local {{ local_var }};
+
+{% for host in server_hosts %}
+  upstream {{ host }};
+{% endfor %}

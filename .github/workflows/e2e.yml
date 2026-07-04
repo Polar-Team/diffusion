@@ -198,6 +198,15 @@ jobs:
               $DIFFUSION artifact list
 
               echo "=========================================="
+              echo "Running docs smoke tests on ${{ matrix.os }}..."
+              echo "=========================================="
+
+              # Copy fixtures and run docs E2E test script
+              SCRIPTS_DIR="${WORKSPACE}/.github/scripts"
+              chmod +x "$SCRIPTS_DIR/e2e-docs.sh"
+              "$SCRIPTS_DIR/e2e-docs.sh" "$DIFFUSION" "$SCRIPTS_DIR/e2e-docs-fixtures"
+
+              echo "=========================================="
               echo "Running deploy smoke tests on ${{ matrix.os }}..."
               echo "=========================================="
 
