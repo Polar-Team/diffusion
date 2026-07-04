@@ -16,7 +16,11 @@ fi
 # Work on a copy so we don't mutate the repo fixtures
 WORK_DIR="/tmp/diffusion-docs-e2e"
 rm -rf "$WORK_DIR"
-cp -r "$FIXTURES_SRC" "$WORK_DIR"
+mkdir -p "$WORK_DIR"
+cp -r "$FIXTURES_SRC"/* "$WORK_DIR/"
+
+# Disable set -e for test assertions (we handle failures manually)
+set +e
 
 PASS=0
 FAIL=0
@@ -152,10 +156,13 @@ echo ""
 # ── Test 3: idempotency ────────────────────────────────────────────────
 echo "--- Test 3: idempotency ---"
 
-cp "$WORK_DIR/README.md" /tmp/readme_first.md
-"$DIFFUSION" docs --path "$WORK_DIR"
+# First run already happened in test 2, save that result
+cp "$WORK_DIR/README.md" /tmp/readme_after_first.md
 
-diff "$WORK_DIR/README.md" /tmp/readme_first.md >/dev/null 2>&1 \
+# Run again — should produce identical output
+"$DIFFUSION" docs --path "$WORK_DIR" 2>/dev/null
+
+diff "$WORK_DIR/README.md" /tmp/readme_after_first.md >/dev/null 2>&1 \
   && pass "idempotent output" \
   || fail "docs generation is not idempotent"
 
