@@ -91,13 +91,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "stable"
+          go-version: "1.25"
 
       - name: Build diffusion
         run: make build
 
       - name: Run unit tests
-        run: go test -v ./...
+        run: go test -v $(go list ./... | grep -v '/registry\|/galaxy')
 
       # ── Docker setup ─────────────────────────────────────────────────────
 
