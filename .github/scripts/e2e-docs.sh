@@ -167,8 +167,11 @@ cp "$WORK_DIR/README.md" /tmp/readme_after_first.md
 # Run again — should produce identical output
 "$DIFFUSION" docs --path "$WORK_DIR" 2>/dev/null
 
-# Compare using cmp (always available in coreutils, unlike diff)
-if cmp -s "$WORK_DIR/README.md" /tmp/readme_after_first.md; then
+# Compare using shell read — no external tools needed
+FILE_A=$(cat /tmp/readme_after_first.md)
+FILE_B=$(cat "$WORK_DIR/README.md")
+
+if [ "$FILE_A" = "$FILE_B" ]; then
   pass "idempotent output"
 else
   fail "docs generation is not idempotent"
