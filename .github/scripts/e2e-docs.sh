@@ -167,17 +167,11 @@ cp "$WORK_DIR/README.md" /tmp/readme_after_first.md
 # Run again — should produce identical output
 "$DIFFUSION" docs --path "$WORK_DIR" 2>/dev/null
 
-if diff "$WORK_DIR/README.md" /tmp/readme_after_first.md >/dev/null 2>&1; then
+# Compare using cmp (always available in coreutils, unlike diff)
+if cmp -s "$WORK_DIR/README.md" /tmp/readme_after_first.md; then
   pass "idempotent output"
 else
-  echo "  DEBUG: diff output:"
-  diff "$WORK_DIR/README.md" /tmp/readme_after_first.md || true
-  # Non-critical — mark as pass if only whitespace differs
-  if diff -b "$WORK_DIR/README.md" /tmp/readme_after_first.md >/dev/null 2>&1; then
-    pass "idempotent output (whitespace-only diff)"
-  else
-    fail "docs generation is not idempotent"
-  fi
+  fail "docs generation is not idempotent"
 fi
 
 echo ""
