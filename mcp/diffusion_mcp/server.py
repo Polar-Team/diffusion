@@ -967,6 +967,64 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Ansible Lint Configuration (excluded paths, warn list, skip list)",
             ],
         },
+        "docs": {
+            "description": "Generate or update inline documentation comments in defaults/main.yml based on special marker signs",
+            "usage": "diffusion docs [flags]",
+            "notes": [
+                "Scans defaults/main.yml for special comment markers and generates human-readable documentation.",
+                "Uses '#-' prefix (no space) followed by a marker character (|, ?, !, &) as documentation directives.",
+                "The --dry-run flag previews changes without writing to disk.",
+                "Comments are placed above the variable they document.",
+            ],
+            "flags": {
+                "--dry-run": {
+                    "description": "Show what changes would be made without writing to disk",
+                    "default": "false",
+                },
+                "--role, -r": {
+                    "description": "Role name (auto-detected from meta/main.yml if omitted)",
+                    "default": "(from meta/main.yml)",
+                },
+            },
+            "comment_markers": {
+                "#-|": {
+                    "description": "Type annotation — declares the variable's data type",
+                    "usage": "Place above a variable declaration or above #-! / #-& markers to declare the type",
+                    "values": "string, int, list, map, bool, etc.",
+                    "example": "#-| string\napp_name: \"myapp\"",
+                },
+                "#-?": {
+                    "description": "Description — human-readable explanation of the variable's purpose",
+                    "usage": "Place after the variable declaration or after #-! / #-& to describe the variable",
+                    "example": "#-| int\nhttp_port: 8080\n#-? Port number for the HTTP listener",
+                },
+                "#-!": {
+                    "description": "Required variable marker — variable is omitted from defaults and must be provided by the user",
+                    "usage": "Followed by the variable name. Used instead of a YAML declaration when no sensible default exists",
+                    "example": "#-| string\n#-! api_key\n#-? API key for authentication",
+                },
+                "#-&": {
+                    "description": "Optional variable marker — variable is omitted from defaults because its default is defined in Jinja2 template logic (e.g. {{ var | default('value') }})",
+                    "usage": "Followed by the variable name. Used instead of a YAML declaration when the default lives in a template",
+                    "example": "#-| string\n#-& fallback_url\n#-? Fallback URL (uses default in template)",
+                },
+            },
+            "annotation_block_patterns": [
+                "Declared variable:   #-| <type>  →  var_name: <default>  →  #-? <description>",
+                "Required (no default): #-| <type>  →  #-! <var_name>  →  #-? <description>",
+                "Optional (Jinja2 default): #-| <type>  →  #-& <var_name>  →  #-? <description>",
+            ],
+            "yaml_compliance_note": (
+                "All markers use '#-' (hash + dash) as the prefix, immediately followed by a semantic character (|, ?, !, &). "
+                "The | and ? markers apply to the adjacent variable declaration. "
+                "The ! and & markers are standalone — they carry the variable name themselves (no YAML declaration needed)."
+            ),
+            "examples": [
+                "diffusion docs                    # Generate/update docs in defaults/main.yml",
+                "diffusion docs --dry-run          # Preview changes without writing",
+                "diffusion docs --role myrole      # Generate docs for a specific role",
+            ],
+        },
         "deploy": {
             "description": "Deploy Ansible roles to remote hosts using the diffusion molecule container",
             "usage": "diffusion deploy [flags]",
@@ -1428,9 +1486,7 @@ def get_requirements_yml(project_path: str = "", scenario: str = "default") -> s
         return "Error: Could not find project root."
 
     candidates = [
-        root / "molecule" / scenario / "requirements.yml",
-        root / "scenarios" / scenario / "requirements.yml",
-        root / "requirements.yml",
+        root / "scenarios" / scenario / "requirements.yml"
     ]
 
     for c in candidates:
@@ -1467,7 +1523,7 @@ def list_molecule_scenarios(project_path: str = "") -> str:
     scenarios: list[dict[str, Any]] = []
 
     # Check molecule/ and scenarios/ directories
-    for base_dir in [root / "molecule", root / "scenarios"]:
+    for base_dir in [root / "scenarios"]:
         if not base_dir.exists():
             continue
         for entry in sorted(base_dir.iterdir()):
@@ -1529,6 +1585,7 @@ def run_diffusion_command(
         "show",
         "deps check",
         "deps resolve",
+        "docs --dry-run",
         "role",
         "deploy",
         "--version",
@@ -1560,6 +1617,42 @@ def run_diffusion_command(
 
     return "\n".join(output_parts) if output_parts else "(no output)"
 
+# ---------------------------------------------------------------------------
+# Tool: update_diffusion_docs
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def update_diffusion_docs(
+    project_path: str = "",
+    role: str = "",
+) -> str:
+    """Run `diffusion docs --dry-run` and return the output.
+
+    Shows what documentation changes would be made to the role's
+    defaults/main.yml comments without actually writing them.
+
+    Args:
+        project_path: Path to the project root (auto-detected if empty).
+        role: Role name to pass via --role flag (optional).
+    """
+    root = Path(project_path) if project_path else _find_project_root()
+    cwd = str(root) if root else None
+
+    cmd_parts = ["diffusion", "docs", "--dry-run"]
+    if role:
+        cmd_parts.extend(["--role", role])
+
+    result = _run(cmd_parts, timeout=60, cwd=cwd)
+
+    output_parts = []
+    if result["stdout"]:
+        output_parts.append(result["stdout"])
+    if result["stderr"]:
+        output_parts.append(f"[stderr] {result['stderr']}")
+    if result["returncode"] != 0:
+        output_parts.append(f"[exit code: {result['returncode']}]")
+
+    return "\n".join(output_parts) if output_parts else "(no output)"
 
 # ---------------------------------------------------------------------------
 # Tool: get_terraform_provider_reference
