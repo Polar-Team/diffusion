@@ -242,9 +242,9 @@ func RunCommandCapture(ctx context.Context, name string, args ...string) (string
 	return strings.TrimSpace(string(out)), err
 }
 
-// runCommandHide runs command and discards stdout/stderr with a loading animation
+// RunCommandHide runs command and discards stdout/stderr with a loading animation
 func RunCommandHide(ciMode bool, name string, args ...string) error {
-	if !ciMode {
+	if IsInteractive(ciMode) {
 		spinner := NewSpinner(fmt.Sprintf("Running %s", name))
 		spinner.Start()
 		defer spinner.Stop()
@@ -346,11 +346,11 @@ func ExportLinters(cfg *config.Config, roleMoleculePath string, CIMode bool, rol
 	return nil
 }
 
-// dockerExecInteractive runs: docker exec -ti molecule-role <cmd...>
-// In CI mode, removes -ti flags to avoid TTY errors
+// DockerExecInteractive runs: docker exec [-ti] molecule-role <cmd...>
+// Uses -ti flags only when running in an interactive terminal (not CI, not piped).
 func DockerExecInteractive(role, command string, ciMode bool, args ...string) error {
 	execFlags := []string{"exec"}
-	if !ciMode {
+	if IsInteractive(ciMode) {
 		execFlags = append(execFlags, "-ti")
 	}
 	execFlags = append(execFlags, fmt.Sprintf("molecule-%s", role), command)
@@ -358,21 +358,23 @@ func DockerExecInteractive(role, command string, ciMode bool, args ...string) er
 	cmd := exec.Command("docker", all...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
+	if IsInteractive(ciMode) {
+		cmd.Stdin = os.Stdin
+	}
 	return cmd.Run()
 }
 
-// dockerExecInteractiveHide runs: docker exec -ti molecule-role <cmd...>
-// In CI mode, removes -ti flags to avoid TTY errors
+// DockerExecInteractiveHide runs: docker exec [-ti] molecule-role <cmd...>
+// Output is discarded. Uses -ti and spinner only in interactive terminals.
 func DockerExecInteractiveHide(role, command string, ciMode bool, args ...string) error {
-	if !ciMode {
+	if IsInteractive(ciMode) {
 		spinner := NewSpinner(fmt.Sprintf("Running %s in container", command))
 		spinner.Start()
 		defer spinner.Stop()
 	}
 
 	execFlags := []string{"exec"}
-	if !ciMode {
+	if IsInteractive(ciMode) {
 		execFlags = append(execFlags, "-ti")
 	}
 	execFlags = append(execFlags, fmt.Sprintf("molecule-%s", role), command)
@@ -380,7 +382,9 @@ func DockerExecInteractiveHide(role, command string, ciMode bool, args ...string
 	cmd := exec.Command("docker", all...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	cmd.Stdin = os.Stdin
+	if IsInteractive(ciMode) {
+		cmd.Stdin = os.Stdin
+	}
 	return cmd.Run()
 }
 
