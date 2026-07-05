@@ -152,9 +152,9 @@ grep -q "defaults/main.yml" "$WORK_DIR/README.md" \
   || fail "source file path not found"
 
 # Duplicate detection
-grep -q "duplicate" "$WORK_DIR/README.md" \
-  && pass "duplicate warning in README" \
-  || fail "duplicate warning not found"
+grep -q "also in" "$WORK_DIR/README.md" \
+  && pass "vars reference info in README" \
+  || fail "vars reference info not found"
 
 echo ""
 

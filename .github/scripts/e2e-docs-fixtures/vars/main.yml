@@ -1,4 +1,4 @@
 ---
 #—| string
 app_name: "overridden"
-#—? Should be flagged as duplicate
+#—? Static role binding — also referenced in vars
