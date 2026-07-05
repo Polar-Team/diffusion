@@ -1010,13 +1010,15 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "example": "#-| int\nhttp_port: 8080\n#-? Port number for the HTTP listener",
                 },
                 "#-!": {
-                    "description": "Required variable marker — variable is omitted from defaults and must be provided by the user",
-                    "usage": "Followed by the variable name. Used instead of a YAML declaration when no sensible default exists",
+                    "description": "Required variable marker — variable is OMITTED from defaults and must be provided by the user",
+                    "usage": "After '#-! ' (with a space), write the variable NAME only (no colon, no value). The variable has no YAML declaration — it is documented purely via this comment.",
+                    "syntax": "#-! <variable_name>",
                     "example": "#-| string\n#-! api_key\n#-? API key for authentication",
                 },
                 "#-&": {
-                    "description": "Optional variable marker — variable is omitted from defaults because its default is defined in Jinja2 template logic (e.g. {{ var | default('value') }})",
-                    "usage": "Followed by the variable name. Used instead of a YAML declaration when the default lives in a template",
+                    "description": "Optional variable marker — variable is OMITTED from defaults because its default is defined in Jinja2 template logic (e.g. {{ var | default('value') }})",
+                    "usage": "After '#-& ' (with a space), write the variable NAME only (no colon, no value). The variable has no YAML declaration — it is documented purely via this comment.",
+                    "syntax": "#-& <variable_name>",
                     "example": "#-| string\n#-& fallback_url\n#-? Fallback URL (uses default in template)",
                 },
             },
@@ -1025,6 +1027,29 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Required (no default): #-| <type>  →  #-! <var_name>  →  #-? <description>",
                 "Optional (Jinja2 default): #-| <type>  →  #-& <var_name>  →  #-? <description>",
             ],
+            "full_example": (
+                "# --- Example defaults/main.yml with all marker types ---\n"
+                "#-| int\n"
+                "http_port: 8080\n"
+                "#-? Port number for the HTTP listener\n"
+                "\n"
+                "#-| string\n"
+                "app_name: \"myapp\"\n"
+                "#-? Application display name\n"
+                "\n"
+                "#-| list\n"
+                "allowed_hosts:\n"
+                "  - localhost\n"
+                "#-? List of allowed hostnames\n"
+                "\n"
+                "#-| string\n"
+                "#-! api_key\n"
+                "#-? API key for external service (no default, user must provide)\n"
+                "\n"
+                "#-| string\n"
+                "#-& db_host\n"
+                "#-? Database host (default set in template via | default('localhost'))\n"
+            ),
             "yaml_compliance_note": (
                 "All markers use '#-' (hash + dash) as the prefix, immediately followed by a semantic character (|, ?, !, &). "
                 "The | and ? markers apply to the adjacent variable declaration. "
