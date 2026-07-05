@@ -15,6 +15,7 @@ const (
 
 // GenerateVariablesSection generates a markdown table of role variables.
 // Variables declared in multiple YAML sources (duplicates) are marked with a ⚠️ indicator.
+// Variables that exist in both defaults/ and vars/ are marked with ℹ️ (informational, not critical).
 func GenerateVariablesSection(variables []RoleVariable) string {
 	if len(variables) == 0 {
 		return fmt.Sprintf("%s\n\n## Role Variables\n\n_No variables found._\n\n%s", BeginMarker, EndMarker)
@@ -61,6 +62,18 @@ func GenerateVariablesSection(variables []RoleVariable) string {
 		if v.IsDuplicate {
 			varName = "⚠️ " + varName
 			source = source + " ⚠️ duplicate in: " + strings.Join(v.AllSources[1:], ", ")
+		} else if v.HasVarsRef {
+			varName = "ℹ️ " + varName
+			// Show which vars/ file also references this variable
+			varsSources := []string{}
+			for _, s := range v.AllSources {
+				if strings.HasPrefix(s, "vars") {
+					varsSources = append(varsSources, s)
+				}
+			}
+			if len(varsSources) > 0 {
+				source = source + " ℹ️ also in: " + strings.Join(varsSources, ", ")
+			}
 		}
 
 		sb.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s | %s |\n", varName, varType, defaultVal, source, description))
@@ -68,15 +81,23 @@ func GenerateVariablesSection(variables []RoleVariable) string {
 
 	// Add duplicate legend if any duplicates exist
 	hasDuplicates := false
+	hasVarsRefs := false
 	for _, v := range variables {
 		if v.IsDuplicate {
 			hasDuplicates = true
-			break
+		}
+		if v.HasVarsRef {
+			hasVarsRefs = true
 		}
 	}
 	if hasDuplicates {
-		sb.WriteString("\n> ⚠️ **Duplicates detected**: Variables marked with ⚠️ are declared in multiple YAML sources. ")
+		sb.WriteString("\n> ⚠️ **Duplicates detected**: Variables marked with ⚠️ are declared in multiple YAML sources of the same type. ")
 		sb.WriteString("The value from `defaults/` takes priority. Consider removing duplicate declarations.\n")
+	}
+	if hasVarsRefs {
+		sb.WriteString("\n> ℹ️ **Vars references**: Variables marked with ℹ️ have values defined in both `defaults/` and `vars/`. ")
+		sb.WriteString("This is not a critical issue — `vars/` may contain static role bindings or environment-specific overrides. ")
+		sb.WriteString("The `vars/` value takes higher precedence at runtime per Ansible variable precedence rules.\n")
 	}
 
 	sb.WriteString("\n")
