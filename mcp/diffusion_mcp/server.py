@@ -276,6 +276,42 @@ def docker_exec_in_molecule(
 
 
 # ---------------------------------------------------------------------------
+# Tool: docker_in_docker_in_molecule
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def docker_in_docker_in_molecule(
+    container_name: str, command: str, workdir: str = "", timeout: int = 300
+) -> str:
+    """Execute a command inside scenario container for troubleshooting.
+
+    Args:
+        container_name: Name of container defined in molecule.yml (e.g. "Ubunut-24-04")
+        command: Shell command to run inside the scenario container
+        workdir: Optional working directory inside the container
+        timeout: Command timeout in seconds (default 300). Increase for network operations.
+    """
+    molecule_container = _container_name(container_name)
+    scenario_docker_cmd = ["docker", "exec", molecule_container, "docker", "exec"]
+
+    if workdir:
+        scenario_docker_cmd.extend(["-w", workdir])
+    scenario_docker_cmd.extend([container_name, "/bin/sh", "-c", command])
+
+    result = _run(scenario_docker_cmd, timeout=timeout)
+    output_parts = []
+    if result["stdout"]:
+        output_parts.append(result["stdout"])
+    if result["stderr"]:
+        output_parts.append(f"[stderr] {result['stderr']}")
+    if result["returncode"] != 0:
+        output_parts.append(f"[exit code: {result['returncode']}]")
+
+    return "\n".join(output_parts) if output_parts else "(no output)"
+
+
+# ---------------------------------------------------------------------------
 # Tool: get_container_logs
 # ---------------------------------------------------------------------------
 
@@ -1011,13 +1047,13 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 },
                 "#-!": {
                     "description": "Required variable marker — variable is OMITTED from defaults and must be provided by the user",
-                    "usage": "After '#-! ' (with a space), write the variable NAME only (no colon, no value). The variable has no YAML declaration — it is documented purely via this comment.",
+                    "usage": "After '#-! ' (with a space), write the variable NAME only (no colon, no value). The variable has no YAML declaration — it is documented purely via this comment. Must have '#-| <type>' above and '#-? <description>' below, same as regular variables.",
                     "syntax": "#-! <variable_name>",
                     "example": "#-| string\n#-! api_key\n#-? API key for authentication",
                 },
                 "#-&": {
                     "description": "Optional variable marker — variable is OMITTED from defaults because its default is defined in Jinja2 template logic (e.g. {{ var | default('value') }})",
-                    "usage": "After '#-& ' (with a space), write the variable NAME only (no colon, no value). The variable has no YAML declaration — it is documented purely via this comment.",
+                    "usage": "After '#-& ' (with a space), write the variable NAME only (no colon, no value). The variable has no YAML declaration — it is documented purely via this comment. Must have '#-| <type>' above and '#-? <description>' below, same as regular variables.",
                     "syntax": "#-& <variable_name>",
                     "example": "#-| string\n#-& fallback_url\n#-? Fallback URL (uses default in template)",
                 },
@@ -1034,7 +1070,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "#-? Port number for the HTTP listener\n"
                 "\n"
                 "#-| string\n"
-                "app_name: \"myapp\"\n"
+                'app_name: "myapp"\n'
                 "#-? Application display name\n"
                 "\n"
                 "#-| list\n"
