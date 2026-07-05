@@ -388,9 +388,9 @@ def check_molecule_yml(
     molecule_dir = root / "molecule" / scenario / "molecule.yml"
     if mol_path == scenarios_dir and not molecule_dir.exists():
         warnings.append(
-            f"molecule.yml found in scenarios/{scenario}/ but molecule/{
+            f"""molecule.yml found in scenarios/{scenario}/ but molecule/{
                 scenario
-            }/ does not exist. "
+            }/ does not exist."""
             "Diffusion creates the molecule/ symlink at runtime, but local 'molecule test' "
             "commands won't find this scenario without it."
         )
@@ -518,11 +518,11 @@ def check_verify_yml(project_path: str = "", scenario: str = "default") -> str:
                 for v in var_keys:
                     if v in known_vars:
                         info.append(
-                            f"    ✓ {v}: {
+                            f"""    ✓ {v}: {
                                 len(task_vars[v])
                                 if isinstance(task_vars[v], list)
-                                else 'set'
-                            }"
+                                else "set"
+                            }"""
                         )
 
             # Check tags
@@ -967,6 +967,75 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Ansible Lint Configuration (excluded paths, warn list, skip list)",
             ],
         },
+        "docs": {
+            "description": "Generate or update inline documentation comments in defaults/main.yml based on special marker signs",
+            "usage": "diffusion docs [flags]",
+            "notes": [
+                "Scans defaults/main.yml for special comment markers and generates human-readable documentation.",
+                "Uses '#-' prefix (no space) followed by a marker character (|, ?, !, &) as documentation directives.",
+                "The --dry-run flag previews changes without writing to disk.",
+                "Comments are placed above the variable they document.",
+            ],
+            "flags": {
+                "--dry-run": {
+                    "description": "Show what changes would be made without writing to disk",
+                    "default": "false",
+                },
+                "--role, -r": {
+                    "description": "Role name (auto-detected from meta/main.yml if omitted)",
+                    "default": "(from meta/main.yml)",
+                },
+            },
+            "comment_markers": {
+                "#-|": {
+                    "description": "Type annotation — declares the variable's data type",
+                    "usage": "Place above a variable declaration or above #-! / #-& markers to declare the type",
+                    "values": [
+                        "string",
+                        "int",
+                        "float",
+                        "bool",
+                        "list",
+                        "dict",
+                        "path",
+                        "raw",
+                        "json",
+                        "yaml",
+                    ],
+                    "example": '#-| string\napp_name: "myapp"',
+                },
+                "#-?": {
+                    "description": "Description — human-readable explanation of the variable's purpose",
+                    "usage": "Place after the variable declaration or after #-! / #-& to describe the variable",
+                    "example": "#-| int\nhttp_port: 8080\n#-? Port number for the HTTP listener",
+                },
+                "#-!": {
+                    "description": "Required variable marker — variable is omitted from defaults and must be provided by the user",
+                    "usage": "Followed by the variable name. Used instead of a YAML declaration when no sensible default exists",
+                    "example": "#-| string\n#-! api_key\n#-? API key for authentication",
+                },
+                "#-&": {
+                    "description": "Optional variable marker — variable is omitted from defaults because its default is defined in Jinja2 template logic (e.g. {{ var | default('value') }})",
+                    "usage": "Followed by the variable name. Used instead of a YAML declaration when the default lives in a template",
+                    "example": "#-| string\n#-& fallback_url\n#-? Fallback URL (uses default in template)",
+                },
+            },
+            "annotation_block_patterns": [
+                "Declared variable:   #-| <type>  →  var_name: <default>  →  #-? <description>",
+                "Required (no default): #-| <type>  →  #-! <var_name>  →  #-? <description>",
+                "Optional (Jinja2 default): #-| <type>  →  #-& <var_name>  →  #-? <description>",
+            ],
+            "yaml_compliance_note": (
+                "All markers use '#-' (hash + dash) as the prefix, immediately followed by a semantic character (|, ?, !, &). "
+                "The | and ? markers apply to the adjacent variable declaration. "
+                "The ! and & markers are standalone — they carry the variable name themselves (no YAML declaration needed)."
+            ),
+            "examples": [
+                "diffusion docs                    # Generate/update docs in defaults/main.yml",
+                "diffusion docs --dry-run          # Preview changes without writing",
+                "diffusion docs --role myrole      # Generate docs for a specific role",
+            ],
+        },
         "deploy": {
             "description": "Deploy Ansible roles to remote hosts using the diffusion molecule container",
             "usage": "diffusion deploy [flags]",
@@ -1035,12 +1104,12 @@ def get_diffusion_cli_reference(command: str = "") -> str:
             "auto_generated_playbook_example": (
                 "---\n"
                 "# Auto-generated by diffusion deploy\n\n"
-                "- name: \"diffusion deploy | all\"\n"
+                '- name: "diffusion deploy | all"\n'
                 "  hosts: all\n"
                 "  gather_facts: true\n"
                 "  roles:\n"
                 "    - role: geerlingguy.docker\n\n"
-                "- name: \"diffusion deploy | webservers\"\n"
+                '- name: "diffusion deploy | webservers"\n'
                 "  hosts: webservers\n"
                 "  gather_facts: true\n"
                 "  roles:\n"
@@ -1048,7 +1117,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
             ),
             "examples": [
                 "diffusion deploy --role-source scm=galaxy,version=>=6.0.0,galaxy=geerlingguy.docker --host web01=ansible_host=1.2.3.4",
-                "diffusion deploy --role-source \"scm=git,version=main,url=https://github.com/org/role.git,name=myrole,apply_to=webservers\" --host web01=ansible_host=1.2.3.4",
+                'diffusion deploy --role-source "scm=git,version=main,url=https://github.com/org/role.git,name=myrole,apply_to=webservers" --host web01=ansible_host=1.2.3.4',
                 "diffusion deploy --playbook site.yml --role-source scm=galaxy,version=>=6.0.0,galaxy=ns.role --skip-period 24h",
             ],
         },
@@ -1427,11 +1496,7 @@ def get_requirements_yml(project_path: str = "", scenario: str = "default") -> s
     if root is None:
         return "Error: Could not find project root."
 
-    candidates = [
-        root / "molecule" / scenario / "requirements.yml",
-        root / "scenarios" / scenario / "requirements.yml",
-        root / "requirements.yml",
-    ]
+    candidates = [root / "scenarios" / scenario / "requirements.yml"]
 
     for c in candidates:
         if c.exists():
@@ -1467,7 +1532,7 @@ def list_molecule_scenarios(project_path: str = "") -> str:
     scenarios: list[dict[str, Any]] = []
 
     # Check molecule/ and scenarios/ directories
-    for base_dir in [root / "molecule", root / "scenarios"]:
+    for base_dir in [root / "scenarios"]:
         if not base_dir.exists():
             continue
         for entry in sorted(base_dir.iterdir()):
@@ -1529,6 +1594,7 @@ def run_diffusion_command(
         "show",
         "deps check",
         "deps resolve",
+        "docs --dry-run",
         "role",
         "deploy",
         "--version",
@@ -1550,6 +1616,45 @@ def run_diffusion_command(
         cmd_parts.extend(shlex.split(args))
 
     result = _run(cmd_parts, timeout=30, cwd=cwd)
+    output_parts = []
+    if result["stdout"]:
+        output_parts.append(result["stdout"])
+    if result["stderr"]:
+        output_parts.append(f"[stderr] {result['stderr']}")
+    if result["returncode"] != 0:
+        output_parts.append(f"[exit code: {result['returncode']}]")
+
+    return "\n".join(output_parts) if output_parts else "(no output)"
+
+
+# ---------------------------------------------------------------------------
+# Tool: update_diffusion_docs
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def update_diffusion_docs(
+    project_path: str = "",
+    role: str = "",
+) -> str:
+    """Run `diffusion docs --dry-run` and return the output.
+
+    Shows what documentation changes would be made to the role's
+    defaults/main.yml comments without actually writing them.
+
+    Args:
+        project_path: Path to the project root (auto-detected if empty).
+        role: Role name to pass via --role flag (optional).
+    """
+    root = Path(project_path) if project_path else _find_project_root()
+    cwd = str(root) if root else None
+
+    cmd_parts = ["diffusion", "docs", "--dry-run"]
+    if role:
+        cmd_parts.extend(["--role", role])
+
+    result = _run(cmd_parts, timeout=60, cwd=cwd)
+
     output_parts = []
     if result["stdout"]:
         output_parts.append(result["stdout"])
@@ -1645,22 +1750,22 @@ def get_terraform_provider_reference(resource: str = "") -> str:
                 },
             },
             "example": (
-                'terraform {\n'
-                '  required_providers {\n'
-                '    diffusion = {\n'
+                "terraform {\n"
+                "  required_providers {\n"
+                "    diffusion = {\n"
                 '      source  = "registry.terraform.io/diffusion/diffusion"\n'
                 '      version = ">= 0.1.0"\n'
-                '    }\n'
-                '  }\n'
-                '}\n\n'
+                "    }\n"
+                "  }\n"
+                "}\n\n"
                 'provider "diffusion" {\n'
                 '  diffusion_binary  = "/usr/local/bin/diffusion"\n'
                 '  registry_server   = "ghcr.io"\n'
                 '  registry_provider = "Public"\n'
                 '  vault_addr        = "https://vault.example.com"\n'
-                '  vault_token       = var.vault_token\n'
+                "  vault_token       = var.vault_token\n"
                 '  host_wait_timeout = "5m"\n'
-                '}'
+                "}"
             ),
         },
         "deploy": {
@@ -1704,29 +1809,29 @@ def get_terraform_provider_reference(resource: str = "") -> str:
             },
             "example": (
                 'resource "diffusion_deploy" "app" {\n'
-                '  role_sources = [\n'
-                '    {\n'
+                "  role_sources = [\n"
+                "    {\n"
                 '      scm     = "galaxy"\n'
                 '      version = ">=6.0.0"\n'
                 '      galaxy  = "geerlingguy.docker"\n'
-                '    },\n'
-                '    {\n'
+                "    },\n"
+                "    {\n"
                 '      scm      = "git"\n'
                 '      version  = "main"\n'
                 '      url      = "https://github.com/myorg/ansible-app.git"\n'
                 '      name     = "app"\n'
                 '      apply_to = "webservers"\n'
-                '    }\n'
-                '  ]\n\n'
-                '  hosts = {\n'
+                "    }\n"
+                "  ]\n\n"
+                "  hosts = {\n"
                 '    web01 = { vars = { ansible_host = "1.2.3.4", ansible_user = "ubuntu" } }\n'
                 '    web02 = { vars = { ansible_host = "1.2.3.5", ansible_user = "ubuntu" } }\n'
-                '  }\n'
+                "  }\n"
                 '  groups    = { webservers = ["web01", "web02"] }\n'
                 '  variables = { env = "production" }\n\n'
                 '  skip_if_succeeded_within = "24h"\n'
                 '  host_wait_timeout        = "10m"\n'
-                '}'
+                "}"
             ),
         },
         "inventory": {
@@ -1746,11 +1851,11 @@ def get_terraform_provider_reference(resource: str = "") -> str:
             },
             "example": (
                 'data "diffusion_inventory" "hosts" {\n'
-                '  inventory_yaml = diffusion_deploy.app.inventory_rendered\n'
-                '}\n\n'
+                "  inventory_yaml = diffusion_deploy.app.inventory_rendered\n"
+                "}\n\n"
                 'output "host_ips" {\n'
-                '  value = data.diffusion_inventory.hosts.hosts\n'
-                '}'
+                "  value = data.diffusion_inventory.hosts.hosts\n"
+                "}"
             ),
         },
     }
@@ -1759,10 +1864,7 @@ def get_terraform_provider_reference(resource: str = "") -> str:
     if r:
         if r in ref:
             return json.dumps(ref[r], indent=2)
-        return (
-            f"Unknown resource '{resource}'. "
-            f"Available: {', '.join(ref.keys())}"
-        )
+        return f"Unknown resource '{resource}'. Available: {', '.join(ref.keys())}"
     return json.dumps(ref, indent=2)
 
 
