@@ -1004,13 +1004,14 @@ def get_diffusion_cli_reference(command: str = "") -> str:
             ],
         },
         "docs": {
-            "description": "Generate or update inline documentation comments in defaults/main.yml based on special marker signs",
+            "description": "Generate or update inline documentation comments in defaults/ directory based on special marker signs",
             "usage": "diffusion docs [flags]",
             "notes": [
-                "Scans defaults/main.yml for special comment markers and generates human-readable documentation.",
+                "Scans all YAML files under the defaults/ directory (not just main.yml) for special comment markers.",
+                "Variables can be split across multiple files under defaults/ (e.g. defaults/main.yml, defaults/network.yml, defaults/database.yml).",
                 "Uses '#-' prefix (no space) followed by a marker character (|, ?, !, &) as documentation directives.",
                 "The --dry-run flag previews changes without writing to disk.",
-                "Comments are placed above the variable they document.",
+                "Comments are placed above or below the variable they document.",
             ],
             "flags": {
                 "--dry-run": {
@@ -1064,7 +1065,9 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Optional (Jinja2 default): #-| <type>  →  #-& <var_name>  →  #-? <description>",
             ],
             "full_example": (
-                "# --- Example defaults/main.yml with all marker types ---\n"
+                "# --- Example: variables can live in any .yml file under defaults/ ---\n"
+                "# e.g. defaults/main.yml, defaults/network.yml, defaults/database.yml\n"
+                "\n"
                 "#-| int\n"
                 "http_port: 8080\n"
                 "#-? Port number for the HTTP listener\n"
@@ -1092,7 +1095,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "The ! and & markers are standalone — they carry the variable name themselves (no YAML declaration needed)."
             ),
             "examples": [
-                "diffusion docs                    # Generate/update docs in defaults/main.yml",
+                "diffusion docs                    # Generate/update docs from all files in defaults/",
                 "diffusion docs --dry-run          # Preview changes without writing",
                 "diffusion docs --role myrole      # Generate docs for a specific role",
             ],
