@@ -18,7 +18,8 @@ type RoleVariable struct {
 	Description string   // Description from #—? comment
 	Source      string   // Primary source file (e.g., "defaults/main.yml")
 	AllSources  []string // All sources where this variable was declared (for duplicate detection)
-	IsDuplicate bool     // True if variable is declared (non-Jinja2) in multiple YAML sources
+	IsDuplicate bool     // True if variable is declared (non-Jinja2) in multiple YAML sources of the SAME type (e.g., two defaults files)
+	HasVarsRef  bool     // True if variable exists in both defaults/ and vars/ (informational, not a critical issue)
 	Required    bool     // True if variable is marked with #—! (required, no default)
 	Optional    bool     // True if variable is marked with #—& (optional, default set in Jinja2 logic)
 }
@@ -91,9 +92,30 @@ func ScanRoleVariables(roleDir string) ([]RoleVariable, error) {
 	}
 
 	// 5. Mark duplicates — variables declared (non-Jinja2) in multiple YAML sources
+	// Distinguish between true duplicates (multiple sources of the same type) and
+	// vars/defaults cross-references (acceptable for static role bindings).
 	for _, v := range varMap {
 		if len(v.AllSources) > 1 {
-			v.IsDuplicate = true
+			hasDefaults := false
+			hasVars := false
+			defaultsCount := 0
+			varsCount := 0
+			for _, src := range v.AllSources {
+				if strings.HasPrefix(src, "defaults") {
+					hasDefaults = true
+					defaultsCount++
+				} else if strings.HasPrefix(src, "vars") {
+					hasVars = true
+					varsCount++
+				}
+			}
+			// Cross-reference between defaults/ and vars/ is informational, not a critical duplicate
+			if hasDefaults && hasVars && defaultsCount <= 1 && varsCount <= 1 {
+				v.HasVarsRef = true
+			} else {
+				// True duplicate: same var in multiple files of the same source type
+				v.IsDuplicate = true
+			}
 		}
 	}
 
