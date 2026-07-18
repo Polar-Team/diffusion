@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"diffusion/internal/config"
@@ -59,7 +60,7 @@ func (pc *PathCache) Clear() {
 }
 
 // ColorPrintf prints formatted colored output
-func ColorPrintf(color, format string, args ...interface{}) {
+func ColorPrintf(color, format string, args ...any) {
 	fmt.Printf("%s%s%s\n", color, fmt.Sprintf(format, args...), config.ColorReset)
 }
 
@@ -159,12 +160,7 @@ func RemoveFromSlice(slice []string, element string) ([]string, bool) {
 
 // ContainsString checks if a string slice contains an element
 func ContainsString(slice []string, element string) bool {
-	for _, item := range slice {
-		if item == element {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, element)
 }
 
 // CleanupTempDir removes a temporary directory and logs any errors

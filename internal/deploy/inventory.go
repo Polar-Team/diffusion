@@ -41,12 +41,12 @@ type InventoryGroup struct {
 //	    app_version: "1.0"
 func BuildInventory(hosts []InventoryHost, groups []InventoryGroup, globalVars map[string]string) ([]byte, error) {
 	// Build hosts map.
-	hostsMap := make(map[string]interface{})
+	hostsMap := make(map[string]any)
 	for _, h := range hosts {
 		if h.Name == "" {
 			return nil, fmt.Errorf("inventory host has an empty name")
 		}
-		vars := make(map[string]interface{})
+		vars := make(map[string]any)
 		// Sort keys for deterministic output.
 		keys := make([]string, 0, len(h.Variables))
 		for k := range h.Variables {
@@ -60,36 +60,36 @@ func BuildInventory(hosts []InventoryHost, groups []InventoryGroup, globalVars m
 	}
 
 	// Build children map.
-	childrenMap := make(map[string]interface{})
+	childrenMap := make(map[string]any)
 	for _, g := range groups {
 		if g.Name == "" {
 			return nil, fmt.Errorf("inventory group has an empty name")
 		}
-		groupHosts := make(map[string]interface{})
+		groupHosts := make(map[string]any)
 		for _, hName := range g.Hosts {
-			groupHosts[hName] = map[string]interface{}{}
+			groupHosts[hName] = map[string]any{}
 		}
-		childrenMap[g.Name] = map[string]interface{}{
+		childrenMap[g.Name] = map[string]any{
 			"hosts": groupHosts,
 		}
 	}
 
 	// Build top-level all group.
-	allGroup := map[string]interface{}{
+	allGroup := map[string]any{
 		"hosts": hostsMap,
 	}
 	if len(childrenMap) > 0 {
 		allGroup["children"] = childrenMap
 	}
 	if len(globalVars) > 0 {
-		sortedVars := make(map[string]interface{})
+		sortedVars := make(map[string]any)
 		for k, v := range globalVars {
 			sortedVars[k] = v
 		}
 		allGroup["vars"] = sortedVars
 	}
 
-	inventory := map[string]interface{}{
+	inventory := map[string]any{
 		"all": allGroup,
 	}
 
