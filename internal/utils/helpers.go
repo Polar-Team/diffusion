@@ -396,6 +396,37 @@ func FixContainerPermissions(role string, path string, ciMode bool) error {
 	return DockerExecInteractiveHide(role, "/bin/sh", ciMode, "-c", chownCmd)
 }
 
+// DockerRunDeployContainer runs: docker run --rm --name diffusion-deploy-<sessionID> <args...>
+// It uses a deferred `docker rm -f` to guarantee container cleanup on failure.
+// The sessionID should be a GUID-style unique identifier to avoid collisions
+// between concurrent deploy sessions.
+func DockerRunDeployContainer(sessionID string, args []string) error {
+	containerName := fmt.Sprintf("diffusion-deploy-%s", sessionID)
+
+	// Inject --name into the args after "run" and "--rm".
+	fullArgs := []string{"run", "--rm", "--name", containerName}
+	fullArgs = append(fullArgs, args...)
+
+	// Ensure the container is removed on failure or interruption.
+	// --rm handles the normal exit case, but if the process is killed or
+	// Docker fails to clean up, this defer guarantees removal.
+	defer func() {
+		rmCmd := exec.Command("docker", "rm", "-f", containerName)
+		rmCmd.Stdout = nil
+		rmCmd.Stderr = nil
+		_ = rmCmd.Run()
+	}()
+
+	cmd := exec.Command("docker", fullArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("deploy container %s exited with error: %w", containerName, err)
+	}
+	return nil
+}
+
 // CopyIfExists copies file/directory if it exists (recursively when directory)
 // Performance optimization: cache os.Stat result to avoid duplicate calls
 func CopyIfExists(src, dst string) {

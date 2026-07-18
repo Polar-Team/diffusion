@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 
 	"diffusion/internal/config"
@@ -88,33 +87,16 @@ func RunDeployContainer(cfg DeployContainerConfig) error {
 	image := utils.GetImageURL(cfg.ContainerRegistry)
 	log.Printf(config.ColorGreen+"Using container image: %s"+config.ColorReset, image)
 
-	containerName := fmt.Sprintf("diffusion-deploy-%s", generateSessionID())
+	sessionID := generateSessionID()
 
-	args, err := buildDeployDockerArgs(cfg, image, containerName)
+	args, err := buildDeployDockerArgs(cfg, image)
 	if err != nil {
 		return fmt.Errorf("failed to build docker args: %w", err)
 	}
 
-	// Ensure the container is removed on failure or interruption.
-	// --rm handles the normal exit case, but if the process is killed or
-	// Docker fails to clean up, this defer guarantees removal.
-	defer func() {
-		rmCmd := exec.Command("docker", "rm", "-f", containerName)
-		rmCmd.Stdout = nil
-		rmCmd.Stderr = nil
-		_ = rmCmd.Run()
-	}()
-
 	log.Printf(config.ColorGreen + "Starting deploy container (roles/collections will be installed inside)..." + config.ColorReset)
 
-	cmd := exec.Command("docker", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("deploy container exited with error: %w", err)
-	}
-	return nil
+	return utils.DockerRunDeployContainer(sessionID, args)
 }
 
 // buildDeployDockerArgs constructs the full `docker run` argument list.
@@ -123,11 +105,8 @@ func RunDeployContainer(cfg DeployContainerConfig) error {
 //
 //	a) installs roles + collections from requirements.yml into /tmp/diffusion/
 //	b) runs ansible-playbook with those paths set via ANSIBLE_* env vars
-func buildDeployDockerArgs(cfg DeployContainerConfig, image, containerName string) ([]string, error) {
-	args := []string{
-		"run", "--rm",
-		"--name", containerName,
-	}
+func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, error) {
+	var args []string
 
 	// --- Volume mounts (read-only; host paths → container paths) ---
 

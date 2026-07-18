@@ -119,16 +119,17 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 	if len(extraDirs) > 0 {
 		// Use a shell wrapper to sed-replace host paths with container paths in the inventory.
 		sedExpr := ""
+		var builder strings.Builder
 		for i, dir := range extraDirs {
 			containerPath := fmt.Sprintf("/probe/ssh-keys-%d", i)
 			// Escape slashes for sed (handle both forward and backslash paths).
 			hostEscaped := strings.ReplaceAll(dir, "/", "\\/")
 			containerEscaped := strings.ReplaceAll(containerPath, "/", "\\/")
-			sedExpr += fmt.Sprintf("s/%s/%s/g;", hostEscaped, containerEscaped)
+			fmt.Fprintf(&builder, "s/%s/%s/g;", hostEscaped, containerEscaped)
 			// Also handle Windows backslash paths that might end up in YAML.
 			hostWinEscaped := strings.ReplaceAll(strings.ReplaceAll(dir, "\\", "/"), "/", "\\/")
 			if hostWinEscaped != hostEscaped {
-				sedExpr += fmt.Sprintf("s/%s/%s/g;", hostWinEscaped, containerEscaped)
+				fmt.Fprintf(&builder, "s/%s/%s/g;", hostWinEscaped, containerEscaped)
 			}
 		}
 		shellCmd := fmt.Sprintf(
@@ -216,7 +217,7 @@ func extractSSHKeyDirs(inventoryPath string) []string {
 	}
 
 	// Parse inventory to extract host vars.
-	var inv map[string]interface{}
+	var inv map[string]any
 	if err := yaml.Unmarshal(data, &inv); err != nil {
 		return nil
 	}
@@ -237,9 +238,9 @@ func extractSSHKeyDirs(inventoryPath string) []string {
 
 // walkInventoryForKeyFiles recursively walks the inventory structure to find
 // ansible_ssh_private_key_file values.
-func walkInventoryForKeyFiles(obj interface{}, sshHome string, seen map[string]bool, dirs *[]string) {
+func walkInventoryForKeyFiles(obj any, sshHome string, seen map[string]bool, dirs *[]string) {
 	switch v := obj.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for k, val := range v {
 			if k == "ansible_ssh_private_key_file" {
 				if s, ok := val.(string); ok && s != "" {
@@ -260,7 +261,7 @@ func walkInventoryForKeyFiles(obj interface{}, sshHome string, seen map[string]b
 				walkInventoryForKeyFiles(val, sshHome, seen, dirs)
 			}
 		}
-	case []interface{}:
+	case []any:
 		for _, item := range v {
 			walkInventoryForKeyFiles(item, sshHome, seen, dirs)
 		}

@@ -38,9 +38,7 @@ func (s *Spinner) Start() {
 	s.active = true
 	s.mu.Unlock()
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		i := 0
 		for {
 			select {
@@ -55,7 +53,7 @@ func (s *Spinner) Start() {
 				time.Sleep(s.interval)
 			}
 		}
-	}()
+	})
 }
 
 // Stop ends the spinner animation
