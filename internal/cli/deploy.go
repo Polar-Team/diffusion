@@ -32,6 +32,9 @@ type deployFlags struct {
 	// Extra vars passed to ansible-playbook
 	extraVars []string // "key=value"
 
+	// SSH key as base64 text (alternative to file path)
+	sshKeyBase64 string
+
 	// Skip / idempotence
 	skipPeriod string // Go duration string, e.g. "24h"
 
@@ -112,6 +115,8 @@ EXAMPLES
 		`Global inventory variable (repeatable). Format: "key=value"`)
 	cmd.Flags().StringArrayVar(&f.extraVars, "extra-var", nil,
 		`Extra variable for ansible-playbook --extra-vars (repeatable). Format: "key=value"`)
+	cmd.Flags().StringVar(&f.sshKeyBase64, "ssh-key-base64", "",
+		`Base64-encoded SSH private key. Decoded and used as ansible_ssh_private_key_file for hosts that don't specify one.`)
 	cmd.Flags().StringVar(&f.skipPeriod, "skip-period", "",
 		`Skip re-deploy if last run succeeded within this period (e.g. "24h"). Default: always deploy.`)
 	cmd.Flags().StringVar(&f.hostWaitInitialDelay, "host-wait-initial-delay", "10s",
@@ -185,6 +190,7 @@ func runDeploy(ctx context.Context, f *deployFlags) error {
 		Groups:             groups,
 		GlobalVars:         globalVars,
 		ExtraVars:          extraVars,
+		SSHKeyBase64:       f.sshKeyBase64,
 		SkipIfSucceededFor: skipPeriod,
 		ContainerRegistry:  cfg.ContainerRegistry,
 		ArtifactSourcesCfg: cfg.ArtifactSources,
