@@ -57,11 +57,10 @@ type DeployContainerConfig struct {
 	// ExtraVarsFile is an optional host-side JSON file mounted at /deploy/extra_vars.json.
 	ExtraVarsFile string
 
-	// SSHKeyBase64 is the raw base64-encoded SSH private key string. When set,
-	// it is passed as an environment variable into the container and decoded
-	// inside — no host-side file mount needed. Used by the ping probe and
-	// the deploy container to write the key at runtime.
-	SSHKeyBase64 string
+	// SSHKeys is a map of hostname (or "*" for all) → base64-encoded SSH private
+	// key. Passed as env vars into the container, decoded at runtime to
+	// /tmp/ssh-keys/<host>, and set as ansible_ssh_private_key_file in the inventory.
+	SSHKeys map[string]string
 
 	// ContainerRegistry configures the molecule container image.
 	ContainerRegistry *config.ContainerRegistry
@@ -127,9 +126,10 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 		args = append(args, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
 	}
 
-	// Pass base64 SSH key as env var (decoded inside container, no mount needed).
-	if cfg.SSHKeyBase64 != "" {
-		args = append(args, "-e", "SSH_KEY_BASE64="+cfg.SSHKeyBase64)
+	// Pass base64 SSH keys as env vars (decoded inside container, no mount needed).
+	for host, keyB64 := range cfg.SSHKeys {
+		envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+		args = append(args, "-e", envName+"="+keyB64)
 	}
 
 	// Mount additional SSH key directories referenced in the inventory
@@ -237,35 +237,73 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		colsPath,
 	)
 
-	// Step 4: decode base64 SSH key inside container (if provided via env var).
+	// Step 4: decode base64 SSH keys inside container (if provided via env vars).
 	decodeKeyCmd := ""
 	privateKeyFlag := ""
-	if cfg.SSHKeyBase64 != "" {
-		decodeKeyCmd = "echo \"$SSH_KEY_BASE64\" | base64 -d > /tmp/ssh-key && chmod 600 /tmp/ssh-key && "
-		privateKeyFlag = " --private-key /tmp/ssh-key"
+	if len(cfg.SSHKeys) > 0 {
+		var decodeSteps []string
+		decodeSteps = append(decodeSteps, "mkdir -p /tmp/ssh-keys")
+		for host := range cfg.SSHKeys {
+			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+			keyPath := "/tmp/ssh-keys/" + host
+			decodeSteps = append(decodeSteps,
+				fmt.Sprintf("echo \"$%s\" | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
+		}
+		decodeKeyCmd = strings.Join(decodeSteps, " && ") + " && "
+
+		// If there's a wildcard key "*", use --private-key globally.
+		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard && len(cfg.SSHKeys) == 1 {
+			privateKeyFlag = " --private-key /tmp/ssh-keys/*"
+		}
 	}
 
-	// Step 5: rewrite SSH key paths in the inventory if extra key dirs are mounted.
-	// The inventory was generated with host-local paths; we need container paths.
+	// Step 5: rewrite SSH key paths in the inventory if extra key dirs are mounted
+	// or per-host SSH keys need ansible_ssh_private_key_file injected.
 	inventoryFile := "/deploy/inventory.yml"
 	extraDirs := extractSSHKeyDirs(cfg.InventoryPath)
 	rewriteCmd := ""
 
-	if len(extraDirs) > 0 {
+	// Determine if we need per-host key injection (non-wildcard SSH keys).
+	perHostKeys := make(map[string]string)
+	for host, _ := range cfg.SSHKeys {
+		if host != "*" {
+			perHostKeys[host] = "/tmp/ssh-keys/" + host
+		}
+	}
+
+	needsRewrite := len(extraDirs) > 0 || len(perHostKeys) > 0
+	if needsRewrite {
 		inventoryFile = "/tmp/inventory-rewritten.yml"
 		var builder strings.Builder
+
+		// Rewrite mounted extra SSH key dirs.
 		for i, dir := range extraDirs {
 			containerPath := fmt.Sprintf("/deploy/ssh-keys-%d", i)
 			hostEscaped := strings.ReplaceAll(dir, "/", "\\/")
 			containerEscaped := strings.ReplaceAll(containerPath, "/", "\\/")
 			fmt.Fprintf(&builder, "s/%s/%s/g;", hostEscaped, containerEscaped)
-			// Handle Windows backslash paths converted to forward slashes.
 			hostWinEscaped := strings.ReplaceAll(strings.ReplaceAll(dir, "\\", "/"), "/", "\\/")
 			if hostWinEscaped != hostEscaped {
 				fmt.Fprintf(&builder, "s/%s/%s/g;", hostWinEscaped, containerEscaped)
 			}
 		}
-		rewriteCmd = fmt.Sprintf("sed '%s' /deploy/inventory.yml > %s && ", builder.String(), inventoryFile)
+
+		sedExpr := builder.String()
+		if sedExpr != "" {
+			rewriteCmd = fmt.Sprintf("sed '%s' /deploy/inventory.yml > %s", sedExpr, inventoryFile)
+		} else {
+			rewriteCmd = fmt.Sprintf("cp /deploy/inventory.yml %s", inventoryFile)
+		}
+
+		// For per-host keys, use sed to inject ansible_ssh_private_key_file after the host line.
+		for host, keyPath := range perHostKeys {
+			// Insert ansible_ssh_private_key_file on the line after the hostname entry.
+			escapedKeyPath := strings.ReplaceAll(keyPath, "/", "\\/")
+			rewriteCmd += fmt.Sprintf(
+				" && sed -i '/%s:/a\\      ansible_ssh_private_key_file: %s' %s",
+				host, escapedKeyPath, inventoryFile)
+		}
+		rewriteCmd += " && "
 	}
 
 	// Step 6: run ansible-playbook with the wrapper

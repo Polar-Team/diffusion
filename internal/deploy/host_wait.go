@@ -105,9 +105,10 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 		args = append(args, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
 	}
 
-	// Pass base64 SSH key as env var (decoded inside container, no mount needed).
-	if cfg.SSHKeyBase64 != "" {
-		args = append(args, "-e", "SSH_KEY_BASE64="+cfg.SSHKeyBase64)
+	// Pass base64 SSH keys as env vars (decoded inside container, no mount needed).
+	for host, keyB64 := range cfg.SSHKeys {
+		envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+		args = append(args, "-e", envName+"="+keyB64)
 	}
 
 	// Mount any additional SSH key directories referenced in the inventory.
@@ -121,10 +122,44 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 	args = append(args, image)
 
 	// Build the ansible ping command.
-	if cfg.SSHKeyBase64 != "" {
-		// Decode the key inside the container and use --private-key.
-		shellCmd := "echo \"$SSH_KEY_BASE64\" | base64 -d > /tmp/ssh-key && chmod 600 /tmp/ssh-key && " +
-			"ansible all -i /probe/inventory.yml -m ansible.builtin.ping --private-key /tmp/ssh-key --timeout 5"
+	if len(cfg.SSHKeys) > 0 {
+		// Decode all keys inside the container and use --private-key for wildcard,
+		// or inject per-host key paths into the inventory.
+		var decodeSteps []string
+		decodeSteps = append(decodeSteps, "mkdir -p /tmp/ssh-keys")
+		for host := range cfg.SSHKeys {
+			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+			keyPath := "/tmp/ssh-keys/" + host
+			decodeSteps = append(decodeSteps,
+				fmt.Sprintf("echo \"$%s\" | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
+		}
+
+		ansibleCmd := "ansible all -i /probe/inventory.yml -m ansible.builtin.ping --timeout 5"
+
+		// Wildcard: single key for all hosts.
+		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard && len(cfg.SSHKeys) == 1 {
+			ansibleCmd += " --private-key /tmp/ssh-keys/*"
+		} else {
+			// Per-host keys: rewrite inventory to add ansible_ssh_private_key_file.
+			ansibleCmd = "cp /probe/inventory.yml /tmp/inventory.yml"
+			for host := range cfg.SSHKeys {
+				if host == "*" {
+					continue
+				}
+				keyPath := "/tmp/ssh-keys/" + host
+				ansibleCmd += fmt.Sprintf(
+					" && sed -i '/%s:/a\\      ansible_ssh_private_key_file: %s' /tmp/inventory.yml",
+					host, keyPath)
+			}
+			// If there's also a wildcard, apply it as --private-key fallback.
+			privateKeyFlag := ""
+			if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
+				privateKeyFlag = " --private-key /tmp/ssh-keys/*"
+			}
+			ansibleCmd += " && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5" + privateKeyFlag
+		}
+
+		shellCmd := strings.Join(decodeSteps, " && ") + " && " + ansibleCmd
 		args = append(args, "sh", "-c", shellCmd)
 	} else if len(extraDirs) > 0 {
 		// Use a shell wrapper to sed-replace host paths with container paths in the inventory.

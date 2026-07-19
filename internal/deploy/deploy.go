@@ -43,6 +43,12 @@ type DeployConfig struct {
 	// keys are generated dynamically (e.g. tls_private_key) and not stored on disk.
 	SSHKeyBase64 string
 
+	// SSHKeys is a map of hostname (or "*" for all) → base64-encoded SSH private
+	// key. Each key is passed as an env var into the container, decoded at runtime,
+	// and assigned per host. This supports multi-key scenarios where different
+	// hosts use different SSH keys.
+	SSHKeys map[string]string
+
 	// SkipIfSucceededFor: if > 0 and the last run for the same RunID succeeded
 	// within this duration, remote hosts skip the deploy tasks.
 	SkipIfSucceededFor time.Duration
@@ -133,8 +139,10 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 	}
 
 	// --- 6. Build inventory ---
-	// NOTE: inventory is built AFTER the optional SSH key injection below so that
-	// ansible_ssh_private_key_file is already set when the YAML is rendered.
+	inventoryBytes, err := BuildInventory(cfg.Hosts, cfg.Groups, cfg.GlobalVars)
+	if err != nil {
+		return fmt.Errorf("inventory generation failed: %w", err)
+	}
 
 	// Create a temp working directory for all generated files.
 	tmpDir, err := os.MkdirTemp("", "diffusion-deploy-*")
@@ -146,15 +154,6 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 			log.Printf(config.ColorYellow+"warning: failed to remove temp dir %s: %v"+config.ColorReset, tmpDir, err)
 		}
 	}()
-
-	// --- 6b. (SSH key base64 is passed through to the container via env var —
-	//          no host-side decoding needed.) ---
-
-	// Now build inventory.
-	inventoryBytes, err := BuildInventory(cfg.Hosts, cfg.Groups, cfg.GlobalVars)
-	if err != nil {
-		return fmt.Errorf("inventory generation failed: %w", err)
-	}
 
 	// Write inventory
 	inventoryPath := filepath.Join(tmpDir, "inventory.yml")
@@ -249,7 +248,7 @@ func buildContainerConfig(
 		InventoryPath:     inventoryPath,
 		PlaybookDir:       playbookDir,
 		ExtraVarsFile:     extraVarsFile,
-		SSHKeyBase64:      cfg.SSHKeyBase64,
+		SSHKeys:           cfg.SSHKeys,
 		ContainerRegistry: cfg.ContainerRegistry,
 		ArtifactSources:   resolved,
 		VaultToken:        cfg.VaultToken,
