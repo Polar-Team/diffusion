@@ -105,6 +105,11 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 		args = append(args, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
 	}
 
+	// Pass base64 SSH key as env var (decoded inside container, no mount needed).
+	if cfg.SSHKeyBase64 != "" {
+		args = append(args, "-e", "SSH_KEY_BASE64="+cfg.SSHKeyBase64)
+	}
+
 	// Mount any additional SSH key directories referenced in the inventory.
 	// This handles keys outside ~/.ssh (e.g. project-local generated keys from Terraform).
 	extraDirs := extractSSHKeyDirs(inventoryPath)
@@ -115,18 +120,20 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 
 	args = append(args, image)
 
-	// Build the container command: rewrite inventory key paths, then run ansible ping.
-	if len(extraDirs) > 0 {
+	// Build the ansible ping command.
+	if cfg.SSHKeyBase64 != "" {
+		// Decode the key inside the container and use --private-key.
+		shellCmd := "echo \"$SSH_KEY_BASE64\" | base64 -d > /tmp/ssh-key && chmod 600 /tmp/ssh-key && " +
+			"ansible all -i /probe/inventory.yml -m ansible.builtin.ping --private-key /tmp/ssh-key --timeout 5"
+		args = append(args, "sh", "-c", shellCmd)
+	} else if len(extraDirs) > 0 {
 		// Use a shell wrapper to sed-replace host paths with container paths in the inventory.
-		sedExpr := ""
 		var builder strings.Builder
 		for i, dir := range extraDirs {
 			containerPath := fmt.Sprintf("/probe/ssh-keys-%d", i)
-			// Escape slashes for sed (handle both forward and backslash paths).
 			hostEscaped := strings.ReplaceAll(dir, "/", "\\/")
 			containerEscaped := strings.ReplaceAll(containerPath, "/", "\\/")
 			fmt.Fprintf(&builder, "s/%s/%s/g;", hostEscaped, containerEscaped)
-			// Also handle Windows backslash paths that might end up in YAML.
 			hostWinEscaped := strings.ReplaceAll(strings.ReplaceAll(dir, "\\", "/"), "/", "\\/")
 			if hostWinEscaped != hostEscaped {
 				fmt.Fprintf(&builder, "s/%s/%s/g;", hostWinEscaped, containerEscaped)
@@ -134,7 +141,7 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 		}
 		shellCmd := fmt.Sprintf(
 			"cp /probe/inventory.yml /tmp/inventory.yml && sed -i '%s' /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5",
-			sedExpr,
+			builder.String(),
 		)
 		args = append(args, "sh", "-c", shellCmd)
 	} else {

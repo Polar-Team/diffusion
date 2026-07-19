@@ -57,6 +57,12 @@ type DeployContainerConfig struct {
 	// ExtraVarsFile is an optional host-side JSON file mounted at /deploy/extra_vars.json.
 	ExtraVarsFile string
 
+	// SSHKeyBase64 is the raw base64-encoded SSH private key string. When set,
+	// it is passed as an environment variable into the container and decoded
+	// inside — no host-side file mount needed. Used by the ping probe and
+	// the deploy container to write the key at runtime.
+	SSHKeyBase64 string
+
 	// ContainerRegistry configures the molecule container image.
 	ContainerRegistry *config.ContainerRegistry
 
@@ -119,6 +125,11 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 	// SSH keys (needed for Ansible SSH connections to target hosts)
 	if sshDir := sshKeyDir(); sshDir != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
+	}
+
+	// Pass base64 SSH key as env var (decoded inside container, no mount needed).
+	if cfg.SSHKeyBase64 != "" {
+		args = append(args, "-e", "SSH_KEY_BASE64="+cfg.SSHKeyBase64)
 	}
 
 	// Mount additional SSH key directories referenced in the inventory
@@ -226,7 +237,15 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		colsPath,
 	)
 
-	// Step 4: rewrite SSH key paths in the inventory if extra key dirs are mounted.
+	// Step 4: decode base64 SSH key inside container (if provided via env var).
+	decodeKeyCmd := ""
+	privateKeyFlag := ""
+	if cfg.SSHKeyBase64 != "" {
+		decodeKeyCmd = "echo \"$SSH_KEY_BASE64\" | base64 -d > /tmp/ssh-key && chmod 600 /tmp/ssh-key && "
+		privateKeyFlag = " --private-key /tmp/ssh-key"
+	}
+
+	// Step 5: rewrite SSH key paths in the inventory if extra key dirs are mounted.
 	// The inventory was generated with host-local paths; we need container paths.
 	inventoryFile := "/deploy/inventory.yml"
 	extraDirs := extractSSHKeyDirs(cfg.InventoryPath)
@@ -249,7 +268,7 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		rewriteCmd = fmt.Sprintf("sed '%s' /deploy/inventory.yml > %s && ", builder.String(), inventoryFile)
 	}
 
-	// Step 5: run ansible-playbook with the wrapper
+	// Step 6: run ansible-playbook with the wrapper
 	playbookArgs := fmt.Sprintf(
 		"ANSIBLE_ROLES_PATH=%s ANSIBLE_COLLECTIONS_PATH=%s ansible-playbook -i %s /deploy/playbook/wrapper.yml",
 		rolesPath, colsPath, inventoryFile,
@@ -257,9 +276,10 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 	if cfg.ExtraVarsFile != "" {
 		playbookArgs += " --extra-vars @/deploy/extra_vars.json"
 	}
+	playbookArgs += privateKeyFlag
 
-	return fmt.Sprintf("set -e && %s && %s && %s && %s%s",
-		mkdirs, installRoles, installCols, rewriteCmd, playbookArgs)
+	return fmt.Sprintf("set -e && %s && %s && %s && %s%s%s",
+		mkdirs, installRoles, installCols, decodeKeyCmd, rewriteCmd, playbookArgs)
 }
 
 // buildPyprojectFromLock generates pyproject.toml content from a merged lock.

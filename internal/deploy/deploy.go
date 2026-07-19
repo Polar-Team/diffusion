@@ -3,7 +3,6 @@ package deploy
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -148,30 +147,10 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 		}
 	}()
 
-	// --- 6b. Decode base64 SSH key (if provided) and inject into host vars ---
-	if cfg.SSHKeyBase64 != "" {
-		keyBytes, err := base64.StdEncoding.DecodeString(cfg.SSHKeyBase64)
-		if err != nil {
-			return fmt.Errorf("failed to decode ssh_private_key_base64: %w", err)
-		}
-		sshKeyFilePath := filepath.Join(tmpDir, "deploy_ssh_key")
-		if err := os.WriteFile(sshKeyFilePath, keyBytes, 0o600); err != nil {
-			return fmt.Errorf("failed to write decoded SSH key: %w", err)
-		}
-		log.Printf(config.ColorGreen + "Decoded base64 SSH key to temp file" + config.ColorReset)
+	// --- 6b. (SSH key base64 is passed through to the container via env var —
+	//          no host-side decoding needed.) ---
 
-		// Inject the key path into any host that doesn't already have one set.
-		for i := range cfg.Hosts {
-			if cfg.Hosts[i].Variables == nil {
-				cfg.Hosts[i].Variables = make(map[string]string)
-			}
-			if _, exists := cfg.Hosts[i].Variables["ansible_ssh_private_key_file"]; !exists {
-				cfg.Hosts[i].Variables["ansible_ssh_private_key_file"] = sshKeyFilePath
-			}
-		}
-	}
-
-	// Now build inventory (with key paths injected).
+	// Now build inventory.
 	inventoryBytes, err := BuildInventory(cfg.Hosts, cfg.Groups, cfg.GlobalVars)
 	if err != nil {
 		return fmt.Errorf("inventory generation failed: %w", err)
@@ -270,6 +249,7 @@ func buildContainerConfig(
 		InventoryPath:     inventoryPath,
 		PlaybookDir:       playbookDir,
 		ExtraVarsFile:     extraVarsFile,
+		SSHKeyBase64:      cfg.SSHKeyBase64,
 		ContainerRegistry: cfg.ContainerRegistry,
 		ArtifactSources:   resolved,
 		VaultToken:        cfg.VaultToken,
