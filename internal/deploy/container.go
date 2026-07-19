@@ -1,17 +1,31 @@
 package deploy
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 
 	"diffusion/internal/config"
 	"diffusion/internal/dependency"
 	"diffusion/internal/utils"
 )
+
+// generateSessionID returns a random UUIDv4 string for unique container naming.
+func generateSessionID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use timestamp-based ID if crypto/rand fails (should never happen).
+		return fmt.Sprintf("%x", b)
+	}
+	// Set version (4) and variant (RFC 4122) bits.
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
 
 // ResolvedCredential is a flattened artifact credential ready to be injected
 // into the container environment.
@@ -73,6 +87,8 @@ func RunDeployContainer(cfg DeployContainerConfig) error {
 	image := utils.GetImageURL(cfg.ContainerRegistry)
 	log.Printf(config.ColorGreen+"Using container image: %s"+config.ColorReset, image)
 
+	sessionID := generateSessionID()
+
 	args, err := buildDeployDockerArgs(cfg, image)
 	if err != nil {
 		return fmt.Errorf("failed to build docker args: %w", err)
@@ -80,14 +96,7 @@ func RunDeployContainer(cfg DeployContainerConfig) error {
 
 	log.Printf(config.ColorGreen + "Starting deploy container (roles/collections will be installed inside)..." + config.ColorReset)
 
-	cmd := exec.Command("docker", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("deploy container exited with error: %w", err)
-	}
-	return nil
+	return utils.DockerRunDeployContainer(sessionID, args)
 }
 
 // buildDeployDockerArgs constructs the full `docker run` argument list.
@@ -97,10 +106,7 @@ func RunDeployContainer(cfg DeployContainerConfig) error {
 //	a) installs roles + collections from requirements.yml into /tmp/diffusion/
 //	b) runs ansible-playbook with those paths set via ANSIBLE_* env vars
 func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, error) {
-	args := []string{
-		"run", "--rm",
-		"--name", "diffusion-deploy",
-	}
+	var args []string
 
 	// --- Volume mounts (read-only; host paths → container paths) ---
 
@@ -225,21 +231,22 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 	inventoryFile := "/deploy/inventory.yml"
 	extraDirs := extractSSHKeyDirs(cfg.InventoryPath)
 	rewriteCmd := ""
+
 	if len(extraDirs) > 0 {
 		inventoryFile = "/tmp/inventory-rewritten.yml"
-		sedExpr := ""
+		var builder strings.Builder
 		for i, dir := range extraDirs {
 			containerPath := fmt.Sprintf("/deploy/ssh-keys-%d", i)
 			hostEscaped := strings.ReplaceAll(dir, "/", "\\/")
 			containerEscaped := strings.ReplaceAll(containerPath, "/", "\\/")
-			sedExpr += fmt.Sprintf("s/%s/%s/g;", hostEscaped, containerEscaped)
+			fmt.Fprintf(&builder, "s/%s/%s/g;", hostEscaped, containerEscaped)
 			// Handle Windows backslash paths converted to forward slashes.
 			hostWinEscaped := strings.ReplaceAll(strings.ReplaceAll(dir, "\\", "/"), "/", "\\/")
 			if hostWinEscaped != hostEscaped {
-				sedExpr += fmt.Sprintf("s/%s/%s/g;", hostWinEscaped, containerEscaped)
+				fmt.Fprintf(&builder, "s/%s/%s/g;", hostWinEscaped, containerEscaped)
 			}
 		}
-		rewriteCmd = fmt.Sprintf("sed '%s' /deploy/inventory.yml > %s && ", sedExpr, inventoryFile)
+		rewriteCmd = fmt.Sprintf("sed '%s' /deploy/inventory.yml > %s && ", builder.String(), inventoryFile)
 	}
 
 	// Step 5: run ansible-playbook with the wrapper
@@ -273,6 +280,7 @@ func buildPyprojectFromLock(lf *dependency.LockFile) (string, error) {
 	return dependency.GeneratePyProjectContent(collections, toolVersions, lf.Python)
 }
 
+// stripScenarioPrefix removes the "scenario." prefix from a name string.
 func stripScenarioPrefix(name string) string {
 	if parts := splitDot(name); len(parts) == 2 {
 		return parts[1]
