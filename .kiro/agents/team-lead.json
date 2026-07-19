@@ -1,0 +1,120 @@
+{
+  "name": "team-lead",
+  "description": "Team Lead and product expert of Diffusion framework. Owns architecture decisions, feature planning, and coordinates implementation through sub-agents. Deep knowledge of Diffusion and Ansible products capabilities, deployment patterns on clouds, and recommended configurations.",
+  "promptFile": "./team-lead.prompt.md",
+  "mcpServers": {
+    "diffusion": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        "./:/project",
+        "ghcr.io/polar-team/diffusion-mcp-server:latest-amd64"
+      ],
+      "autoApprove": [
+        "get_diffusion_config",
+        "get_lock_file",
+        "get_diffusion_cli_reference",
+        "get_server_version",
+        "get_requirements_yml",
+        "list_molecule_containers",
+        "list_molecule_scenarios",
+        "check_molecule_yml",
+        "check_verify_yml",
+        "check_docker_environment",
+        "run_diffusion_command",
+        "docker_exec_in_molecule",
+        "docker_in_docker_in_molecule",
+        "update_diffusion_docs"
+      ]
+    }
+  },
+  "tools": [
+    "read",
+    "shell",
+    "web_fetch",
+    "subagent"
+  ],
+  "allowedTools": [
+    "read"
+  ],
+  "toolsSettings": {
+    "web_fetch": {
+      "trusted": [
+        ".*terraform.*",
+        ".*Polar-Team/diffusion.*"
+      ]
+    },
+    "subagent": {
+      "trustedAgents": [
+        "code-reviewer",
+        "devops-senior-engineer",
+        "go-senior-developer",
+        "senior-qa-tester"
+      ],
+      "availableAgents": [
+        "code-reviewer",
+        "devops-senior-engineer",
+        "go-senior-developer",
+        "senior-qa-tester"
+      ]
+    },
+    "shell": {
+      "allowedCommands": [
+        "git status",
+        "git log --oneline -20",
+        "git log --oneline --all --graph -20",
+        "git branch",
+        "git branch -a",
+        "git diff --name-only",
+        "git diff --stat",
+        "git show --stat",
+        "diffusion show",
+        "diffusion --version",
+        "diffusion deps check",
+        "diffusion deps resolve",
+        "diffusion cache list",
+        "diffusion cache status",
+        "diffusion artifact list"
+      ]
+    }
+  },
+  "resources": [
+    "file://tasks/**",
+    "file://defaults/**",
+    "file://handlers/**",
+    "file://templates/**",
+    "file://vars/**",
+    "file://meta/main.yml",
+    "file://files/**",
+    "file://diffusion.toml",
+    "file://diffusion.lock",
+    "file://scenarios/*/molecule.yml",
+    "file://scenarios/*/verify.yml",
+    "file://scenarios/*/converge.yml",
+    "file://README.md",
+    "file://CHANGELOG.md"
+  ],
+  "hooks": {
+    "agentSpawn": [
+      {
+        "command": "git status --porcelain",
+        "timeout_ms": 5000
+      },
+      {
+        "command": "git branch --show-current",
+        "timeout_ms": 5000
+      },
+      {
+        "command": "git log --oneline -5",
+        "timeout_ms": 5000
+      }
+    ]
+  },
+  "model": "claude-opus-4.8",
+  "welcomeMessage": "Team Lead online. I have full context on Diffusion CLI and Terraform hcl syntax, this role's architecture, and can coordinate implementation and testing . What are we working on?"
+}
