@@ -115,6 +115,6 @@
       }
     ]
   },
-  "model": "claude-opus-4.8",
+  "model": "claude-opus-5",
   "welcomeMessage": "Team Lead online. I have full context on Diffusion CLI and Terraform hcl syntax, this role's architecture, and can coordinate implementation and testing . What are we working on?"
 }
