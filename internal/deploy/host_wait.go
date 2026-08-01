@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -44,7 +45,7 @@ func DefaultWaitConfig() WaitConfig {
 // The probe runs inside the diffusion molecule container so that the same
 // Python/SSH environment used by the actual deploy is also used here — this
 // prevents false positives from mismatched SSH tooling on the host machine.
-func WaitForHosts(ctx context.Context, inventoryPath string, containerCfg DeployContainerConfig, cfg WaitConfig) error {
+func WaitForHosts(ctx context.Context, inventoryContent []byte, containerCfg DeployContainerConfig, cfg WaitConfig) error {
 	image := utils.GetImageURL(containerCfg.ContainerRegistry)
 
 	log.Printf(config.ColorGreen+"Waiting for hosts to become reachable (timeout: %s, initial delay: %s)"+config.ColorReset,
@@ -67,7 +68,7 @@ func WaitForHosts(ctx context.Context, inventoryPath string, containerCfg Deploy
 		attempt++
 		log.Printf(config.ColorYellow+"Host reachability probe #%d..."+config.ColorReset, attempt)
 
-		err := runPingProbe(ctx, image, inventoryPath, containerCfg)
+		err := runPingProbe(ctx, image, inventoryContent, containerCfg)
 		if err == nil {
 			log.Printf(config.ColorGreen+"All hosts reachable after %d probe(s)"+config.ColorReset, attempt)
 			return nil
@@ -90,11 +91,14 @@ func WaitForHosts(ctx context.Context, inventoryPath string, containerCfg Deploy
 
 // runPingProbe executes `ansible all -i <inventory> -m ansible.builtin.ping`
 // inside a short-lived container with the same image and SSH env vars as the
-// actual deploy container.
-func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployContainerConfig) error {
+// actual deploy container. The inventory is injected as a base64-encoded env
+// var and decoded inside the container — no host-side file mount is needed.
+func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cfg DeployContainerConfig) error {
+	inventoryB64 := base64.StdEncoding.EncodeToString(inventoryContent)
+
 	args := []string{
 		"run", "--rm",
-		"-v", fmt.Sprintf("%s:/probe/inventory.yml:ro", inventoryPath),
+		"-e", "DIFFUSION_INVENTORY_B64=" + inventoryB64,
 	}
 
 	// Pass through SSH-related env vars from the deploy config.
@@ -113,13 +117,16 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 
 	// Mount any additional SSH key directories referenced in the inventory.
 	// This handles keys outside ~/.ssh (e.g. project-local generated keys from Terraform).
-	extraDirs := extractSSHKeyDirs(inventoryPath)
+	extraDirs := extractSSHKeyDirsFromContent(inventoryContent)
 	for i, dir := range extraDirs {
 		containerPath := fmt.Sprintf("/probe/ssh-keys-%d", i)
 		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", dir, containerPath))
 	}
 
 	args = append(args, image)
+
+	// Build the shell command that decodes inventory and runs ansible ping.
+	decodeInv := "echo \"$DIFFUSION_INVENTORY_B64\" | base64 -d > /probe/inventory.yml"
 
 	// Build the ansible ping command.
 	if len(cfg.SSHKeys) > 0 {
@@ -159,7 +166,7 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 			ansibleCmd += " && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5" + privateKeyFlag
 		}
 
-		shellCmd := strings.Join(decodeSteps, " && ") + " && " + ansibleCmd
+		shellCmd := decodeInv + " && " + strings.Join(decodeSteps, " && ") + " && " + ansibleCmd
 		args = append(args, "sh", "-c", shellCmd)
 	} else if len(extraDirs) > 0 {
 		// Use a shell wrapper to sed-replace host paths with container paths in the inventory.
@@ -175,18 +182,17 @@ func runPingProbe(ctx context.Context, image, inventoryPath string, cfg DeployCo
 			}
 		}
 		shellCmd := fmt.Sprintf(
-			"cp /probe/inventory.yml /tmp/inventory.yml && sed -i '%s' /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5",
-			builder.String(),
+			"%s && sed '%s' /probe/inventory.yml > /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5",
+			decodeInv, builder.String(),
 		)
 		args = append(args, "sh", "-c", shellCmd)
 	} else {
-		// No extra mounts needed — run ansible ping directly.
-		args = append(args,
-			"ansible", "all",
-			"-i", "/probe/inventory.yml",
-			"-m", "ansible.builtin.ping",
-			"--timeout", "5",
+		// No extra mounts needed — decode inventory and run ansible ping directly.
+		shellCmd := fmt.Sprintf(
+			"%s && ansible all -i /probe/inventory.yml -m ansible.builtin.ping --timeout 5",
+			decodeInv,
 		)
+		args = append(args, "sh", "-c", shellCmd)
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
@@ -249,18 +255,17 @@ func ParseWaitDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// extractSSHKeyDirs parses the inventory YAML and returns unique directory paths
-// for any ansible_ssh_private_key_file values that are NOT under ~/.ssh.
+// extractSSHKeyDirsFromContent parses the inventory YAML content and returns unique
+// directory paths for any ansible_ssh_private_key_file values that are NOT under ~/.ssh.
 // These directories need to be mounted into the container.
-func extractSSHKeyDirs(inventoryPath string) []string {
-	data, err := os.ReadFile(inventoryPath)
-	if err != nil {
+func extractSSHKeyDirsFromContent(inventoryContent []byte) []string {
+	if len(inventoryContent) == 0 {
 		return nil
 	}
 
 	// Parse inventory to extract host vars.
 	var inv map[string]any
-	if err := yaml.Unmarshal(data, &inv); err != nil {
+	if err := yaml.Unmarshal(inventoryContent, &inv); err != nil {
 		return nil
 	}
 
