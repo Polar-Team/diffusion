@@ -32,8 +32,8 @@ type deployFlags struct {
 	// Extra vars passed to ansible-playbook
 	extraVars []string // "key=value"
 
-	// SSH key as base64 text (alternative to file path)
-	sshKeyBase64 string
+	// SSH keys as base64 text (per-host or wildcard)
+	sshKeys []string // "host=<base64>" or "*=<base64>"
 
 	// Skip / idempotence
 	skipPeriod string // Go duration string, e.g. "24h"
@@ -115,8 +115,8 @@ EXAMPLES
 		`Global inventory variable (repeatable). Format: "key=value"`)
 	cmd.Flags().StringArrayVar(&f.extraVars, "extra-var", nil,
 		`Extra variable for ansible-playbook --extra-vars (repeatable). Format: "key=value"`)
-	cmd.Flags().StringVar(&f.sshKeyBase64, "ssh-key-base64", "",
-		`Base64-encoded SSH private key. Decoded and used as ansible_ssh_private_key_file for hosts that don't specify one.`)
+	cmd.Flags().StringArrayVar(&f.sshKeys, "ssh-key", nil,
+		`SSH private key as base64 (repeatable). Format: "hostname=<base64>" or "*=<base64>" for all hosts.`)
 	cmd.Flags().StringVar(&f.skipPeriod, "skip-period", "",
 		`Skip re-deploy if last run succeeded within this period (e.g. "24h"). Default: always deploy.`)
 	cmd.Flags().StringVar(&f.hostWaitInitialDelay, "host-wait-initial-delay", "10s",
@@ -190,7 +190,7 @@ func runDeploy(ctx context.Context, f *deployFlags) error {
 		Groups:             groups,
 		GlobalVars:         globalVars,
 		ExtraVars:          extraVars,
-		SSHKeyBase64:       f.sshKeyBase64,
+		SSHKeys:            parseSSHKeys(f.sshKeys),
 		SkipIfSucceededFor: skipPeriod,
 		ContainerRegistry:  cfg.ContainerRegistry,
 		ArtifactSourcesCfg: cfg.ArtifactSources,
@@ -360,4 +360,20 @@ func parseDurationWithDefault(s string, def time.Duration, flag string) (time.Du
 		return 0, fmt.Errorf("%s %q: %w", flag, s, err)
 	}
 	return d, nil
+}
+
+// parseSSHKeys converts "--ssh-key host=<base64>" flag values into a map.
+func parseSSHKeys(raw []string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(raw))
+	for _, s := range raw {
+		k, v, ok := strings.Cut(s, "=")
+		if !ok {
+			continue
+		}
+		m[k] = v
+	}
+	return m
 }
