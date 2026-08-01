@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -144,7 +145,7 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 		return fmt.Errorf("inventory generation failed: %w", err)
 	}
 
-	// Create a temp working directory for all generated files.
+	// Create a temp working directory for generated files (playbook, extra vars).
 	tmpDir, err := os.MkdirTemp("", "diffusion-deploy-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
@@ -155,19 +156,13 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 		}
 	}()
 
-	// Write inventory
-	inventoryPath := filepath.Join(tmpDir, "inventory.yml")
-	if err := os.WriteFile(inventoryPath, inventoryBytes, 0o600); err != nil {
-		return fmt.Errorf("failed to write inventory: %w", err)
-	}
-
 	// --- 7. Compute RunID ---
 	runID := computeRunID(mergedLock, inventoryBytes, playbookFilename, cfg.ExtraVars)
 	log.Printf(config.ColorGreen+"RunID: %s..."+config.ColorReset, runID[:16])
 
 	// --- 8. Wait for hosts ---
-	containerCfg := buildContainerConfig(cfg, mergedLock, creds, inventoryPath, "", "")
-	if err := WaitForHosts(ctx, inventoryPath, containerCfg, cfg.Wait); err != nil {
+	containerCfg := buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, "", "")
+	if err := WaitForHosts(ctx, inventoryBytes, containerCfg, cfg.Wait); err != nil {
 		return fmt.Errorf("host reachability check failed: %w", err)
 	}
 
@@ -214,11 +209,11 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 	}
 
 	// --- 10. Run deploy container ---
-	containerCfg = buildContainerConfig(cfg, mergedLock, creds, inventoryPath, playbookDir, extraVarsFile)
+	containerCfg = buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, playbookDir, extraVarsFile)
 
 	log.Printf(config.ColorGreen + "Starting deploy container..." + config.ColorReset)
 	if err := RunDeployContainer(containerCfg); err != nil {
-		writeFailureState(inventoryPath, runID, containerCfg)
+		writeFailureState(inventoryBytes, runID, containerCfg)
 		return fmt.Errorf("deploy failed: %w", err)
 	}
 
@@ -231,7 +226,7 @@ func buildContainerConfig(
 	cfg DeployConfig,
 	mergedLock *dependency.LockFile,
 	creds []config.ArtifactCredentials,
-	inventoryPath, playbookDir, extraVarsFile string,
+	inventoryContent []byte, playbookDir, extraVarsFile string,
 ) DeployContainerConfig {
 	resolved := make([]ResolvedCredential, 0, len(creds))
 	for _, c := range creds {
@@ -245,7 +240,7 @@ func buildContainerConfig(
 	}
 	return DeployContainerConfig{
 		MergedLock:        mergedLock,
-		InventoryPath:     inventoryPath,
+		InventoryContent:  inventoryContent,
 		PlaybookDir:       playbookDir,
 		ExtraVarsFile:     extraVarsFile,
 		SSHKeys:           cfg.SSHKeys,
@@ -293,7 +288,7 @@ func computeRunID(lock *dependency.LockFile, inventory []byte, playbookName stri
 }
 
 // writeFailureState writes a failure marker to all remote hosts.
-func writeFailureState(inventoryPath, runID string, cfg DeployContainerConfig) {
+func writeFailureState(inventoryContent []byte, runID string, cfg DeployContainerConfig) {
 	image := ""
 	if cfg.ContainerRegistry != nil {
 		image = cfg.ContainerRegistry.RegistryServer + "/" +
@@ -304,21 +299,23 @@ func writeFailureState(inventoryPath, runID string, cfg DeployContainerConfig) {
 		image = "ghcr.io/" + config.DefaultMoleculeContainerName + ":latest"
 	}
 
+	inventoryB64 := base64.StdEncoding.EncodeToString(inventoryContent)
 	stateContent := fmt.Sprintf(`{"status":"failed","run_id":"%s"}`, runID)
+
 	dockerArgs := []string{
 		"run", "--rm",
-		"-v", fmt.Sprintf("%s:/deploy/inventory.yml:ro", inventoryPath),
+		"-e", "DIFFUSION_INVENTORY_B64=" + inventoryB64,
 	}
 	if sshDir := sshKeyDir(); sshDir != "" {
 		dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
 	}
-	dockerArgs = append(dockerArgs,
-		image,
-		"ansible", "all",
-		"-i", "/deploy/inventory.yml",
-		"-m", "ansible.builtin.copy",
-		"-a", fmt.Sprintf("dest=~/.diffusion/state content='%s' mode=0600", stateContent),
+
+	shellCmd := fmt.Sprintf(
+		"echo \"$DIFFUSION_INVENTORY_B64\" | base64 -d > /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.copy -a \"dest=~/.diffusion/state content='%s' mode=0600\"",
+		stateContent,
 	)
+
+	dockerArgs = append(dockerArgs, image, "sh", "-c", shellCmd)
 
 	cmd := buildExecCommand("docker", dockerArgs...)
 	if err := cmd.Run(); err != nil {
