@@ -83,16 +83,21 @@ const wrapperPlaybookTemplate = `---
         state: directory
         mode: "0700"
 
+    - name: "Check if diffusion state file exists"
+      ansible.builtin.stat:
+        path: "~/.diffusion/state"
+      register: _diffusion_state_file
+
     - name: "Read remote diffusion state"
       ansible.builtin.slurp:
         src: "~/.diffusion/state"
       register: _diffusion_state_raw
-      ignore_errors: true
+      when: _diffusion_state_file.stat.exists
 
     - name: "Parse remote diffusion state"
       ansible.builtin.set_fact:
         _diffusion_state: "{{ .LB }} _diffusion_state_raw.content | b64decode | from_yaml {{ .RB }}"
-      when: _diffusion_state_raw is not failed
+      when: _diffusion_state_file.stat.exists and _diffusion_state_raw is not failed
 
 {{ if .SkipEnabled }}
     - name: "Evaluate skip condition"

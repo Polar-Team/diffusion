@@ -163,8 +163,8 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 		"-e", "UV_VENV_CLEAR=1",
 		"-e", "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
 		// Tell Ansible where the in-container installs will land.
-		"-e", fmt.Sprintf("ANSIBLE_ROLES_PATH=%s", containerRolesPath),
-		"-e", fmt.Sprintf("ANSIBLE_COLLECTIONS_PATH=%s", containerCollectionsPath),
+		"-e", "ANSIBLE_ROLES_PATH=/deploy/roles",
+		"-e", "ANSIBLE_COLLECTIONS_PATH=/deploy/collections",
 	)
 
 	// Vault
@@ -231,8 +231,11 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 // It runs ansible-galaxy to install roles+collections into /tmp/diffusion/,
 // then runs ansible-playbook from that isolated environment.
 func buildContainerCommand(cfg DeployContainerConfig) string {
-	rolesPath := containerRolesPath
-	colsPath := containerCollectionsPath
+	// Install roles and collections directly under /deploy/ so that role-internal
+	// relative paths (defaults/, vars/, tasks/) resolve correctly when the
+	// wrapper playbook at /deploy/playbook/wrapper.yml imports the user playbook.
+	rolesPath := "/deploy/roles"
+	colsPath := "/deploy/collections"
 
 	// Step 0: configure git credentials from indexed GIT_USER_*/GIT_PASSWORD_*/GIT_URL_* env vars.
 	// This replicates what dockerd-entrypoint.sh does, since we bypass the entrypoint with sh -c.
@@ -246,7 +249,7 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		`i=$((i + 1)); done`
 
 	// Step 1: create install directories and decode inventory from env var
-	mkdirs := fmt.Sprintf("mkdir -p %s %s", rolesPath, colsPath)
+	mkdirs := fmt.Sprintf("mkdir -p %s %s /deploy/vars", rolesPath, colsPath)
 	decodeInventory := "printenv DIFFUSION_INVENTORY_B64 | base64 -d > /deploy/inventory.yml"
 
 	// Step 2: install roles from requirements.yml (if any roles present)

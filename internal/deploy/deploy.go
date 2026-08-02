@@ -301,20 +301,58 @@ func writeFailureState(inventoryContent []byte, runID string, cfg DeployContaine
 
 	inventoryB64 := base64.StdEncoding.EncodeToString(inventoryContent)
 	stateContent := fmt.Sprintf(`{"status":"failed","run_id":"%s"}`, runID)
+	sshArgs := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 	dockerArgs := []string{
 		"run", "--rm",
 		"-e", "DIFFUSION_INVENTORY_B64=" + inventoryB64,
 	}
+
+	// Pass SSH keys as env vars.
+	for host, keyB64 := range cfg.SSHKeys {
+		envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+		dockerArgs = append(dockerArgs, "-e", envName+"="+keyB64)
+	}
+
 	if sshDir := sshKeyDir(); sshDir != "" {
 		dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
 	}
 
-	shellCmd := fmt.Sprintf(
-		"echo \"$DIFFUSION_INVENTORY_B64\" | base64 -d > /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.copy -a \"dest=~/.diffusion/state content='%s' mode=0600\"",
-		stateContent,
-	)
+	// Build shell command: decode inventory, decode SSH keys, ensure dir exists, write state.
+	var steps []string
+	steps = append(steps, "printenv DIFFUSION_INVENTORY_B64 | base64 -d > /tmp/inventory.yml")
 
+	// Decode SSH keys if present.
+	privateKeyFlag := ""
+	if len(cfg.SSHKeys) > 0 {
+		steps = append(steps, "mkdir -p /tmp/ssh-keys")
+		for host := range cfg.SSHKeys {
+			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+			keyFile := host
+			if host == "*" {
+				keyFile = "_wildcard_"
+			}
+			keyPath := "/tmp/ssh-keys/" + keyFile
+			steps = append(steps,
+				fmt.Sprintf("printenv %s | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
+		}
+		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
+			privateKeyFlag = " --private-key /tmp/ssh-keys/_wildcard_"
+		}
+	}
+
+	// Ensure ~/.diffusion directory exists, then write failure state.
+	ensureDir := fmt.Sprintf(
+		"ANSIBLE_SSH_ARGS='%s' ansible all -i /tmp/inventory.yml%s -m ansible.builtin.file -a \"path=~/.diffusion state=directory mode=0700\"",
+		sshArgs, privateKeyFlag,
+	)
+	writeState := fmt.Sprintf(
+		"ANSIBLE_SSH_ARGS='%s' ansible all -i /tmp/inventory.yml%s -m ansible.builtin.copy -a \"dest=~/.diffusion/state content='%s' mode=0600\"",
+		sshArgs, privateKeyFlag, stateContent,
+	)
+	steps = append(steps, ensureDir, writeState)
+
+	shellCmd := strings.Join(steps, " && ")
 	dockerArgs = append(dockerArgs, image, "sh", "-c", shellCmd)
 
 	cmd := buildExecCommand("docker", dockerArgs...)

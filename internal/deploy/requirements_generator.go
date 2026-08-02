@@ -81,11 +81,11 @@ func GenerateRequirements(lock *dependency.LockFile, sources ...RoleSource) ([]b
 			if entry.Source == "git" || entry.Src != "" {
 				role.Src = entry.Src
 				role.Scm = "git"
-				if entry.Namespace != "" {
-					role.Name = entry.Namespace + "." + name
-				} else {
-					role.Name = name
-				}
+				// Use the bare role name (without namespace) for git-sourced roles.
+				// Parent roles reference dependencies by their plain name (e.g.
+				// "docker_rootless"), not by "namespace.docker_rootless", so the
+				// install directory name must match what include_role expects.
+				role.Name = name
 			} else {
 				role.Name = galaxyRoleName(entry.Namespace, name)
 			}
