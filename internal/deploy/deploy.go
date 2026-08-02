@@ -112,7 +112,7 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 		mergedLock.Python.Pinned, len(mergedLock.Collections), len(mergedLock.Roles))
 
 	// --- 4. Generate requirements.yml from merged lock ---
-	requirementsBytes, err := GenerateRequirements(mergedLock)
+	requirementsBytes, err := GenerateRequirements(mergedLock, cfg.RoleSources...)
 	if err != nil {
 		return fmt.Errorf("requirements.yml generation failed: %w", err)
 	}

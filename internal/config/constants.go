@@ -2,8 +2,14 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
+
+// DebugEnabled returns true when DIFFUSION_DEBUG is set to "1".
+func DebugEnabled() bool {
+	return os.Getenv(EnvDiffusionDebug) == "1"
+}
 
 // Color constants for terminal output
 const (
@@ -115,7 +121,8 @@ const (
 	EnvYCFolderID      = "YC_FOLDER_ID"
 	EnvGCPProjectID    = "GCP_PROJECT_ID"
 	EnvAnsibleRunTags  = "ANSIBLE_RUN_TAGS"
-	MaxArtifactSources = 10 // Maximum number of artifact sources supported
+	EnvDiffusionDebug  = "DIFFUSION_DEBUG" // Set to "1" to enable debug output, "0" to disable.
+	MaxArtifactSources = 10                // Maximum number of artifact sources supported
 )
 
 // GCP-specific constants

@@ -38,12 +38,16 @@ func GenerateWrapperPlaybook(cfg WrapperConfig) ([]byte, error) {
 		DiffusionVersion string
 		SkipSeconds      int64
 		SkipEnabled      bool
+		LB               string // "{{" — left brace for Jinja2 pass-through
+		RB               string // "}}" — right brace for Jinja2 pass-through
 	}{
 		UserPlaybook:     cfg.UserPlaybook,
 		RunID:            cfg.RunID,
 		DiffusionVersion: cfg.DiffusionVersion,
 		SkipSeconds:      skipSeconds,
 		SkipEnabled:      skipSeconds > 0,
+		LB:               "{{",
+		RB:               "}}",
 	}
 
 	tmpl, err := template.New("wrapper").Parse(wrapperPlaybookTemplate)
@@ -87,19 +91,19 @@ const wrapperPlaybookTemplate = `---
 
     - name: "Parse remote diffusion state"
       ansible.builtin.set_fact:
-        _diffusion_state: "{{ '{{' }} _diffusion_state_raw.content | b64decode | from_yaml {{ '}}' }}"
+        _diffusion_state: "{{ .LB }} _diffusion_state_raw.content | b64decode | from_yaml {{ .RB }}"
       when: _diffusion_state_raw is not failed
 
 {{ if .SkipEnabled }}
     - name: "Evaluate skip condition"
       ansible.builtin.set_fact:
         diffusion_skip: >-
-          {{ '{{' }}
+          {{ .LB }}
             (_diffusion_state is defined)
             and (_diffusion_state.status | default('') == 'success')
             and (_diffusion_state.run_id | default('') == '{{ .RunID }}')
             and ((ansible_date_time.epoch | int) - (_diffusion_state.last_epoch | default('0') | int) < {{ .SkipSeconds }})
-          {{ '}}' }}
+          {{ .RB }}
 
     - name: "Skip notice"
       ansible.builtin.debug:
@@ -126,8 +130,8 @@ const wrapperPlaybookTemplate = `---
       ansible.builtin.copy:
         dest: "~/.diffusion/state"
         content: |
-          last_run: "{{ '{{' }} ansible_date_time.iso8601 {{ '}}' }}"
-          last_epoch: "{{ '{{' }} ansible_date_time.epoch {{ '}}' }}"
+          last_run: "{{ .LB }} ansible_date_time.iso8601 {{ .RB }}"
+          last_epoch: "{{ .LB }} ansible_date_time.epoch {{ .RB }}"
           status: "success"
           run_id: "{{ .RunID }}"
           diffusion_version: "{{ .DiffusionVersion }}"

@@ -42,6 +42,7 @@ type deployFlags struct {
 	hostWaitInitialDelay string
 	hostWaitInterval     string
 	hostWaitTimeout      string
+	hostWaitMaxAttempts  int
 }
 
 // NewDeployCmd creates the `diffusion deploy` Cobra command.
@@ -125,6 +126,8 @@ EXAMPLES
 		`Interval between host reachability probes (e.g. "20s").`)
 	cmd.Flags().StringVar(&f.hostWaitTimeout, "host-wait-timeout", "10m",
 		`Hard deadline for host reachability (e.g. "15m").`)
+	cmd.Flags().IntVar(&f.hostWaitMaxAttempts, "host-wait-max-attempts", 20,
+		`Maximum number of probe attempts before failing. Set to 0 to disable (rely on timeout only).`)
 
 	_ = cmd.MarkFlagRequired("role-source")
 
@@ -348,6 +351,7 @@ func parseWaitConfig(f *deployFlags) (deploy.WaitConfig, error) {
 		InitialDelay: initialDelay,
 		Interval:     interval,
 		Timeout:      timeout,
+		MaxAttempts:  f.hostWaitMaxAttempts,
 	}, nil
 }
 

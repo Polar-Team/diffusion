@@ -81,13 +81,16 @@ func BuildInventory(hosts []InventoryHost, groups []InventoryGroup, globalVars m
 	if len(childrenMap) > 0 {
 		allGroup["children"] = childrenMap
 	}
-	if len(globalVars) > 0 {
-		sortedVars := make(map[string]any)
-		for k, v := range globalVars {
-			sortedVars[k] = v
-		}
-		allGroup["vars"] = sortedVars
+
+	// Inject default vars — always disable strict host key checking so that
+	// ephemeral cloud hosts don't fail on unknown known_hosts entries.
+	vars := map[string]any{
+		"ansible_ssh_common_args": "-o StrictHostKeyChecking=no",
 	}
+	for k, v := range globalVars {
+		vars[k] = v
+	}
+	allGroup["vars"] = vars
 
 	inventory := map[string]any{
 		"all": allGroup,

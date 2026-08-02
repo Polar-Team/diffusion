@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -28,6 +27,10 @@ type WaitConfig struct {
 	// Timeout is the hard deadline. WaitForHosts returns an error if all hosts
 	// are not reachable by this time.
 	Timeout time.Duration
+	// MaxAttempts is the maximum number of probe attempts. If all attempts are
+	// exhausted without success, WaitForHosts returns an error. Set to 0 to
+	// disable the attempt limit (rely on Timeout only).
+	MaxAttempts int
 }
 
 // DefaultWaitConfig returns sensible defaults for the wait configuration.
@@ -36,6 +39,7 @@ func DefaultWaitConfig() WaitConfig {
 		InitialDelay: 10 * time.Second,
 		Interval:     15 * time.Second,
 		Timeout:      10 * time.Minute,
+		MaxAttempts:  20,
 	}
 }
 
@@ -48,8 +52,40 @@ func DefaultWaitConfig() WaitConfig {
 func WaitForHosts(ctx context.Context, inventoryContent []byte, containerCfg DeployContainerConfig, cfg WaitConfig) error {
 	image := utils.GetImageURL(containerCfg.ContainerRegistry)
 
-	log.Printf(config.ColorGreen+"Waiting for hosts to become reachable (timeout: %s, initial delay: %s)"+config.ColorReset,
-		cfg.Timeout, cfg.InitialDelay)
+	log.Printf(config.ColorGreen+"Waiting for hosts to become reachable (timeout: %s, initial delay: %s, max attempts: %d)"+config.ColorReset,
+		cfg.Timeout, cfg.InitialDelay, cfg.MaxAttempts)
+
+	// Debug: show probe configuration details.
+	if config.DebugEnabled() {
+		log.Printf(config.ColorMagenta+"[debug] Probe image: %s"+config.ColorReset, image)
+		log.Printf(config.ColorMagenta+"[debug] Inventory content (%d bytes):\n%s"+config.ColorReset,
+			len(inventoryContent), string(inventoryContent))
+
+		if len(containerCfg.SSHKeys) > 0 {
+			for host, keyB64 := range containerCfg.SSHKeys {
+				keyLen := len(keyB64)
+				preview := keyB64
+				if keyLen > 20 {
+					preview = keyB64[:20] + "..."
+				}
+				log.Printf(config.ColorMagenta+"[debug] SSH key: host=%q, base64_length=%d, preview=%s"+config.ColorReset,
+					host, keyLen, preview)
+			}
+		} else {
+			log.Printf(config.ColorMagenta + "[debug] No SSH keys provided via env vars" + config.ColorReset)
+		}
+
+		if sshDir := sshKeyDir(); sshDir != "" {
+			log.Printf(config.ColorMagenta+"[debug] Host ~/.ssh directory found: %s (will be mounted)"+config.ColorReset, sshDir)
+		} else {
+			log.Printf(config.ColorMagenta + "[debug] No host ~/.ssh directory found" + config.ColorReset)
+		}
+
+		extraDirs := extractSSHKeyDirsFromContent(inventoryContent)
+		if len(extraDirs) > 0 {
+			log.Printf(config.ColorMagenta+"[debug] Extra SSH key directories from inventory: %v"+config.ColorReset, extraDirs)
+		}
+	}
 
 	// Initial delay — let cloud-init / boot settle.
 	if cfg.InitialDelay > 0 {
@@ -76,6 +112,11 @@ func WaitForHosts(ctx context.Context, inventoryContent []byte, containerCfg Dep
 
 		log.Printf(config.ColorYellow+"Probe #%d failed: %v"+config.ColorReset, attempt, err)
 
+		// Check max attempts limit.
+		if cfg.MaxAttempts > 0 && attempt >= cfg.MaxAttempts {
+			return fmt.Errorf("hosts not reachable after %d attempt(s): %w", attempt, err)
+		}
+
 		if time.Now().After(deadline) {
 			return fmt.Errorf("hosts not reachable after %s (%d probe(s)): %w", cfg.Timeout, attempt, err)
 		}
@@ -94,7 +135,19 @@ func WaitForHosts(ctx context.Context, inventoryContent []byte, containerCfg Dep
 // actual deploy container. The inventory is injected as a base64-encoded env
 // var and decoded inside the container — no host-side file mount is needed.
 func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cfg DeployContainerConfig) error {
-	inventoryB64 := base64.StdEncoding.EncodeToString(inventoryContent)
+	// If per-host SSH keys are provided, inject ansible_ssh_private_key_file
+	// into the inventory YAML in Go (proper YAML, no sed hacks).
+	probeInventory := inventoryContent
+	if len(cfg.SSHKeys) > 0 {
+		modified, err := injectSSHKeyPaths(inventoryContent, cfg.SSHKeys)
+		if err != nil {
+			log.Printf(config.ColorYellow+"[debug] Failed to inject SSH key paths into inventory: %v — using original"+config.ColorReset, err)
+		} else {
+			probeInventory = modified
+		}
+	}
+
+	inventoryB64 := base64.StdEncoding.EncodeToString(probeInventory)
 
 	args := []string{
 		"run", "--rm",
@@ -126,44 +179,43 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 	args = append(args, image)
 
 	// Build the shell command that decodes inventory and runs ansible ping.
-	decodeInv := "echo \"$DIFFUSION_INVENTORY_B64\" | base64 -d > /probe/inventory.yml"
+	decodeInv := "mkdir -p /probe && printenv DIFFUSION_INVENTORY_B64 | base64 -d > /probe/inventory.yml"
+
+	// Build the ansible ping command — always disable host key checking for probes
+	// since target hosts are typically ephemeral cloud instances not in known_hosts.
+	sshArgs := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 	// Build the ansible ping command.
 	if len(cfg.SSHKeys) > 0 {
-		// Decode all keys inside the container and use --private-key for wildcard,
-		// or inject per-host key paths into the inventory.
+		// Decode all keys inside the container.
 		var decodeSteps []string
 		decodeSteps = append(decodeSteps, "mkdir -p /tmp/ssh-keys")
 		for host := range cfg.SSHKeys {
 			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
-			keyPath := "/tmp/ssh-keys/" + host
+			// Use a safe filename for the wildcard key to avoid shell glob issues.
+			keyFile := host
+			if host == "*" {
+				keyFile = "_wildcard_"
+			}
+			keyPath := "/tmp/ssh-keys/" + keyFile
+			// Use printenv to output the raw env var value without any shell
+			// interpretation — avoids corrupting base64 content that causes
+			// "error in libcrypto" when SSH tries to load the decoded key.
 			decodeSteps = append(decodeSteps,
-				fmt.Sprintf("echo \"$%s\" | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
+				fmt.Sprintf("printenv %s | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
 		}
 
-		ansibleCmd := "ansible all -i /probe/inventory.yml -m ansible.builtin.ping --timeout 5"
+		ansibleCmd := fmt.Sprintf("ANSIBLE_SSH_ARGS='%s' ansible all -i /probe/inventory.yml -m ansible.builtin.ping --timeout 5", sshArgs)
 
-		// Wildcard: single key for all hosts.
+		// Wildcard: single key for all hosts — use --private-key flag.
 		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard && len(cfg.SSHKeys) == 1 {
-			ansibleCmd += " --private-key /tmp/ssh-keys/*"
+			ansibleCmd += " --private-key /tmp/ssh-keys/_wildcard_"
 		} else {
-			// Per-host keys: rewrite inventory to add ansible_ssh_private_key_file.
-			ansibleCmd = "cp /probe/inventory.yml /tmp/inventory.yml"
-			for host := range cfg.SSHKeys {
-				if host == "*" {
-					continue
-				}
-				keyPath := "/tmp/ssh-keys/" + host
-				ansibleCmd += fmt.Sprintf(
-					" && sed -i '/%s:/a\\      ansible_ssh_private_key_file: %s' /tmp/inventory.yml",
-					host, keyPath)
-			}
+			// Per-host keys are already injected into inventory via injectSSHKeyPaths.
 			// If there's also a wildcard, apply it as --private-key fallback.
-			privateKeyFlag := ""
 			if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
-				privateKeyFlag = " --private-key /tmp/ssh-keys/*"
+				ansibleCmd += " --private-key /tmp/ssh-keys/_wildcard_"
 			}
-			ansibleCmd += " && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5" + privateKeyFlag
 		}
 
 		shellCmd := decodeInv + " && " + strings.Join(decodeSteps, " && ") + " && " + ansibleCmd
@@ -182,27 +234,136 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 			}
 		}
 		shellCmd := fmt.Sprintf(
-			"%s && sed '%s' /probe/inventory.yml > /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5",
-			decodeInv, builder.String(),
+			"%s && sed '%s' /probe/inventory.yml > /tmp/inventory.yml && ANSIBLE_SSH_ARGS='%s' ansible all -i /tmp/inventory.yml -m ansible.builtin.ping --timeout 5",
+			decodeInv, builder.String(), sshArgs,
 		)
 		args = append(args, "sh", "-c", shellCmd)
 	} else {
 		// No extra mounts needed — decode inventory and run ansible ping directly.
 		shellCmd := fmt.Sprintf(
-			"%s && ansible all -i /probe/inventory.yml -m ansible.builtin.ping --timeout 5",
-			decodeInv,
+			"%s && ANSIBLE_SSH_ARGS='%s' ansible all -i /probe/inventory.yml -m ansible.builtin.ping --timeout 5",
+			decodeInv, sshArgs,
 		)
 		args = append(args, "sh", "-c", shellCmd)
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ansible ping failed: %w", err)
+	// Capture both stdout and stderr — ansible reports UNREACHABLE hosts in
+	// stdout but may still exit 0 in some configurations.
+	var stdoutBuf strings.Builder
+	var stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	if config.DebugEnabled() {
+		log.Printf(config.ColorMagenta+"[debug] Probe docker command: docker %s"+config.ColorReset,
+			redactProbeArgs(args))
 	}
+
+	runErr := cmd.Run()
+
+	combinedOutput := stdoutBuf.String() + stderrBuf.String()
+
+	if config.DebugEnabled() && combinedOutput != "" {
+		log.Printf(config.ColorMagenta+"[debug] Probe container output:\n%s"+config.ColorReset, combinedOutput)
+	}
+
+	// Check for failure regardless of exit code — ansible ad-hoc can exit 0
+	// while reporting hosts as UNREACHABLE in its output.
+	if runErr != nil {
+		return fmt.Errorf("ansible ping failed (exit error): %w", runErr)
+	}
+
+	// Even with exit 0, check output for unreachable/failed hosts.
+	if strings.Contains(combinedOutput, "UNREACHABLE") || strings.Contains(combinedOutput, "FAILED") {
+		return fmt.Errorf("ansible ping failed: hosts reported UNREACHABLE or FAILED")
+	}
+
+	// Verify at least one host reported SUCCESS — if there's no SUCCESS in the
+	// output, the probe did not actually validate any host connectivity.
+	if !strings.Contains(combinedOutput, "SUCCESS") {
+		return fmt.Errorf("ansible ping failed: no hosts reported SUCCESS")
+	}
+
 	return nil
+}
+
+// injectSSHKeyPaths modifies the inventory YAML to add ansible_ssh_private_key_file
+// for each per-host SSH key. The key paths point to /tmp/ssh-keys/<host> which is
+// where the container decodes the base64 keys at runtime.
+// This produces valid YAML instead of relying on fragile sed manipulation.
+func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]byte, error) {
+	var inv map[string]any
+	if err := yaml.Unmarshal(inventoryContent, &inv); err != nil {
+		return nil, fmt.Errorf("failed to parse inventory: %w", err)
+	}
+
+	// Navigate to all.hosts
+	allRaw, ok := inv["all"]
+	if !ok {
+		return nil, fmt.Errorf("inventory missing 'all' group")
+	}
+	allMap, ok := allRaw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("'all' is not a map")
+	}
+	hostsRaw, ok := allMap["hosts"]
+	if !ok {
+		return nil, fmt.Errorf("'all.hosts' not found")
+	}
+	hostsMap, ok := hostsRaw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("'all.hosts' is not a map")
+	}
+
+	// For each SSH key entry (except wildcard), inject the key path into the host vars.
+	for keyHost, _ := range sshKeys {
+		if keyHost == "*" {
+			continue
+		}
+		hostVarsRaw, exists := hostsMap[keyHost]
+		if !exists {
+			// Host not in inventory — skip (wildcard will cover it via --private-key flag).
+			continue
+		}
+		var hostVars map[string]any
+		switch v := hostVarsRaw.(type) {
+		case map[string]any:
+			hostVars = v
+		case nil:
+			hostVars = make(map[string]any)
+		default:
+			continue
+		}
+		hostVars["ansible_ssh_private_key_file"] = "/tmp/ssh-keys/" + keyHost
+		hostsMap[keyHost] = hostVars
+	}
+
+	data, err := yaml.Marshal(inv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal modified inventory: %w", err)
+	}
+	return data, nil
+}
+
+// redactProbeArgs returns a redacted version of the docker args for logging,
+// truncating large env var values (inventory, SSH keys) to avoid log noise.
+func redactProbeArgs(args []string) string {
+	redacted := make([]string, len(args))
+	for i, a := range args {
+		// Redact DIFFUSION_INVENTORY_B64 value (can be large).
+		if strings.HasPrefix(a, "DIFFUSION_INVENTORY_B64=") {
+			redacted[i] = "DIFFUSION_INVENTORY_B64=<" + fmt.Sprintf("%d", len(a)-len("DIFFUSION_INVENTORY_B64=")) + " bytes>"
+		} else if strings.HasPrefix(a, "SSH_KEY_") && strings.Contains(a, "=") {
+			// Redact SSH key values.
+			parts := strings.SplitN(a, "=", 2)
+			redacted[i] = parts[0] + "=<redacted>"
+		} else {
+			redacted[i] = a
+		}
+	}
+	return strings.Join(redacted, " ")
 }
 
 // appendDeployEnvArgs adds -e flags for Vault and TOKEN env vars, mirroring
