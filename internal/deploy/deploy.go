@@ -73,6 +73,19 @@ type DeployConfig struct {
 
 	// Wait controls the pre-deploy host reachability wait phase.
 	Wait WaitConfig
+
+	// CacheEnabled enables caching of deployed roles and collections on the host.
+	// When enabled, ansible-galaxy install results persist across runs with the
+	// same RunID, skipping re-download on subsequent deployments.
+	CacheEnabled bool
+
+	// CachePath is an optional custom base path for the deploy cache directory.
+	// Defaults to ~/.diffusion/deploy-cache/.
+	CachePath string
+
+	// CIMode enables CI-specific behavior: outputs cache path for CI systems,
+	// enables non-interactive mode, and ensures cache is always enabled.
+	CIMode bool
 }
 
 // Deploy is the top-level orchestrator. It:
@@ -112,7 +125,7 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 		mergedLock.Python.Pinned, len(mergedLock.Collections), len(mergedLock.Roles))
 
 	// --- 4. Generate requirements.yml from merged lock ---
-	requirementsBytes, err := GenerateRequirements(mergedLock)
+	requirementsBytes, err := GenerateRequirements(mergedLock, cfg.RoleSources...)
 	if err != nil {
 		return fmt.Errorf("requirements.yml generation failed: %w", err)
 	}
@@ -160,8 +173,29 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 	runID := computeRunID(mergedLock, inventoryBytes, playbookFilename, cfg.ExtraVars)
 	log.Printf(config.ColorGreen+"RunID: %s..."+config.ColorReset, runID[:16])
 
+	// --- 7b. Set up deploy cache (keyed by RunID) ---
+	cacheDir := ""
+	if cfg.CacheEnabled || cfg.CIMode {
+		cacheDir, err = ensureDeployCacheDir(runID, cfg.CachePath)
+		if err != nil {
+			log.Printf(config.ColorYellow+"warning: failed to set up deploy cache: %v — continuing without cache"+config.ColorReset, err)
+			cacheDir = ""
+		} else {
+			log.Printf(config.ColorGreen+"Deploy cache enabled: %s"+config.ColorReset, cacheDir)
+			if cfg.CIMode {
+				// Output cache path and RunID in machine-readable formats for CI systems.
+				// RunID should be used as the cache key suffix since diffusion.lock
+				// may not exist in the working directory (e.g. Terraform provider).
+				fmt.Printf("::set-output name=deploy-cache-path::%s\n", cacheDir)
+				fmt.Printf("::set-output name=deploy-run-id::%s\n", runID[:16])
+				fmt.Printf("DIFFUSION_DEPLOY_CACHE=%s\n", cacheDir)
+				fmt.Printf("DIFFUSION_DEPLOY_RUN_ID=%s\n", runID[:16])
+			}
+		}
+	}
+
 	// --- 8. Wait for hosts ---
-	containerCfg := buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, "", "")
+	containerCfg := buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, "", "", cacheDir)
 	if err := WaitForHosts(ctx, inventoryBytes, containerCfg, cfg.Wait); err != nil {
 		return fmt.Errorf("host reachability check failed: %w", err)
 	}
@@ -209,7 +243,7 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 	}
 
 	// --- 10. Run deploy container ---
-	containerCfg = buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, playbookDir, extraVarsFile)
+	containerCfg = buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, playbookDir, extraVarsFile, cacheDir)
 
 	log.Printf(config.ColorGreen + "Starting deploy container..." + config.ColorReset)
 	if err := RunDeployContainer(containerCfg); err != nil {
@@ -226,7 +260,7 @@ func buildContainerConfig(
 	cfg DeployConfig,
 	mergedLock *dependency.LockFile,
 	creds []config.ArtifactCredentials,
-	inventoryContent []byte, playbookDir, extraVarsFile string,
+	inventoryContent []byte, playbookDir, extraVarsFile, cacheDir string,
 ) DeployContainerConfig {
 	resolved := make([]ResolvedCredential, 0, len(creds))
 	for _, c := range creds {
@@ -248,6 +282,7 @@ func buildContainerConfig(
 		ArtifactSources:   resolved,
 		VaultToken:        cfg.VaultToken,
 		VaultAddr:         cfg.VaultAddr,
+		CacheDir:          cacheDir,
 	}
 }
 
@@ -287,6 +322,47 @@ func computeRunID(lock *dependency.LockFile, inventory []byte, playbookName stri
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// ensureDeployCacheDir creates and returns the deploy cache directory for the
+// given runID. The structure is:
+//
+//	<basePath>/deploy-cache/<runID[:16]>/
+//	├── roles/
+//	└── collections/
+//
+// Using a truncated runID keeps directory names manageable while still being
+// unique enough for practical use.
+func ensureDeployCacheDir(runID, customPath string) (string, error) {
+	var basePath string
+	if customPath != "" {
+		basePath = customPath
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+		basePath = filepath.Join(home, ".diffusion")
+	}
+
+	// Use first 16 chars of runID as directory name.
+	cacheKey := runID
+	if len(cacheKey) > 16 {
+		cacheKey = cacheKey[:16]
+	}
+
+	cacheDir := filepath.Join(basePath, "deploy-cache", cacheKey)
+	rolesDir := filepath.Join(cacheDir, "roles")
+	collectionsDir := filepath.Join(cacheDir, "collections")
+
+	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create roles cache dir: %w", err)
+	}
+	if err := os.MkdirAll(collectionsDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create collections cache dir: %w", err)
+	}
+
+	return cacheDir, nil
+}
+
 // writeFailureState writes a failure marker to all remote hosts.
 func writeFailureState(inventoryContent []byte, runID string, cfg DeployContainerConfig) {
 	image := ""
@@ -301,20 +377,58 @@ func writeFailureState(inventoryContent []byte, runID string, cfg DeployContaine
 
 	inventoryB64 := base64.StdEncoding.EncodeToString(inventoryContent)
 	stateContent := fmt.Sprintf(`{"status":"failed","run_id":"%s"}`, runID)
+	sshArgs := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 	dockerArgs := []string{
 		"run", "--rm",
 		"-e", "DIFFUSION_INVENTORY_B64=" + inventoryB64,
 	}
+
+	// Pass SSH keys as env vars.
+	for host, keyB64 := range cfg.SSHKeys {
+		envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+		dockerArgs = append(dockerArgs, "-e", envName+"="+keyB64)
+	}
+
 	if sshDir := sshKeyDir(); sshDir != "" {
 		dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:/root/.ssh:ro", sshDir))
 	}
 
-	shellCmd := fmt.Sprintf(
-		"echo \"$DIFFUSION_INVENTORY_B64\" | base64 -d > /tmp/inventory.yml && ansible all -i /tmp/inventory.yml -m ansible.builtin.copy -a \"dest=~/.diffusion/state content='%s' mode=0600\"",
-		stateContent,
-	)
+	// Build shell command: decode inventory, decode SSH keys, ensure dir exists, write state.
+	var steps []string
+	steps = append(steps, "printenv DIFFUSION_INVENTORY_B64 | base64 -d > /tmp/inventory.yml")
 
+	// Decode SSH keys if present.
+	privateKeyFlag := ""
+	if len(cfg.SSHKeys) > 0 {
+		steps = append(steps, "mkdir -p /tmp/ssh-keys")
+		for host := range cfg.SSHKeys {
+			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+			keyFile := host
+			if host == "*" {
+				keyFile = "_wildcard_"
+			}
+			keyPath := "/tmp/ssh-keys/" + keyFile
+			steps = append(steps,
+				fmt.Sprintf("printenv %s | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
+		}
+		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
+			privateKeyFlag = " --private-key /tmp/ssh-keys/_wildcard_"
+		}
+	}
+
+	// Ensure ~/.diffusion directory exists, then write failure state.
+	ensureDir := fmt.Sprintf(
+		"ANSIBLE_SSH_ARGS='%s' ansible all -i /tmp/inventory.yml%s -m ansible.builtin.file -a \"path=~/.diffusion state=directory mode=0700\"",
+		sshArgs, privateKeyFlag,
+	)
+	writeState := fmt.Sprintf(
+		"ANSIBLE_SSH_ARGS='%s' ansible all -i /tmp/inventory.yml%s -m ansible.builtin.copy -a \"dest=~/.diffusion/state content='%s' mode=0600\"",
+		sshArgs, privateKeyFlag, stateContent,
+	)
+	steps = append(steps, ensureDir, writeState)
+
+	shellCmd := strings.Join(steps, " && ")
 	dockerArgs = append(dockerArgs, image, "sh", "-c", shellCmd)
 
 	cmd := buildExecCommand("docker", dockerArgs...)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"diffusion/internal/config"
@@ -72,6 +73,12 @@ type DeployContainerConfig struct {
 	// VaultToken and VaultAddr are forwarded when set (override env vars).
 	VaultToken string
 	VaultAddr  string
+
+	// CacheDir is the host-side directory where cached roles and collections
+	// are stored. When set, the directory is mounted read-write into the
+	// container so that ansible-galaxy installs persist across runs with the
+	// same RunID. Empty means caching is disabled.
+	CacheDir string
 }
 
 // containerRolesPath and containerCollectionsPath are the install targets used
@@ -116,8 +123,18 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 
 	// --- Volume mounts (read-only; host paths → container paths) ---
 
-	// Inventory is passed as a base64-encoded env var — no host-side file needed.
-	inventoryB64 := base64.StdEncoding.EncodeToString(cfg.InventoryContent)
+	// Inventory: inject per-host SSH key paths into the YAML in Go (proper YAML,
+	// no sed hacks), then pass as base64-encoded env var.
+	deployInventory := cfg.InventoryContent
+	if len(cfg.SSHKeys) > 0 {
+		modified, err := injectSSHKeyPaths(deployInventory, cfg.SSHKeys)
+		if err != nil {
+			log.Printf(config.ColorYellow+"warning: could not inject SSH key paths into inventory: %v — using original"+config.ColorReset, err)
+		} else {
+			deployInventory = modified
+		}
+	}
+	inventoryB64 := base64.StdEncoding.EncodeToString(deployInventory)
 	args = append(args, "-e", "DIFFUSION_INVENTORY_B64="+inventoryB64)
 
 	// Playbook directory: wrapper.yml + target playbook + requirements.yml
@@ -147,14 +164,25 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 		args = append(args, "-v", fmt.Sprintf("%s:/deploy/extra_vars.json:ro", cfg.ExtraVarsFile))
 	}
 
+	// Cache: mount host-side roles/collections directories into the container.
+	// This allows ansible-galaxy install results to persist across runs.
+	if cfg.CacheDir != "" {
+		rolesCacheDir := filepath.Join(cfg.CacheDir, "roles")
+		collectionsCacheDir := filepath.Join(cfg.CacheDir, "collections")
+		args = append(args,
+			"-v", fmt.Sprintf("%s:/deploy/roles", rolesCacheDir),
+			"-v", fmt.Sprintf("%s:/deploy/collections", collectionsCacheDir),
+		)
+	}
+
 	// --- Environment variables ---
 
 	args = append(args,
 		"-e", "UV_VENV_CLEAR=1",
 		"-e", "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
 		// Tell Ansible where the in-container installs will land.
-		"-e", fmt.Sprintf("ANSIBLE_ROLES_PATH=%s", containerRolesPath),
-		"-e", fmt.Sprintf("ANSIBLE_COLLECTIONS_PATH=%s", containerCollectionsPath),
+		"-e", "ANSIBLE_ROLES_PATH=/deploy/roles",
+		"-e", "ANSIBLE_COLLECTIONS_PATH=/deploy/collections",
 	)
 
 	// Vault
@@ -221,22 +249,36 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 // It runs ansible-galaxy to install roles+collections into /tmp/diffusion/,
 // then runs ansible-playbook from that isolated environment.
 func buildContainerCommand(cfg DeployContainerConfig) string {
-	rolesPath := containerRolesPath
-	colsPath := containerCollectionsPath
+	// Install roles and collections directly under /deploy/ so that role-internal
+	// relative paths (defaults/, vars/, tasks/) resolve correctly when the
+	// wrapper playbook at /deploy/playbook/wrapper.yml imports the user playbook.
+	rolesPath := "/deploy/roles"
+	colsPath := "/deploy/collections"
+
+	// Step 0: configure git credentials from indexed GIT_USER_*/GIT_PASSWORD_*/GIT_URL_* env vars.
+	// This replicates what dockerd-entrypoint.sh does, since we bypass the entrypoint with sh -c.
+	configureGit := `i=1; while [ "$i" -le 100 ]; do ` +
+		`gu=$(printenv "GIT_USER_${i}" 2>/dev/null || true); ` +
+		`gp=$(printenv "GIT_PASSWORD_${i}" 2>/dev/null || true); ` +
+		`gurl=$(printenv "GIT_URL_${i}" 2>/dev/null || true); ` +
+		`[ -z "$gu" ] && [ -z "$gp" ] && [ -z "$gurl" ] && break; ` +
+		`if [ -n "$gu" ] && [ -n "$gp" ] && [ -n "$gurl" ]; then ` +
+		`git config --global url."https://${gu}:${gp}@${gurl}".insteadOf "https://${gurl}"; fi; ` +
+		`i=$((i + 1)); done`
 
 	// Step 1: create install directories and decode inventory from env var
-	mkdirs := fmt.Sprintf("mkdir -p %s %s", rolesPath, colsPath)
-	decodeInventory := "echo \"$DIFFUSION_INVENTORY_B64\" | base64 -d > /deploy/inventory.yml"
+	mkdirs := fmt.Sprintf("mkdir -p %s %s /deploy/vars", rolesPath, colsPath)
+	decodeInventory := "printenv DIFFUSION_INVENTORY_B64 | base64 -d > /deploy/inventory.yml"
 
 	// Step 2: install roles from requirements.yml (if any roles present)
 	installRoles := fmt.Sprintf(
-		"ansible-galaxy role install -r /deploy/playbook/requirements.yml -p %s --no-deps 2>/dev/null || true",
+		"ansible-galaxy role install -r /deploy/playbook/requirements.yml -p %s --force 2>&1 || true",
 		rolesPath,
 	)
 
 	// Step 3: install collections from requirements.yml (if any collections present)
 	installCols := fmt.Sprintf(
-		"ansible-galaxy collection install -r /deploy/playbook/requirements.yml -p %s 2>/dev/null || true",
+		"ansible-galaxy collection install -r /deploy/playbook/requirements.yml -p %s 2>&1 || true",
 		colsPath,
 	)
 
@@ -248,34 +290,36 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		decodeSteps = append(decodeSteps, "mkdir -p /tmp/ssh-keys")
 		for host := range cfg.SSHKeys {
 			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
-			keyPath := "/tmp/ssh-keys/" + host
+			// Use a safe filename for the wildcard key to avoid shell glob issues.
+			keyFile := host
+			if host == "*" {
+				keyFile = "_wildcard_"
+			}
+			keyPath := "/tmp/ssh-keys/" + keyFile
+			// Use printenv to output the raw env var value without any shell
+			// interpretation — avoids corrupting base64 content.
 			decodeSteps = append(decodeSteps,
-				fmt.Sprintf("echo \"$%s\" | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
+				fmt.Sprintf("printenv %s | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))
 		}
 		decodeKeyCmd = strings.Join(decodeSteps, " && ") + " && "
 
 		// If there's a wildcard key "*", use --private-key globally.
 		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard && len(cfg.SSHKeys) == 1 {
-			privateKeyFlag = " --private-key /tmp/ssh-keys/*"
+			privateKeyFlag = " --private-key /tmp/ssh-keys/_wildcard_"
+		} else if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
+			// Mixed mode: per-host keys are in inventory, wildcard as fallback.
+			privateKeyFlag = " --private-key /tmp/ssh-keys/_wildcard_"
 		}
 	}
 
-	// Step 5: rewrite SSH key paths in the inventory if extra key dirs are mounted
-	// or per-host SSH keys need ansible_ssh_private_key_file injected.
+	// Step 5: rewrite SSH key paths in the inventory if extra key dirs are mounted.
+	// Per-host SSH key paths are already injected into InventoryContent via Go
+	// (injectSSHKeyPathsForDeploy in buildDeployDockerArgs), so no sed needed for those.
 	inventoryFile := "/deploy/inventory.yml"
 	extraDirs := extractSSHKeyDirsFromContent(cfg.InventoryContent)
 	rewriteCmd := ""
 
-	// Determine if we need per-host key injection (non-wildcard SSH keys).
-	perHostKeys := make(map[string]string)
-	for host := range cfg.SSHKeys {
-		if host != "*" {
-			perHostKeys[host] = "/tmp/ssh-keys/" + host
-		}
-	}
-
-	needsRewrite := len(extraDirs) > 0 || len(perHostKeys) > 0
-	if needsRewrite {
+	if len(extraDirs) > 0 {
 		inventoryFile = "/tmp/inventory-rewritten.yml"
 		var builder strings.Builder
 
@@ -293,20 +337,10 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 
 		sedExpr := builder.String()
 		if sedExpr != "" {
-			rewriteCmd = fmt.Sprintf("sed '%s' /deploy/inventory.yml > %s", sedExpr, inventoryFile)
+			rewriteCmd = fmt.Sprintf("sed '%s' /deploy/inventory.yml > %s && ", sedExpr, inventoryFile)
 		} else {
-			rewriteCmd = fmt.Sprintf("cp /deploy/inventory.yml %s", inventoryFile)
+			rewriteCmd = fmt.Sprintf("cp /deploy/inventory.yml %s && ", inventoryFile)
 		}
-
-		// For per-host keys, use sed to inject ansible_ssh_private_key_file after the host line.
-		for host, keyPath := range perHostKeys {
-			// Insert ansible_ssh_private_key_file on the line after the hostname entry.
-			escapedKeyPath := strings.ReplaceAll(keyPath, "/", "\\/")
-			rewriteCmd += fmt.Sprintf(
-				" && sed -i '/%s:/a\\      ansible_ssh_private_key_file: %s' %s",
-				host, escapedKeyPath, inventoryFile)
-		}
-		rewriteCmd += " && "
 	}
 
 	// Step 6: run ansible-playbook with the wrapper
@@ -319,8 +353,8 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 	}
 	playbookArgs += privateKeyFlag
 
-	return fmt.Sprintf("set -e && %s && %s && %s && %s && %s%s%s",
-		mkdirs, decodeInventory, installRoles, installCols, decodeKeyCmd, rewriteCmd, playbookArgs)
+	return fmt.Sprintf("set -e && %s && %s && %s && %s && %s && %s%s%s",
+		configureGit, mkdirs, decodeInventory, installRoles, installCols, decodeKeyCmd, rewriteCmd, playbookArgs)
 }
 
 // buildPyprojectFromLock generates pyproject.toml content from a merged lock.
