@@ -215,6 +215,7 @@
   <div class="nav-links">
     <a href="#quickstart">Quickstart</a>
     <a href="#cmd-molecule">Commands</a>
+    <a href="#mcp-server">MCP Server</a>
     <a href="#config">Configuration</a>
     <a href="#deps-guide">Guides</a>
     <a href="https://github.com/Polar-Team/diffusion" target="_blank">GitHub ↗</a>
@@ -245,6 +246,13 @@
     <a href="#cmd-artifact">artifact</a>
     <a href="#cmd-show">show</a>
     <a href="#cmd-deploy">deploy</a>
+    <a href="#cmd-docs">docs</a>
+  </div>
+  <div class="mob-section">
+    <div class="mob-title">MCP Server</div>
+    <a href="#mcp-server">Overview</a>
+    <a href="#mcp-tools">Tools</a>
+    <a href="#mcp-setup">Setup</a>
   </div>
   <div class="mob-section">
     <div class="mob-title">Terraform Provider</div>
@@ -295,6 +303,13 @@
       <a href="#cmd-artifact">artifact</a>
       <a href="#cmd-show">show</a>
       <a href="#cmd-deploy">deploy</a>
+      <a href="#cmd-docs">docs</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">MCP Server</div>
+      <a href="#mcp-server">Overview</a>
+      <a href="#mcp-tools">Tools</a>
+      <a href="#mcp-setup">Setup</a>
     </div>
     <div class="sidebar-section">
       <div class="sidebar-title">Terraform Provider</div>
@@ -319,12 +334,6 @@
       <a href="#unix-perms">Unix Permissions</a>
       <a href="#role-versions">Role Version Constraints</a>
       <a href="#migration">Migration Guide</a>
-    </div>
-    <div class="sidebar-section">
-      <div class="sidebar-title">Terraform Provider</div>
-      <a href="#tf-provider">Overview</a>
-      <a href="#tf-resource">diffusion_deploy</a>
-      <a href="#tf-datasource">diffusion_inventory</a>
     </div>
     <div class="sidebar-section">
     </div>
@@ -391,6 +400,16 @@
           <h4>Artifact Management</h4>
           <p>Manage credentials for multiple private repositories with encrypted local storage or Vault — indexed as <code>GIT_USER_N</code> env vars.</p>
         </div>
+        <div class="card">
+          <div class="card-icon">📝</div>
+          <h4>Auto Documentation</h4>
+          <p>Generate role variable documentation in README.md automatically from annotated defaults and vars files with <code>diffusion docs</code>.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">🤖</div>
+          <h4>MCP Server</h4>
+          <p>AI assistant integration via Model Context Protocol — 16 tools for container management, validation, and troubleshooting.</p>
+        </div>
       </div>
     </div>
 
@@ -398,7 +417,7 @@
     <div id="prereqs" class="doc-section reveal">
       <h2> Prerequisites</h2>
       <div class="card-grid">
-        <div class="card"><h4>Required</h4><ul><li>Docker  containerized testing</li><li>Go 1.25.4+  only if building from source</li></ul></div>
+        <div class="card"><h4>Required</h4><ul><li>Docker — containerized testing</li><li>Go 1.25.4+ — only if building from source</li></ul></div>
         <div class="card"><h4>Optional CLIs</h4><ul><li>Vault CLI  HashiCorp Vault integration</li><li>YC CLI  Yandex Cloud registry</li><li>AWS CLI  AWS ECR registry</li><li>gcloud CLI  GCP registry</li></ul></div>
         <div class="card"><h4>Recommended Terminal</h4><ul><li>WezTerm or Ghostty for best Unicode/color support</li><li>Nerd Fonts: FiraCode, JetBrains Mono, Hack</li></ul></div>
       </div>
@@ -599,10 +618,15 @@ diffusion deploy --playbook site.yml --role-source scm=galaxy,version=&gt;=6.0.0
           <tr><td><code>--group</code></td><td><code>groupname=host1,host2</code> inventory group (repeatable)</td><td></td></tr>
           <tr><td><code>--var</code></td><td><code>key=value</code> global inventory variable (repeatable)</td><td></td></tr>
           <tr><td><code>--extra-var</code></td><td><code>key=value</code> ansible-playbook extra-var (repeatable)</td><td></td></tr>
+          <tr><td><code>--ssh-key</code></td><td>SSH private key as base64 (repeatable). Format: <code>hostname=&lt;base64&gt;</code> or <code>*=&lt;base64&gt;</code> for all hosts</td><td></td></tr>
           <tr><td><code>--skip-period</code></td><td>Skip re-deploy if last run succeeded within this period (Go duration, e.g. <code>24h</code>)</td><td></td></tr>
           <tr><td><code>--host-wait-initial-delay</code></td><td>Delay before first host reachability probe</td><td><code>10s</code></td></tr>
-          <tr><td><code>--host-wait-interval</code></td><td>Interval between host probes</td><td><code>5s</code></td></tr>
-          <tr><td><code>--host-wait-timeout</code></td><td>Hard deadline for host reachability</td><td><code>5m</code></td></tr>
+          <tr><td><code>--host-wait-interval</code></td><td>Interval between host probes</td><td><code>15s</code></td></tr>
+          <tr><td><code>--host-wait-timeout</code></td><td>Hard deadline for host reachability</td><td><code>10m</code></td></tr>
+          <tr><td><code>--host-wait-max-attempts</code></td><td>Maximum number of host reachability probe attempts</td><td><code>20</code></td></tr>
+          <tr><td><code>--cache</code></td><td>Enable deploy cache for fetched lock files and role metadata</td><td><code>true</code></td></tr>
+          <tr><td><code>--cache-path</code></td><td>Custom cache directory path</td><td><code>~/.diffusion/deploy-cache/</code></td></tr>
+          <tr><td><code>--ci</code></td><td>CI/CD mode — machine-readable output, cache path written to stdout</td><td><code>false</code></td></tr>
         </tbody>
       </table></div>
 
@@ -639,6 +663,198 @@ diffusion deploy --playbook site.yml --role-source scm=galaxy,version=&gt;=6.0.0
       <h3>Remote state &amp; skip logic</h3>
       <p>After every successful run, a state file is written to <code>~/.diffusion/state</code> on each remote host. The <code>run_id</code> is a SHA-256 of all inputs (lock hash + inventory + playbook + extra-vars). If <code>--skip-period</code> is set and the last <code>run_id</code> matches, the deploy is skipped.</p>
     </div>
+
+    <!-- CMD: DOCS -->
+    <div id="cmd-docs" class="doc-section reveal">
+      <h2>📝 diffusion docs</h2>
+      <p>Generate role variable documentation in README.md automatically by scanning Ansible role files for variables and annotations.</p>
+
+      <h3>Usage</h3>
+      <pre><code><span style="color:var(--muted)"># Generate docs for role in current directory</span>
+diffusion docs
+
+<span style="color:var(--muted)"># Generate docs for a role in a specific path</span>
+diffusion docs --path ./roles/my_role
+
+<span style="color:var(--muted)"># Preview without writing (dry-run)</span>
+diffusion docs --dry-run</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+
+      <h3>Flags</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Flag</th><th>Description</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td><code>--path, -p</code></td><td>Path to Ansible role directory</td><td><code>.</code> (current dir)</td></tr>
+          <tr><td><code>--dry-run</code></td><td>Print generated docs without writing to README.md</td><td><code>false</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Scanned files</h3>
+      <ul>
+        <li><code>defaults/main.yml</code> — role default variables</li>
+        <li><code>vars/main.yml</code> — role variables</li>
+        <li><code>templates/</code> — Jinja2 template files for <code>{{ variable }}</code> references</li>
+        <li><code>tasks/</code> — task files for <code>{{ variable }}</code> references</li>
+      </ul>
+
+      <h3>Variable annotations</h3>
+      <p>Place annotations in <code>defaults/main.yml</code> or <code>vars/main.yml</code> to provide type and description metadata:</p>
+      <pre><code><span style="color:var(--muted)"># Standard variable with type + description</span>
+#—| string
+my_variable: "default_value"
+#—? Description of what this variable does
+
+<span style="color:var(--muted)"># Required variable (no default value in YAML)</span>
+#—| string
+#—! required_variable_name
+#—? This variable must be set by the user
+
+<span style="color:var(--muted)"># Optional variable (default handled in Jinja2 templates)</span>
+#—| int
+#—&amp; optional_variable_name
+#—? Default is computed in templates</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+
+      <h3>Annotation markers</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Marker</th><th>Position</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>#—| &lt;type&gt;</code></td><td>Above variable</td><td>Type annotation (string, int, bool, list, map, float, dict, path)</td></tr>
+          <tr><td><code>#—? &lt;desc&gt;</code></td><td>Below variable</td><td>Description annotation</td></tr>
+          <tr><td><code>#—! name</code></td><td>Variable line</td><td>Required variable marker (no YAML declaration needed)</td></tr>
+          <tr><td><code>#—&amp; name</code></td><td>Variable line</td><td>Optional variable marker (default handled in templates)</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Output format</h3>
+      <p>Generated documentation is placed between markers in README.md:</p>
+      <pre><code>&lt;!-- begin role_variables --&gt;
+| Variable | Type | Default | Required | Description |
+|---|---|---|---|---|
+| my_variable | string | "default_value" | no | Description... |
+| required_var | string | — | yes | Must be set... |
+&lt;!-- end role_variables --&gt;</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      <p>If the markers already exist, content between them is replaced. If no markers exist, the section is appended to the end of README.md.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════ -->
+    <!-- MCP SERVER                                     -->
+    <!-- ══════════════════════════════════════════════ -->
+    <div id="mcp-server" class="doc-section reveal">
+      <h2>🤖 MCP Server</h2>
+      <p>The Diffusion MCP (Model Context Protocol) server provides AI assistants with tools to manage and troubleshoot Diffusion testing environments. Built with <a href="https://github.com/modelcontextprotocol/python-sdk" style="color:var(--accent)">FastMCP</a>, it can run locally via <code>uv</code> or as a Docker container.</p>
+
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-icon">🐳</div>
+          <h4>Container Management</h4>
+          <p>List, inspect, and execute commands inside molecule containers for live debugging.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">✅</div>
+          <h4>Validation</h4>
+          <p>Validate <code>molecule.yml</code> and <code>verify.yml</code> files for misconfigurations and common issues.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">🔍</div>
+          <h4>Troubleshooting</h4>
+          <p>9-point diagnostic: DinD, Python, Ansible, Molecule, uv venv, volumes, disk, and scenarios.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">📋</div>
+          <h4>CLI Reference</h4>
+          <p>Full structured command reference and safe read-only command execution.</p>
+        </div>
+      </div>
+
+      <h3>Container image</h3>
+      <p>Pre-built multi-arch images are published to GHCR. Each image includes the diffusion CLI binary, the MCP Python server, and Docker CE CLI.</p>
+      <pre><code>ghcr.io/polar-team/diffusion-mcp-server:latest          <span style="color:var(--muted)"># multi-arch manifest</span>
+ghcr.io/polar-team/diffusion-mcp-server:latest-amd64    <span style="color:var(--muted)"># explicit arch</span>
+ghcr.io/polar-team/diffusion-mcp-server:latest-arm64
+ghcr.io/polar-team/diffusion-mcp-server:{version}       <span style="color:var(--muted)"># pinned version</span></code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+    </div>
+
+    <div id="mcp-tools" class="doc-section reveal">
+      <h2>🤖 MCP Tools Reference</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Tool</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>get_diffusion_config</code></td><td>Read and parse <code>diffusion.toml</code> configuration</td></tr>
+          <tr><td><code>get_lock_file</code></td><td>Read and parse <code>diffusion.lock</code> dependency lock file</td></tr>
+          <tr><td><code>list_molecule_containers</code></td><td>List all running <code>molecule-*</code> containers</td></tr>
+          <tr><td><code>inspect_molecule_container</code></td><td>Deep inspection: state, health, image, mounts, env, network</td></tr>
+          <tr><td><code>docker_exec_in_molecule</code></td><td>Execute shell commands inside a molecule container</td></tr>
+          <tr><td><code>get_container_logs</code></td><td>Get recent logs from a molecule container (default: 100 lines)</td></tr>
+          <tr><td><code>check_molecule_yml</code></td><td>Validate molecule scenario file for common issues</td></tr>
+          <tr><td><code>check_verify_yml</code></td><td>Validate verify.yml structure, tags, and file references</td></tr>
+          <tr><td><code>check_docker_environment</code></td><td>Validate Docker daemon, version, DinD readiness, disk</td></tr>
+          <tr><td><code>troubleshoot_molecule_container</code></td><td>Run comprehensive 9-point diagnostics</td></tr>
+          <tr><td><code>get_requirements_yml</code></td><td>Read Ansible <code>requirements.yml</code> for a scenario</td></tr>
+          <tr><td><code>list_molecule_scenarios</code></td><td>List all scenarios with their key files</td></tr>
+          <tr><td><code>run_diffusion_command</code></td><td>Run safe read-only diffusion CLI commands</td></tr>
+          <tr><td><code>get_diffusion_cli_reference</code></td><td>Structured CLI command reference with flags and examples</td></tr>
+          <tr><td><code>get_server_version</code></td><td>Return MCP server version and Python environment info</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div id="mcp-setup" class="doc-section reveal">
+      <h2>🤖 MCP Setup</h2>
+      <p>The MCP server requires two mounts: the Docker socket (for container tools) and your project directory (for config/scenario reading).</p>
+
+      <h3>Requirements</h3>
+      <ul>
+        <li>Python 3.11+ and <a href="https://docs.astral.sh/uv/" style="color:var(--accent)">uv</a> (local mode)</li>
+        <li>Docker (container mode)</li>
+      </ul>
+
+      <h3>Configuration</h3>
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab(event,'mcp-docker')">Docker</button>
+        <button class="tab-btn" onclick="switchTab(event,'mcp-uv')">Local (uv)</button>
+      </div>
+      <div id="tab-mcp-docker" class="tab-panel active">
+        <pre><code>{
+  "mcpServers": {
+    "diffusion": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", "${workspaceFolder}:/project",
+        "ghcr.io/polar-team/diffusion-mcp-server:latest"
+      ],
+      "autoApprove": [
+        "get_diffusion_config", "get_lock_file",
+        "list_molecule_containers", "get_diffusion_cli_reference",
+        "check_molecule_yml", "check_verify_yml",
+        "check_docker_environment", "list_molecule_scenarios",
+        "get_requirements_yml", "get_server_version"
+      ]
+    }
+  }
+}</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      </div>
+      <div id="tab-mcp-uv" class="tab-panel">
+        <pre><code>{
+  "mcpServers": {
+    "diffusion": {
+      "command": "uv",
+      "args": ["run", "--directory", "&lt;path-to&gt;/mcp", "diffusion-mcp"],
+      "autoApprove": [
+        "get_diffusion_config", "get_lock_file",
+        "list_molecule_containers", "get_diffusion_cli_reference",
+        "check_molecule_yml", "check_verify_yml",
+        "check_docker_environment", "list_molecule_scenarios",
+        "get_requirements_yml"
+      ]
+    }
+  }
+}</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      </div>
+
+      <div class="note">Add this configuration to <code>.kiro/settings/mcp.json</code> (workspace-level) or <code>~/.kiro/settings/mcp.json</code> (global). For Claude Desktop, add to <code>claude_desktop_config.json</code>.</div>
+    </div>
+
     <!-- CONFIG -->
     <div id="config" class="doc-section reveal">
       <h2>⚙️ diffusion.toml</h2>
@@ -1116,7 +1332,7 @@ GIT_USER_2=user2      GIT_PASSWORD_2=token2    GIT_URL_2=https://repo2.example.c
     <!-- ══════════════════════════════════════════════ -->
     <div id="building" class="doc-section reveal">
       <h2>🔨 Building from Source</h2>
-      <p>Requires Go 1.21+ and Make. Go supports cross-compilation out of the box — build for any platform from any platform.</p>
+      <p>Requires Go 1.25.4+ and Make. Go supports cross-compilation out of the box — build for any platform from any platform.</p>
 
       <h3>Main targets</h3>
       <div class="tbl-wrap"><table>
@@ -1129,6 +1345,9 @@ GIT_USER_2=user2      GIT_PASSWORD_2=token2    GIT_URL_2=https://repo2.example.c
           <tr><td><code>make windows</code></td><td>All Windows architectures</td></tr>
           <tr><td><code>make test</code></td><td>Run unit tests</td></tr>
           <tr><td><code>make clean</code></td><td>Remove build artifacts</td></tr>
+          <tr><td><code>make build-provider</code></td><td>Build Terraform provider for current platform</td></tr>
+          <tr><td><code>make dist-provider</code></td><td>Build Terraform provider for all platforms</td></tr>
+          <tr><td><code>make dist-all</code></td><td>Build both diffusion CLI + provider for all platforms</td></tr>
         </tbody>
       </table></div>
 
@@ -1178,19 +1397,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version-file: go.mod
       - run: make dist
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: binaries
           path: bin/</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
       </div>
       <div id="tab-bld-gl" class="tab-panel">
         <pre><code>build:
-  image: golang:1.21
+  image: golang:1.25
   script:
     - make dist
   artifacts:
@@ -1427,7 +1646,7 @@ enabled = true  <span style="color:var(--muted)"># simplified — no field names
       <pre><code>terraform {
   required_providers {
     diffusion = {
-      source  = "registry.terraform.io/diffusion/diffusion"
+      source  = "Polar-Team/diffusion"
       version = "&gt;= 0.1.0"
     }
   }
@@ -1449,8 +1668,20 @@ provider "diffusion" {
 
   # Host reachability defaults (overridable per resource)
   host_wait_initial_delay = "10s"
-  host_wait_interval      = "5s"
-  host_wait_timeout       = "5m"
+  host_wait_interval      = "15s"
+  host_wait_timeout       = "10m"
+
+  # Private artifact source (optional, repeatable)
+  artifact_source {
+    name               = "private-galaxy"
+    url                = "https://galaxy.example.com"
+    type               = "galaxy"
+    use_vault          = true
+    vault_path         = "secret"
+    vault_secret_name  = "galaxy-creds"
+    vault_username_field = "username"
+    vault_token_field  = "token"
+  }
 }</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
 
       <h3>Building the provider binary</h3>
@@ -1497,6 +1728,11 @@ make dist-provider</code><button class="copy-btn" onclick="copyCode(this)">copy<
   variables = { env = "production" }
   extra_vars = { debug = "false" }
 
+  # SSH keys (auto base64-encoded before passing to diffusion)
+  ssh_private_keys = {
+    default = tls_private_key.ssh.private_key_openssh
+  }
+
   # Skip if last identical deploy succeeded within 24 h
   skip_if_succeeded_within = "24h"
 
@@ -1514,6 +1750,7 @@ make dist-provider</code><button class="copy-btn" onclick="copyCode(this)">copy<
           <tr><td><code>groups</code></td><td>map(list)</td><td>Inventory groups: group name &#8594; list of host names</td></tr>
           <tr><td><code>variables</code></td><td>map(string)</td><td>Global inventory variables</td></tr>
           <tr><td><code>extra_vars</code></td><td>map(string)</td><td>Extra vars passed to <code>ansible-playbook --extra-vars</code></td></tr>
+          <tr><td><code>ssh_private_keys</code></td><td>map(string), sensitive</td><td>Map of named SSH private keys in PEM format. Each value is base64-encoded automatically before passing to diffusion. Example: <code>{ default = tls_private_key.ssh.private_key_openssh }</code></td></tr>
           <tr><td><code>skip_if_succeeded_within</code></td><td>string</td><td>Go duration (e.g. <code>"24h"</code>). Skip re-deploy when inputs are identical</td></tr>
           <tr><td><code>host_wait_initial_delay</code></td><td>string</td><td>Override provider default initial delay</td></tr>
           <tr><td><code>host_wait_interval</code></td><td>string</td><td>Override provider default probe interval</td></tr>
@@ -1530,30 +1767,66 @@ make dist-provider</code><button class="copy-btn" onclick="copyCode(this)">copy<
 
     <div id="tf-datasource" class="doc-section reveal">
       <h2>&#x1F9F1; Data Source: <code>diffusion_inventory</code></h2>
-      <p>Reads and parses a generated Ansible YAML inventory, exposing structured host and group data for use in other Terraform resources.</p>
+      <p>Renders an Ansible YAML inventory from the provided hosts, groups, and variables <strong>without triggering any deployment</strong>. Useful for inspecting and debugging inventory before deploying, passing rendered YAML to other resources, or validating inventory structure in CI/CD.</p>
 
-      <pre><code>data "diffusion_inventory" "hosts" {
-  # Supply the rendered inventory YAML from a diffusion_deploy resource
-  inventory_yaml = diffusion_deploy.app.inventory_rendered
+      <pre><code>data "diffusion_inventory" "preview" {
+  hosts = {
+    "web-01" = {
+      vars = {
+        ansible_host = "192.168.1.10"
+        ansible_user = "deploy"
+      }
+    }
+    "web-02" = {
+      vars = {
+        ansible_host = "192.168.1.11"
+        ansible_user = "deploy"
+      }
+    }
+  }
+
+  groups = {
+    webservers = ["web-01", "web-02"]
+  }
+
+  variables = {
+    env         = "production"
+    app_version = "1.5.0"
+  }
 }
 
-output "host_ips" {
-  value = data.diffusion_inventory.hosts.hosts
-}
-output "groups" {
-  value = data.diffusion_inventory.hosts.groups
+output "inventory_yaml" {
+  value = data.diffusion_inventory.preview.rendered
 }</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
 
       <h3>Exported attributes</h3>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Attribute</th><th>Type</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>inventory_yaml</code></td><td>string</td><td>Raw Ansible YAML inventory to parse (input)</td></tr>
-          <tr><td><code>hosts</code></td><td>map(map(string))</td><td>Parsed hosts with their connection variables</td></tr>
-          <tr><td><code>groups</code></td><td>map(list(string))</td><td>Parsed groups with lists of member host names</td></tr>
-          <tr><td><code>vars</code></td><td>map(string)</td><td>Parsed global <code>all</code> group variables</td></tr>
+          <tr><td><code>hosts</code></td><td>map(object)</td><td>Map of hostname → <code>{ vars = { key = value } }</code> (input)</td></tr>
+          <tr><td><code>groups</code></td><td>map(list(string))</td><td>Map of group name → list of host names (input)</td></tr>
+          <tr><td><code>variables</code></td><td>map(string)</td><td>Global inventory variables for the <code>all</code> group (input)</td></tr>
+          <tr><td><code>rendered</code></td><td>string</td><td>The rendered Ansible YAML inventory (computed)</td></tr>
         </tbody>
       </table></div>
+
+      <h3>Output format</h3>
+      <pre><code>all:
+  hosts:
+    web-01:
+      ansible_host: "192.168.1.10"
+      ansible_user: "deploy"
+    web-02:
+      ansible_host: "192.168.1.11"
+      ansible_user: "deploy"
+  children:
+    webservers:
+      hosts:
+        web-01: {}
+        web-02: {}
+  vars:
+    app_version: "1.5.0"
+    env: "production"</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
     </div>
   </main>
 </div><!-- /layout -->

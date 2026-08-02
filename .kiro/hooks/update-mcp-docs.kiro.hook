@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "name": "Update MCP & Docs",
+  "description": "Manually triggered hook that reviews all source changes and updates the MCP server data, HTML documentation, troubleshooting cases, and helper utilities to stay in sync with the codebase.",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Review all recent source code changes across the workspace (diffusion, diffusion-molecule-container, diffusion-ansible-tests-role, terraform-provider-diffusion). Then:\n\n1. **MCP Server Data** — Update the MCP server tool definitions, descriptions, and input schemas to reflect any new or changed CLI commands, flags, configurations, or behaviors. It's already existing MCP server located under mcp/diffusion_mcp.\n\n3. **Troubleshooting Cases** — Add new troubleshooting entries for any new error conditions, failure modes, or common issues introduced by the changes. It's should be under mcp/diffusion_mcp server onlyu.\n\n4. **Helpers** — Update or add helper functions/utilities that support the new or changed functionality. It's should be under mcp/diffusion_mcp server onlyu.\n\nAll updates should be located under main workree inside mcp/diffusion_mcp."
+  },
+  "workspaceFolderName": "diffusion",
+  "shortName": "update-mcp-docs"
+}

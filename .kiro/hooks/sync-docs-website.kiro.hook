@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "name": "Sync Docs Website",
+  "description": "Manually triggered hook that scans all Diffusion ecosystem repositories (diffusion CLI, diffusion-molecule-container, diffusion-ansible-tests-role, terraform-provider-diffusion) and their dev-new-features branches for new or changed features, commands, configurations, or behaviors that should be reflected in the docs HTML website at diffusion/docs/index.html and diffusion/docs/changelog.md.",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Scan all Diffusion ecosystem repositories for documentation updates needed on the docs HTML website.\n\nSearch these locations for new or changed information:\n1.  diffusion\\ — CLI source (Go files in internal/, cmd/), Makefile, README.md, dev-new-features/\n2.  diffusion-molecule-container\\ — Dockerfile, pyproject.toml, docs/, dev-new-features/\n3.  diffusion-ansible-tests-role\\ — tasks/, defaults/, README.md, CHANGELOG.md, dev-new-features/\n4.  terraform-provider-diffusion\\ — provider source, dev-new-features/\n\nLook for:\n- New CLI commands or flags\n- Changed default values or configuration options\n- New features or capabilities added\n- Updated dependencies or version requirements\n- New environment variables or container changes\n- Terraform provider resource/data source changes\n- Ansible role variable additions or behavior changes\n- Workflow or CI/CD changes that affect usage\n\nThen update the docs website at docs\\index.html and docs\\changelog.md to reflect any findings. Maintain the existing HTML structure, styling, and section organization. Add new sections if needed for entirely new features."
+  },
+  "workspaceFolderName": "diffusion",
+  "shortName": "sync-docs-website"
+}
