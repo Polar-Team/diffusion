@@ -1094,6 +1094,13 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "The | and ? markers apply to the adjacent variable declaration. "
                 "The ! and & markers are standalone — they carry the variable name themselves (no YAML declaration needed)."
             ),
+            "builtin_exclusions": (
+                "The docs scanner automatically excludes Ansible/Jinja2 built-in variables "
+                "from documentation output. This includes: loop, item, inventory_dir, playbook_dir, "
+                "role_name, ansible_hostname, ansible_os_family, ansible_distribution, "
+                "ansible_architecture, ansible_managed, ansible_facts, inventory_hostname, "
+                "group_names, groups, hostvars, omit, and other standard Ansible magic variables."
+            ),
             "examples": [
                 "diffusion docs                    # Generate/update docs from all files in defaults/",
                 "diffusion docs --dry-run          # Preview changes without writing",
@@ -1120,7 +1127,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                         "scm=git,version=main,url=https://github.com/org/role.git,name=myrole,apply_to=webservers",
                     ],
                 },
-                "--playbook": {
+                "--playbook, -p": {
                     "description": "Path to an Ansible playbook. When omitted, a playbook is auto-generated from --role-source entries, grouped by apply_to pattern.",
                     "default": "(auto-generated)",
                 },
@@ -1133,37 +1140,89 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "example": "webservers=web01,web02",
                 },
                 "--var": {
-                    "description": "key=value — global inventory variable (repeatable)",
+                    "description": "key=value — global inventory variable (repeatable). Supports group-scoped format: 'groupname.key=value'",
                 },
                 "--extra-var": {
                     "description": "key=value — extra variable passed to ansible-playbook --extra-vars (repeatable)",
+                },
+                "--ssh-key": {
+                    "description": (
+                        "SSH private key as base64 (repeatable). Format: 'hostname=<base64>' or '*=<base64>' for all hosts. "
+                        "Supports routing: per-host (inventory hostname as key), per-group ('group:<groupname>=<base64>'), "
+                        "wildcard ('*=<base64>'), or fallback (any other name). Priority: per-host > group > fallback/wildcard."
+                    ),
+                    "examples": [
+                        '"web01=<base64-encoded-pem>"',
+                        '"*=<base64-encoded-pem>"',
+                        '"group:webservers=<base64-encoded-pem>"',
+                    ],
                 },
                 "--skip-period": {
                     "description": "Skip re-deploy if last run succeeded within this period and inputs are identical. Go duration string (e.g. '24h'). Empty = always deploy.",
                     "default": "",
                 },
                 "--host-wait-initial-delay": {
-                    "description": "Delay before the first host reachability probe (Go duration, e.g. '10s')",
+                    "description": "Pause before the first host reachability probe (Go duration, e.g. '30s')",
                     "default": "10s",
                 },
                 "--host-wait-interval": {
                     "description": "Interval between host reachability probes (Go duration)",
-                    "default": "5s",
+                    "default": "15s",
                 },
                 "--host-wait-timeout": {
                     "description": "Hard deadline for all hosts to become reachable (Go duration)",
-                    "default": "5m",
+                    "default": "10m",
                 },
+                "--host-wait-max-attempts": {
+                    "description": "Maximum number of probe attempts before failing. Set to 0 to disable (rely on timeout only).",
+                    "default": "20",
+                },
+                "--cache": {
+                    "description": "Enable caching of deployed roles and collections. Uses RunID as cache key. Cache persists across runs at ~/.diffusion/deploy-cache/<runID[0:16]>/",
+                    "default": "true",
+                },
+                "--cache-path": {
+                    "description": "Custom base path for the deploy cache directory. Default: ~/.diffusion/deploy-cache/",
+                    "default": "~/.diffusion/deploy-cache/",
+                },
+                "--ci": {
+                    "description": "CI/CD mode. Prints cache path for CI system integration (e.g. actions/cache). Non-interactive.",
+                    "default": "false",
+                },
+            },
+            "ssh_key_routing": {
+                "description": "SSH key routing determines which hosts receive which private key",
+                "priority_order": [
+                    "1. Per-host: key name matches the inventory hostname exactly",
+                    "2. Per-group: key name is 'group:<groupname>' — applies to all hosts in that group",
+                    "3. Fallback/Wildcard: key name is '*' or any other name — applies to all unmatched hosts",
+                ],
+                "behavior": [
+                    "Keys are passed as base64-encoded env vars into the container",
+                    "Container decodes keys to /tmp/ssh-keys/<host> at runtime",
+                    "Inventory is patched with ansible_ssh_private_key_file pointing to the decoded key",
+                ],
+            },
+            "deploy_caching": {
+                "description": "Deploy caching persists ansible-galaxy install results across runs with the same RunID",
+                "cache_structure": "~/.diffusion/deploy-cache/<runID[0:16]>/{roles,collections}",
+                "behavior": [
+                    "Cache directory is mounted read-write into the container",
+                    "ansible-galaxy install writes to the cache on first deploy",
+                    "Subsequent deploys with same RunID skip re-download",
+                    "In CI mode (--ci), cache path is printed for integration with CI cache systems (e.g. actions/cache)",
+                ],
             },
             "workflow_order": [
                 "1. Fetch diffusion.lock from each --role-source (git shallow-clone or Galaxy download)",
                 "2. Merge lock files — intersect constraints, re-resolve via Galaxy API",
                 "3. Generate requirements.yml from merged lock",
                 "4. Auto-generate playbook from role_sources (or use --playbook)",
-                "5. Wait for hosts to be reachable via ansible.builtin.ping inside the container",
-                "6. Run ansible-galaxy role/collection install inside the container",
-                "7. Run ansible-playbook inside the container",
-                "8. Write remote state to ~/.diffusion/state on each host",
+                "5. Ensure deploy cache directory (if --cache enabled)",
+                "6. Wait for hosts to be reachable via ansible.builtin.ping inside the container",
+                "7. Run ansible-galaxy role/collection install inside the container (from cache if available)",
+                "8. Run ansible-playbook inside the container",
+                "9. Write remote state to ~/.diffusion/state on each host",
             ],
             "auto_generated_playbook_example": (
                 "---\n"
@@ -1183,6 +1242,9 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "diffusion deploy --role-source scm=galaxy,version=>=6.0.0,galaxy=geerlingguy.docker --host web01=ansible_host=1.2.3.4",
                 'diffusion deploy --role-source "scm=git,version=main,url=https://github.com/org/role.git,name=myrole,apply_to=webservers" --host web01=ansible_host=1.2.3.4',
                 "diffusion deploy --playbook site.yml --role-source scm=galaxy,version=>=6.0.0,galaxy=ns.role --skip-period 24h",
+                'diffusion deploy --role-source scm=galaxy,version=>=7.0.0,galaxy=geerlingguy.docker --host web01=ansible_host=1.2.3.4 --ssh-key "*=<base64>"',
+                "diffusion deploy --role-source scm=git,version=main,url=https://github.com/org/role.git --ci --cache --host-wait-max-attempts 30",
+                'diffusion deploy --role-source scm=git,version=main,url=https://github.com/org/role.git --ssh-key "group:webservers=<base64>" --host web01=ansible_host=1.2.3.4',
             ],
         },
     }
@@ -1487,11 +1549,14 @@ def troubleshoot_molecule_container(role: str) -> str:
             container,
             "/bin/sh",
             "-c",
-            "test -d /opt/venv && echo 'venv present' || echo 'venv MISSING'",
+            "test -d /opt/uv/.venv && echo 'venv present' || "
+            "(test -d /opt/venv && echo 'venv present (legacy path)' || echo 'venv MISSING')",
         ]
     )
-    diagnostics.append({"check": "uv venv (/opt/venv)", "result": venv_check["stdout"]})
+    diagnostics.append({"check": "uv venv (/opt/uv/.venv)", "result": venv_check["stdout"]})
     if "MISSING" not in venv_check.get("stdout", ""):
+        # Determine the correct venv path
+        venv_python = "/opt/uv/.venv/bin/python"
         pkg_result = _run(
             [
                 "docker",
@@ -1499,6 +1564,7 @@ def troubleshoot_molecule_container(role: str) -> str:
                 container,
                 "/bin/sh",
                 "-c",
+                f"uv pip list --python {venv_python} 2>/dev/null | head -30 || "
                 "uv pip list --python /opt/venv/bin/python 2>/dev/null | head -30",
             ]
         )
@@ -1658,6 +1724,8 @@ def run_diffusion_command(
         "show",
         "deps check",
         "deps resolve",
+        "cache status",
+        "cache list",
         "docs --dry-run",
         "role",
         "deploy",
@@ -1728,6 +1796,333 @@ def update_diffusion_docs(
         output_parts.append(f"[exit code: {result['returncode']}]")
 
     return "\n".join(output_parts) if output_parts else "(no output)"
+
+
+# ---------------------------------------------------------------------------
+# Tool: troubleshoot_deploy
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def troubleshoot_deploy(project_path: str = "") -> str:
+    """Diagnose common diffusion deploy issues.
+
+    Checks: diffusion binary availability, Docker daemon, molecule container
+    image presence, SSH key accessibility, cache directory permissions,
+    and common configuration problems.
+
+    Args:
+        project_path: Path to the project root (auto-detected if empty).
+    """
+    diagnostics: list[dict[str, Any]] = []
+
+    # 1. Diffusion binary
+    result = _run(["diffusion", "--version"])
+    if result["returncode"] == 0:
+        diagnostics.append(
+            {"check": "Diffusion binary", "status": "ok", "version": result["stdout"]}
+        )
+    else:
+        diagnostics.append(
+            {
+                "check": "Diffusion binary",
+                "status": "error",
+                "detail": result["stderr"] or "diffusion not found on PATH",
+                "suggestion": "Install diffusion or ensure it is on PATH.",
+            }
+        )
+        return json.dumps(
+            {"diagnostics": diagnostics, "summary": "diffusion binary not found"},
+            indent=2,
+        )
+
+    # 2. Docker daemon
+    result = _run(["docker", "info", "--format", "{{.ServerVersion}}"])
+    if result["returncode"] == 0:
+        diagnostics.append(
+            {"check": "Docker daemon", "status": "ok", "version": result["stdout"]}
+        )
+    else:
+        diagnostics.append(
+            {
+                "check": "Docker daemon",
+                "status": "error",
+                "detail": result["stderr"],
+                "suggestion": "Docker must be running for deploy to work.",
+            }
+        )
+
+    # 3. Molecule container image availability
+    result = _run(
+        [
+            "docker",
+            "images",
+            "--filter",
+            "reference=*diffusion-molecule*",
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
+        ]
+    )
+    images = result["stdout"].splitlines() if result["stdout"] else []
+    if images:
+        diagnostics.append(
+            {"check": "Molecule container image", "status": "ok", "images": images}
+        )
+    else:
+        diagnostics.append(
+            {
+                "check": "Molecule container image",
+                "status": "warning",
+                "detail": "No diffusion-molecule images found locally. "
+                "Image will be pulled on first deploy.",
+            }
+        )
+
+    # 4. Deploy cache directory
+    cache_base = Path.home() / ".diffusion" / "deploy-cache"
+    if cache_base.exists():
+        cache_entries = [d.name for d in cache_base.iterdir() if d.is_dir()]
+        diagnostics.append(
+            {
+                "check": "Deploy cache",
+                "status": "ok",
+                "path": str(cache_base),
+                "entries": len(cache_entries),
+            }
+        )
+    else:
+        diagnostics.append(
+            {
+                "check": "Deploy cache",
+                "status": "info",
+                "detail": f"No deploy cache directory at {cache_base}. "
+                "Will be created on first deploy with --cache.",
+            }
+        )
+
+    # 5. SSH key common issues
+    ssh_dir = Path.home() / ".ssh"
+    if ssh_dir.exists():
+        key_files = [
+            f.name
+            for f in ssh_dir.iterdir()
+            if f.is_file() and not f.name.endswith(".pub")
+        ]
+        diagnostics.append(
+            {
+                "check": "SSH keys (~/.ssh)",
+                "status": "ok",
+                "keys_found": len(key_files),
+            }
+        )
+    else:
+        diagnostics.append(
+            {
+                "check": "SSH keys (~/.ssh)",
+                "status": "warning",
+                "detail": "~/.ssh directory not found. "
+                "SSH key file references in inventory may fail.",
+            }
+        )
+
+    # 6. diffusion.toml presence
+    root = Path(project_path) if project_path else _find_project_root()
+    if root and (root / "diffusion.toml").exists():
+        diagnostics.append(
+            {
+                "check": "diffusion.toml",
+                "status": "ok",
+                "path": str(root / "diffusion.toml"),
+            }
+        )
+    else:
+        diagnostics.append(
+            {
+                "check": "diffusion.toml",
+                "status": "warning",
+                "detail": "No diffusion.toml found. "
+                "Deploy may still work with CLI flags alone.",
+            }
+        )
+
+    summary = (
+        "all checks passed"
+        if all(d["status"] == "ok" for d in diagnostics)
+        else "some issues detected — review diagnostics"
+    )
+    return json.dumps({"diagnostics": diagnostics, "summary": summary}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Tool: check_deploy_cache
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def check_deploy_cache(cache_path: str = "") -> str:
+    """Inspect the diffusion deploy cache directory structure.
+
+    Shows cache entries (by RunID prefix), their sizes, and contents.
+    Useful for debugging cache hits/misses during deploy operations.
+
+    Args:
+        cache_path: Custom cache base path. Default: ~/.diffusion/deploy-cache/
+    """
+    base = (
+        Path(cache_path)
+        if cache_path
+        else (Path.home() / ".diffusion" / "deploy-cache")
+    )
+
+    if not base.exists():
+        return (
+            f"No deploy cache directory at {base}. "
+            "Cache is created on first deploy with --cache enabled."
+        )
+
+    entries: list[dict[str, Any]] = []
+    for entry in sorted(base.iterdir()):
+        if not entry.is_dir():
+            continue
+        info: dict[str, Any] = {
+            "run_id_prefix": entry.name,
+            "path": str(entry),
+        }
+        # Check subdirectories
+        for sub in ["roles", "collections"]:
+            sub_path = entry / sub
+            if sub_path.exists():
+                items = list(sub_path.iterdir())
+                total_size = sum(
+                    f.stat().st_size for f in sub_path.rglob("*") if f.is_file()
+                )
+                info[sub] = {
+                    "items": len(items),
+                    "size_mb": round(total_size / (1024 * 1024), 2),
+                }
+            else:
+                info[sub] = {"items": 0, "size_mb": 0}
+
+        entries.append(info)
+
+    if not entries:
+        return f"Deploy cache directory exists at {base} but is empty."
+
+    return json.dumps(
+        {"cache_path": str(base), "entries": entries, "total_entries": len(entries)},
+        indent=2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool: troubleshoot_ssh_keys
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def troubleshoot_ssh_keys(role: str = "", project_path: str = "") -> str:
+    """Diagnose SSH key issues for diffusion deploy.
+
+    Checks: key file existence, key format (PEM headers), file permissions,
+    and common base64 encoding problems. Works both for file-based keys
+    and base64-injected keys (used by Terraform provider).
+
+    Args:
+        role: Optional role name to check inside a running molecule container.
+        project_path: Path to the project root (auto-detected if empty).
+    """
+    diagnostics: list[dict[str, Any]] = []
+
+    # Check ~/.ssh directory
+    ssh_dir = Path.home() / ".ssh"
+    if ssh_dir.exists():
+        for f in sorted(ssh_dir.iterdir()):
+            if f.is_file() and not f.name.endswith(".pub") and not f.name == "known_hosts":
+                try:
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                    first_line = content.split("\n")[0] if content else ""
+                    is_pem = first_line.startswith("-----BEGIN")
+                    size = f.stat().st_size
+                    diagnostics.append(
+                        {
+                            "check": f"SSH key: {f.name}",
+                            "status": "ok" if is_pem else "warning",
+                            "pem_format": is_pem,
+                            "size_bytes": size,
+                            "first_line": first_line[:40] + "..." if len(first_line) > 40 else first_line,
+                            "suggestion": "" if is_pem else "Key does not start with PEM header. May not be a valid private key.",
+                        }
+                    )
+                except Exception as e:
+                    diagnostics.append(
+                        {
+                            "check": f"SSH key: {f.name}",
+                            "status": "error",
+                            "detail": str(e),
+                        }
+                    )
+    else:
+        diagnostics.append(
+            {"check": "~/.ssh directory", "status": "warning", "detail": "Not found"}
+        )
+
+    # If a role is specified, check SSH keys inside the molecule container
+    if role:
+        container = _container_name(role)
+        result = _run(
+            [
+                "docker",
+                "exec",
+                container,
+                "/bin/sh",
+                "-c",
+                "ls -la /tmp/ssh-keys/ 2>/dev/null || echo 'NO_SSH_KEYS_DIR'",
+            ]
+        )
+        if "NO_SSH_KEYS_DIR" in result.get("stdout", ""):
+            diagnostics.append(
+                {
+                    "check": "Container SSH keys (/tmp/ssh-keys/)",
+                    "status": "info",
+                    "detail": "No SSH keys directory in container. "
+                    "Keys are created at runtime when --ssh-key flags are used.",
+                }
+            )
+        else:
+            diagnostics.append(
+                {
+                    "check": "Container SSH keys (/tmp/ssh-keys/)",
+                    "status": "ok",
+                    "detail": result["stdout"],
+                }
+            )
+
+        # Check SSH env vars in container
+        env_result = _run(
+            [
+                "docker",
+                "exec",
+                container,
+                "/bin/sh",
+                "-c",
+                "env | grep ^SSH_KEY_ | cut -d= -f1",
+            ]
+        )
+        ssh_env_keys = env_result["stdout"].splitlines() if env_result["stdout"] else []
+        diagnostics.append(
+            {
+                "check": "Container SSH_KEY_* env vars",
+                "status": "ok" if ssh_env_keys else "info",
+                "vars": ssh_env_keys or ["none"],
+            }
+        )
+
+    summary = (
+        "all checks passed"
+        if all(d.get("status") == "ok" for d in diagnostics)
+        else "review diagnostics for potential issues"
+    )
+    return json.dumps({"diagnostics": diagnostics, "summary": summary}, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -1803,13 +2198,13 @@ def get_terraform_provider_reference(resource: str = "") -> str:
                 "host_wait_interval": {
                     "type": "string",
                     "optional": True,
-                    "default": "5s",
+                    "default": "15s",
                     "description": "Default interval between host probes.",
                 },
                 "host_wait_timeout": {
                     "type": "string",
                     "optional": True,
-                    "default": "5m",
+                    "default": "10m",
                     "description": "Default hard deadline for host reachability.",
                 },
             },
@@ -1858,8 +2253,46 @@ def get_terraform_provider_reference(resource: str = "") -> str:
                 "playbook": "string, optional — path to existing playbook; omit to auto-generate",
                 "hosts": "map(object) — hostname => { vars = { key = value } }",
                 "groups": "map(list(string)) — group name => list of host names",
-                "variables": "map(string) — global inventory variables",
+                "variables": {
+                    "type": "map(object)",
+                    "optional": True,
+                    "description": (
+                        "Map of group name → { vars = { key = value } }. "
+                        "Use key 'all' for global variables applied to the all group. "
+                        "Other keys set variables on the corresponding child group."
+                    ),
+                    "nested_attributes": {
+                        "vars": "map(string) — variables for this group",
+                    },
+                    "examples": [
+                        'variables = { all = { vars = { env = "production" } } }',
+                        'variables = { webservers = { vars = { http_port = "80" } } }',
+                    ],
+                },
                 "extra_vars": "map(string) — extra vars for ansible-playbook --extra-vars",
+                "ssh_private_keys": {
+                    "type": "map(string)",
+                    "optional": True,
+                    "sensitive": True,
+                    "description": (
+                        "Map of named SSH private keys in PEM format (raw text). "
+                        "Each value is base64-encoded automatically before passing to diffusion. "
+                        "Key naming controls which hosts receive each key."
+                    ),
+                    "routing_rules": {
+                        "per-host": "Use inventory host name as key (e.g. 'waf-01') — applies only to that host",
+                        "per-group": "Prefix with 'group:' (e.g. 'group:checkpoint_waf') — applies to all hosts in that group",
+                        "wildcard": "Use '*' — applies to all hosts via --private-key flag",
+                        "fallback": "Any other name (e.g. 'default') — applies to all hosts without a more specific key",
+                    },
+                    "priority_order": "per-host > group > fallback/wildcard",
+                    "validators": ["Map keys must not contain '=' character"],
+                    "examples": [
+                        '{ default = tls_private_key.ssh.private_key_openssh }',
+                        '{ "group:webservers" = tls_private_key.web.private_key_openssh }',
+                        '{ "waf-01" = tls_private_key.waf.private_key_openssh }',
+                    ],
+                },
                 "skip_if_succeeded_within": "string — Go duration (e.g. '24h'). Skip if inputs identical and last run recent.",
                 "host_wait_initial_delay": "string — override provider default initial delay",
                 "host_wait_interval": "string — override provider default probe interval",
@@ -1891,8 +2324,14 @@ def get_terraform_provider_reference(resource: str = "") -> str:
                 '    web01 = { vars = { ansible_host = "1.2.3.4", ansible_user = "ubuntu" } }\n'
                 '    web02 = { vars = { ansible_host = "1.2.3.5", ansible_user = "ubuntu" } }\n'
                 "  }\n"
-                '  groups    = { webservers = ["web01", "web02"] }\n'
-                '  variables = { env = "production" }\n\n'
+                '  groups    = { webservers = ["web01", "web02"] }\n\n'
+                "  variables = {\n"
+                '    all        = { vars = { env = "production" } }\n'
+                '    webservers = { vars = { http_port = "80" } }\n'
+                "  }\n\n"
+                "  ssh_private_keys = {\n"
+                '    "group:webservers" = tls_private_key.web.private_key_openssh\n'
+                "  }\n\n"
                 '  skip_if_succeeded_within = "24h"\n'
                 '  host_wait_timeout        = "10m"\n'
                 "}"
@@ -1902,23 +2341,47 @@ def get_terraform_provider_reference(resource: str = "") -> str:
             "type": "data_source",
             "name": "diffusion_inventory",
             "description": (
-                "Reads and parses a rendered Ansible YAML inventory, "
-                "exposing structured host and group data."
+                "Renders an Ansible YAML inventory from provided hosts, groups, "
+                "and per-group variables without triggering any deployment. "
+                "Useful for inspection, debugging, or passing the rendered inventory to other resources."
             ),
             "arguments": {
-                "inventory_yaml": "string — raw Ansible YAML inventory to parse (e.g. diffusion_deploy.app.inventory_rendered)",
+                "hosts": {
+                    "type": "map(object)",
+                    "optional": True,
+                    "description": "Map of hostname → { vars = { key = value } }",
+                },
+                "groups": {
+                    "type": "map(list(string))",
+                    "optional": True,
+                    "description": "Map of group name → list of host names",
+                },
+                "variables": {
+                    "type": "map(object)",
+                    "optional": True,
+                    "description": (
+                        "Map of group name → { vars = { key = value } }. "
+                        "Use key 'all' for global variables applied to the all group. "
+                        "Other keys set variables on the corresponding child group."
+                    ),
+                },
             },
             "exported_attributes": {
-                "hosts": "map(map(string)) — parsed hosts with connection variables",
-                "groups": "map(list(string)) — parsed groups with member host names",
-                "vars": "map(string) — parsed global all-group variables",
+                "rendered": "string — the rendered Ansible YAML inventory",
             },
             "example": (
-                'data "diffusion_inventory" "hosts" {\n'
-                "  inventory_yaml = diffusion_deploy.app.inventory_rendered\n"
+                'data "diffusion_inventory" "preview" {\n'
+                "  hosts = {\n"
+                '    web01 = { vars = { ansible_host = "1.2.3.4", ansible_user = "ubuntu" } }\n'
+                "  }\n"
+                '  groups = { webservers = ["web01"] }\n'
+                "  variables = {\n"
+                '    all        = { vars = { env = "staging" } }\n'
+                '    webservers = { vars = { http_port = "80" } }\n'
+                "  }\n"
                 "}\n\n"
-                'output "host_ips" {\n'
-                "  value = data.diffusion_inventory.hosts.hosts\n"
+                'output "inventory_yaml" {\n'
+                "  value = data.diffusion_inventory.preview.rendered\n"
                 "}"
             ),
         },
