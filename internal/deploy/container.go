@@ -147,7 +147,7 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 
 	// Pass base64 SSH keys as env vars (decoded inside container, no mount needed).
 	for host, keyB64 := range cfg.SSHKeys {
-		envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+		envName := "SSH_KEY_" + strings.ToUpper(sshKeyEnvSanitize(host))
 		args = append(args, "-e", envName+"="+keyB64)
 	}
 
@@ -289,12 +289,8 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		var decodeSteps []string
 		decodeSteps = append(decodeSteps, "mkdir -p /tmp/ssh-keys")
 		for host := range cfg.SSHKeys {
-			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
-			// Use a safe filename for the wildcard key to avoid shell glob issues.
-			keyFile := host
-			if host == "*" {
-				keyFile = "_wildcard_"
-			}
+			envName := "SSH_KEY_" + strings.ToUpper(sshKeyEnvSanitize(host))
+			keyFile := sshKeyFileName(host)
 			keyPath := "/tmp/ssh-keys/" + keyFile
 			// Use printenv to output the raw env var value without any shell
 			// interpretation — avoids corrupting base64 content.
@@ -307,14 +303,14 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard && len(cfg.SSHKeys) == 1 {
 			privateKeyFlag = " --private-key /tmp/ssh-keys/_wildcard_"
 		} else if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
-			// Mixed mode: per-host keys are in inventory, wildcard as fallback.
+			// Mixed mode: per-host/group keys are in inventory, wildcard as fallback.
 			privateKeyFlag = " --private-key /tmp/ssh-keys/_wildcard_"
 		} else if len(cfg.SSHKeys) == 1 {
-			// Single named key that doesn't match any host (e.g. "default") —
-			// use it as --private-key for all hosts. injectSSHKeyPaths already
-			// injects it into inventory, but this provides an extra safety net.
+			// Single named key — use it as --private-key for safety.
+			// injectSSHKeyPaths already injects it into inventory, but this
+			// provides an extra safety net.
 			for keyName := range cfg.SSHKeys {
-				privateKeyFlag = " --private-key /tmp/ssh-keys/" + keyName
+				privateKeyFlag = " --private-key /tmp/ssh-keys/" + sshKeyFileName(keyName)
 			}
 		}
 	}

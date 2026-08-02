@@ -164,7 +164,7 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 
 	// Pass base64 SSH keys as env vars (decoded inside container, no mount needed).
 	for host, keyB64 := range cfg.SSHKeys {
-		envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+		envName := "SSH_KEY_" + strings.ToUpper(sshKeyEnvSanitize(host))
 		args = append(args, "-e", envName+"="+keyB64)
 	}
 
@@ -191,12 +191,9 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 		var decodeSteps []string
 		decodeSteps = append(decodeSteps, "mkdir -p /tmp/ssh-keys")
 		for host := range cfg.SSHKeys {
-			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
-			// Use a safe filename for the wildcard key to avoid shell glob issues.
-			keyFile := host
-			if host == "*" {
-				keyFile = "_wildcard_"
-			}
+			envName := "SSH_KEY_" + strings.ToUpper(sshKeyEnvSanitize(host))
+			// Use a safe filename — sanitize special chars for the filesystem.
+			keyFile := sshKeyFileName(host)
 			keyPath := "/tmp/ssh-keys/" + keyFile
 			// Use printenv to output the raw env var value without any shell
 			// interpretation — avoids corrupting base64 content that causes
@@ -211,19 +208,16 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 		if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard && len(cfg.SSHKeys) == 1 {
 			ansibleCmd += " --private-key /tmp/ssh-keys/_wildcard_"
 		} else {
-			// Per-host keys are already injected into inventory via injectSSHKeyPaths.
+			// Per-host/group keys are already injected into inventory via injectSSHKeyPaths.
 			// If there's also a wildcard, apply it as --private-key fallback.
 			if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
 				ansibleCmd += " --private-key /tmp/ssh-keys/_wildcard_"
-			} else {
-				// Fallback: if there's exactly one key and it doesn't match any host
-				// name (e.g. "default"), use it as --private-key for all hosts.
+			} else if len(cfg.SSHKeys) == 1 {
+				// Single key — use it as --private-key for safety.
 				// injectSSHKeyPaths already injects it into inventory, but this
 				// provides an extra safety net.
-				if len(cfg.SSHKeys) == 1 {
-					for keyName := range cfg.SSHKeys {
-						ansibleCmd += " --private-key /tmp/ssh-keys/" + keyName
-					}
+				for keyName := range cfg.SSHKeys {
+					ansibleCmd += " --private-key /tmp/ssh-keys/" + sshKeyFileName(keyName)
 				}
 			}
 		}
@@ -300,15 +294,17 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 }
 
 // injectSSHKeyPaths modifies the inventory YAML to add ansible_ssh_private_key_file
-// for each per-host SSH key. The key paths point to /tmp/ssh-keys/<host> which is
+// for each SSH key entry. The key paths point to /tmp/ssh-keys/<name> which is
 // where the container decodes the base64 keys at runtime.
 // This produces valid YAML instead of relying on fragile sed manipulation.
 //
-// Key name matching:
+// Key name matching (evaluated in priority order):
 //   - "*" is a wildcard handled via --private-key flag (not injected here).
+//   - "group:<name>" assigns the key to all hosts that belong to group <name>.
 //   - If a key name matches a host in the inventory, it's assigned to that host only.
-//   - If a key name does NOT match any host (e.g. "default"), it's treated as a
-//     fallback key and injected into ALL hosts that don't already have a key assigned.
+//   - If a key name does NOT match any host or group prefix (e.g. "default"),
+//     it's treated as a fallback key and injected into ALL hosts that don't
+//     already have a key assigned.
 func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]byte, error) {
 	var inv map[string]any
 	if err := yaml.Unmarshal(inventoryContent, &inv); err != nil {
@@ -333,54 +329,58 @@ func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]by
 		return nil, fmt.Errorf("'all.hosts' is not a map")
 	}
 
-	// First pass: inject per-host keys (key name matches a host name exactly).
-	// Also collect fallback key names (key names that don't match any host).
+	// Build a group → hosts lookup from children.
+	groupHosts := extractGroupHostsFromInventory(allMap)
+
+	// Classify SSH key entries.
 	var fallbackKeyName string
-	for keyHost := range sshKeys {
-		if keyHost == "*" {
+	for keyName := range sshKeys {
+		if keyName == "*" {
 			continue
 		}
-		hostVarsRaw, exists := hostsMap[keyHost]
-		if !exists {
-			// Key name doesn't match any host — it's a fallback key.
-			// Use the first fallback key found (typically "default").
+		if strings.HasPrefix(keyName, "group:") {
+			// Group key — handled in second pass.
+			continue
+		}
+		if _, isHost := hostsMap[keyName]; isHost {
+			// Per-host key — inject directly.
+			setHostKeyFile(hostsMap, keyName, "/tmp/ssh-keys/"+sshKeyFileName(keyName))
+		} else {
+			// Doesn't match any host — candidate for fallback.
 			if fallbackKeyName == "" {
-				fallbackKeyName = keyHost
+				fallbackKeyName = keyName
 			}
-			continue
 		}
-		var hostVars map[string]any
-		switch v := hostVarsRaw.(type) {
-		case map[string]any:
-			hostVars = v
-		case nil:
-			hostVars = make(map[string]any)
-		default:
-			continue
-		}
-		hostVars["ansible_ssh_private_key_file"] = "/tmp/ssh-keys/" + keyHost
-		hostsMap[keyHost] = hostVars
 	}
 
-	// Second pass: apply fallback key to all hosts that don't already have a key.
+	// Second pass: inject group-based keys.
+	for keyName := range sshKeys {
+		if !strings.HasPrefix(keyName, "group:") {
+			continue
+		}
+		groupName := strings.TrimPrefix(keyName, "group:")
+		members, exists := groupHosts[groupName]
+		if !exists || len(members) == 0 {
+			continue
+		}
+		keyPath := "/tmp/ssh-keys/" + sshKeyFileName(keyName)
+		for _, hostName := range members {
+			// Don't overwrite a per-host key that was already explicitly assigned.
+			if hostHasKeyFile(hostsMap, hostName) {
+				continue
+			}
+			setHostKeyFile(hostsMap, hostName, keyPath)
+		}
+	}
+
+	// Third pass: apply fallback key to all hosts that don't already have a key.
 	if fallbackKeyName != "" {
-		fallbackKeyPath := "/tmp/ssh-keys/" + fallbackKeyName
-		for hostName, hostVarsRaw := range hostsMap {
-			var hostVars map[string]any
-			switch v := hostVarsRaw.(type) {
-			case map[string]any:
-				hostVars = v
-			case nil:
-				hostVars = make(map[string]any)
-			default:
+		fallbackKeyPath := "/tmp/ssh-keys/" + sshKeyFileName(fallbackKeyName)
+		for hostName := range hostsMap {
+			if hostHasKeyFile(hostsMap, hostName) {
 				continue
 			}
-			// Don't overwrite a key that was already explicitly assigned.
-			if _, hasKey := hostVars["ansible_ssh_private_key_file"]; hasKey {
-				continue
-			}
-			hostVars["ansible_ssh_private_key_file"] = fallbackKeyPath
-			hostsMap[hostName] = hostVars
+			setHostKeyFile(hostsMap, hostName, fallbackKeyPath)
 		}
 	}
 
@@ -389,6 +389,95 @@ func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]by
 		return nil, fmt.Errorf("failed to marshal modified inventory: %w", err)
 	}
 	return data, nil
+}
+
+// setHostKeyFile sets ansible_ssh_private_key_file on a host in the inventory map.
+func setHostKeyFile(hostsMap map[string]any, hostName, keyPath string) {
+	hostVarsRaw := hostsMap[hostName]
+	var hostVars map[string]any
+	switch v := hostVarsRaw.(type) {
+	case map[string]any:
+		hostVars = v
+	case nil:
+		hostVars = make(map[string]any)
+	default:
+		return
+	}
+	hostVars["ansible_ssh_private_key_file"] = keyPath
+	hostsMap[hostName] = hostVars
+}
+
+// hostHasKeyFile returns true if the host already has ansible_ssh_private_key_file set.
+func hostHasKeyFile(hostsMap map[string]any, hostName string) bool {
+	hostVarsRaw := hostsMap[hostName]
+	hostVars, ok := hostVarsRaw.(map[string]any)
+	if !ok {
+		return false
+	}
+	_, has := hostVars["ansible_ssh_private_key_file"]
+	return has
+}
+
+// extractGroupHostsFromInventory builds a map of group name → list of host names
+// from the inventory's all.children structure.
+func extractGroupHostsFromInventory(allMap map[string]any) map[string][]string {
+	result := make(map[string][]string)
+
+	childrenRaw, ok := allMap["children"]
+	if !ok {
+		return result
+	}
+	childrenMap, ok := childrenRaw.(map[string]any)
+	if !ok {
+		return result
+	}
+
+	for groupName, groupRaw := range childrenMap {
+		groupMap, ok := groupRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		groupHostsRaw, ok := groupMap["hosts"]
+		if !ok {
+			continue
+		}
+		groupHostsMap, ok := groupHostsRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		hosts := make([]string, 0, len(groupHostsMap))
+		for h := range groupHostsMap {
+			hosts = append(hosts, h)
+		}
+		result[groupName] = hosts
+	}
+
+	return result
+}
+
+// sshKeyEnvSanitize converts an SSH key name into a string safe for use as an
+// environment variable suffix. Replaces dashes, dots, colons, and slashes with
+// underscores.
+func sshKeyEnvSanitize(name string) string {
+	return strings.NewReplacer(
+		"-", "_",
+		".", "_",
+		":", "_",
+		"/", "_",
+	).Replace(name)
+}
+
+// sshKeyFileName returns a filesystem-safe filename for the given SSH key name.
+// Handles special cases like wildcard ("*") and group prefix ("group:").
+func sshKeyFileName(name string) string {
+	if name == "*" {
+		return "_wildcard_"
+	}
+	// Replace characters that are problematic in filenames.
+	return strings.NewReplacer(
+		":", "_",
+		"*", "_wildcard_",
+	).Replace(name)
 }
 
 // redactProbeArgs returns a redacted version of the docker args for logging,
