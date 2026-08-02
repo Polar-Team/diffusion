@@ -661,6 +661,9 @@ func isBuiltinVariable(name string) bool {
 		"item":  true,
 		"index": true,
 		// Ansible built-in variables
+		"inventory_dir":              true,
+		"playbook_dir":               true,
+		"role_name":                  true,
 		"ansible_hostname":           true,
 		"ansible_os_family":          true,
 		"ansible_distribution":       true,
