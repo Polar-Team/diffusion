@@ -73,6 +73,19 @@ type DeployConfig struct {
 
 	// Wait controls the pre-deploy host reachability wait phase.
 	Wait WaitConfig
+
+	// CacheEnabled enables caching of deployed roles and collections on the host.
+	// When enabled, ansible-galaxy install results persist across runs with the
+	// same RunID, skipping re-download on subsequent deployments.
+	CacheEnabled bool
+
+	// CachePath is an optional custom base path for the deploy cache directory.
+	// Defaults to ~/.diffusion/deploy-cache/.
+	CachePath string
+
+	// CIMode enables CI-specific behavior: outputs cache path for CI systems,
+	// enables non-interactive mode, and ensures cache is always enabled.
+	CIMode bool
 }
 
 // Deploy is the top-level orchestrator. It:
@@ -160,8 +173,29 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 	runID := computeRunID(mergedLock, inventoryBytes, playbookFilename, cfg.ExtraVars)
 	log.Printf(config.ColorGreen+"RunID: %s..."+config.ColorReset, runID[:16])
 
+	// --- 7b. Set up deploy cache (keyed by RunID) ---
+	cacheDir := ""
+	if cfg.CacheEnabled || cfg.CIMode {
+		cacheDir, err = ensureDeployCacheDir(runID, cfg.CachePath)
+		if err != nil {
+			log.Printf(config.ColorYellow+"warning: failed to set up deploy cache: %v — continuing without cache"+config.ColorReset, err)
+			cacheDir = ""
+		} else {
+			log.Printf(config.ColorGreen+"Deploy cache enabled: %s"+config.ColorReset, cacheDir)
+			if cfg.CIMode {
+				// Output cache path and RunID in machine-readable formats for CI systems.
+				// RunID should be used as the cache key suffix since diffusion.lock
+				// may not exist in the working directory (e.g. Terraform provider).
+				fmt.Printf("::set-output name=deploy-cache-path::%s\n", cacheDir)
+				fmt.Printf("::set-output name=deploy-run-id::%s\n", runID[:16])
+				fmt.Printf("DIFFUSION_DEPLOY_CACHE=%s\n", cacheDir)
+				fmt.Printf("DIFFUSION_DEPLOY_RUN_ID=%s\n", runID[:16])
+			}
+		}
+	}
+
 	// --- 8. Wait for hosts ---
-	containerCfg := buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, "", "")
+	containerCfg := buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, "", "", cacheDir)
 	if err := WaitForHosts(ctx, inventoryBytes, containerCfg, cfg.Wait); err != nil {
 		return fmt.Errorf("host reachability check failed: %w", err)
 	}
@@ -209,7 +243,7 @@ func Deploy(ctx context.Context, cfg DeployConfig) error {
 	}
 
 	// --- 10. Run deploy container ---
-	containerCfg = buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, playbookDir, extraVarsFile)
+	containerCfg = buildContainerConfig(cfg, mergedLock, creds, inventoryBytes, playbookDir, extraVarsFile, cacheDir)
 
 	log.Printf(config.ColorGreen + "Starting deploy container..." + config.ColorReset)
 	if err := RunDeployContainer(containerCfg); err != nil {
@@ -226,7 +260,7 @@ func buildContainerConfig(
 	cfg DeployConfig,
 	mergedLock *dependency.LockFile,
 	creds []config.ArtifactCredentials,
-	inventoryContent []byte, playbookDir, extraVarsFile string,
+	inventoryContent []byte, playbookDir, extraVarsFile, cacheDir string,
 ) DeployContainerConfig {
 	resolved := make([]ResolvedCredential, 0, len(creds))
 	for _, c := range creds {
@@ -248,6 +282,7 @@ func buildContainerConfig(
 		ArtifactSources:   resolved,
 		VaultToken:        cfg.VaultToken,
 		VaultAddr:         cfg.VaultAddr,
+		CacheDir:          cacheDir,
 	}
 }
 
@@ -285,6 +320,47 @@ func computeRunID(lock *dependency.LockFile, inventory []byte, playbookName stri
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ensureDeployCacheDir creates and returns the deploy cache directory for the
+// given runID. The structure is:
+//
+//	<basePath>/deploy-cache/<runID[:16]>/
+//	├── roles/
+//	└── collections/
+//
+// Using a truncated runID keeps directory names manageable while still being
+// unique enough for practical use.
+func ensureDeployCacheDir(runID, customPath string) (string, error) {
+	var basePath string
+	if customPath != "" {
+		basePath = customPath
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+		basePath = filepath.Join(home, ".diffusion")
+	}
+
+	// Use first 16 chars of runID as directory name.
+	cacheKey := runID
+	if len(cacheKey) > 16 {
+		cacheKey = cacheKey[:16]
+	}
+
+	cacheDir := filepath.Join(basePath, "deploy-cache", cacheKey)
+	rolesDir := filepath.Join(cacheDir, "roles")
+	collectionsDir := filepath.Join(cacheDir, "collections")
+
+	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create roles cache dir: %w", err)
+	}
+	if err := os.MkdirAll(collectionsDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create collections cache dir: %w", err)
+	}
+
+	return cacheDir, nil
 }
 
 // writeFailureState writes a failure marker to all remote hosts.

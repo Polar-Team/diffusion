@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"diffusion/internal/config"
@@ -72,6 +73,12 @@ type DeployContainerConfig struct {
 	// VaultToken and VaultAddr are forwarded when set (override env vars).
 	VaultToken string
 	VaultAddr  string
+
+	// CacheDir is the host-side directory where cached roles and collections
+	// are stored. When set, the directory is mounted read-write into the
+	// container so that ansible-galaxy installs persist across runs with the
+	// same RunID. Empty means caching is disabled.
+	CacheDir string
 }
 
 // containerRolesPath and containerCollectionsPath are the install targets used
@@ -155,6 +162,17 @@ func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, e
 	// Extra vars (optional)
 	if cfg.ExtraVarsFile != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/deploy/extra_vars.json:ro", cfg.ExtraVarsFile))
+	}
+
+	// Cache: mount host-side roles/collections directories into the container.
+	// This allows ansible-galaxy install results to persist across runs.
+	if cfg.CacheDir != "" {
+		rolesCacheDir := filepath.Join(cfg.CacheDir, "roles")
+		collectionsCacheDir := filepath.Join(cfg.CacheDir, "collections")
+		args = append(args,
+			"-v", fmt.Sprintf("%s:/deploy/roles", rolesCacheDir),
+			"-v", fmt.Sprintf("%s:/deploy/collections", collectionsCacheDir),
+		)
 	}
 
 	// --- Environment variables ---

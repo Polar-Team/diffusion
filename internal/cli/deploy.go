@@ -43,6 +43,13 @@ type deployFlags struct {
 	hostWaitInterval     string
 	hostWaitTimeout      string
 	hostWaitMaxAttempts  int
+
+	// Deploy cache
+	cacheEnabled bool
+	cachePath    string
+
+	// CI mode
+	ciMode bool
 }
 
 // NewDeployCmd creates the `diffusion deploy` Cobra command.
@@ -128,6 +135,12 @@ EXAMPLES
 		`Hard deadline for host reachability (e.g. "15m").`)
 	cmd.Flags().IntVar(&f.hostWaitMaxAttempts, "host-wait-max-attempts", 20,
 		`Maximum number of probe attempts before failing. Set to 0 to disable (rely on timeout only).`)
+	cmd.Flags().BoolVar(&f.cacheEnabled, "cache", true,
+		`Enable caching of deployed roles and collections. Uses RunID as cache key.`)
+	cmd.Flags().StringVar(&f.cachePath, "cache-path", "",
+		`Custom base path for the deploy cache directory. Default: ~/.diffusion/deploy-cache/`)
+	cmd.Flags().BoolVar(&f.ciMode, "ci", false,
+		`CI/CD mode. Prints cache path for CI system integration (e.g. actions/cache). Non-interactive.`)
 
 	_ = cmd.MarkFlagRequired("role-source")
 
@@ -202,6 +215,9 @@ func runDeploy(ctx context.Context, f *deployFlags) error {
 		VaultAddr:          os.Getenv("VAULT_ADDR"),
 		DiffusionVersion:   Version,
 		Wait:               waitCfg,
+		CacheEnabled:       f.cacheEnabled,
+		CachePath:          f.cachePath,
+		CIMode:             f.ciMode,
 	}
 
 	return deploy.Deploy(ctx, deployCfg)
