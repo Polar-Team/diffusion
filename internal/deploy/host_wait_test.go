@@ -107,9 +107,59 @@ func TestInjectSSHKeyPaths_HostNotInInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should not crash — just skip the unknown host.
-	if len(out) == 0 {
-		t.Error("expected non-empty output")
+	// Key name doesn't match any host — should be treated as a fallback and
+	// injected into ALL hosts.
+	s := string(out)
+	if !contains(s, "/tmp/ssh-keys/unknown-host") {
+		t.Errorf("expected fallback key path for web01, got:\n%s", s)
+	}
+}
+
+func TestInjectSSHKeyPaths_DefaultKeyFallback(t *testing.T) {
+	inventory := []byte(`all:
+  hosts:
+    waf-01:
+      ansible_host: "3.91.150.155"
+      ansible_user: "ubuntu"
+    waf-02:
+      ansible_host: "10.0.0.5"
+      ansible_user: "ubuntu"
+`)
+	// "default" doesn't match any host name — should be applied to all hosts.
+	keys := map[string]string{"default": "c29tZWtleQ=="}
+	out, err := injectSSHKeyPaths(inventory, keys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	if !contains(s, "/tmp/ssh-keys/default") {
+		t.Errorf("expected fallback key '/tmp/ssh-keys/default' injected for all hosts, got:\n%s", s)
+	}
+	if !contains(s, "ansible_ssh_private_key_file") {
+		t.Errorf("expected ansible_ssh_private_key_file in output, got:\n%s", s)
+	}
+}
+
+func TestInjectSSHKeyPaths_MixedPerHostAndFallback(t *testing.T) {
+	inventory := []byte(`all:
+  hosts:
+    web01:
+      ansible_host: "1.2.3.4"
+    web02:
+      ansible_host: "5.6.7.8"
+`)
+	// web01 gets its own key, "default" covers web02 as fallback.
+	keys := map[string]string{"web01": "a2V5MQ==", "default": "ZmFsbGJhY2s="}
+	out, err := injectSSHKeyPaths(inventory, keys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	if !contains(s, "/tmp/ssh-keys/web01") {
+		t.Errorf("expected per-host key for web01, got:\n%s", s)
+	}
+	if !contains(s, "/tmp/ssh-keys/default") {
+		t.Errorf("expected fallback key for web02, got:\n%s", s)
 	}
 }
 

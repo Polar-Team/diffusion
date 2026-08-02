@@ -309,6 +309,13 @@ func buildContainerCommand(cfg DeployContainerConfig) string {
 		} else if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
 			// Mixed mode: per-host keys are in inventory, wildcard as fallback.
 			privateKeyFlag = " --private-key /tmp/ssh-keys/_wildcard_"
+		} else if len(cfg.SSHKeys) == 1 {
+			// Single named key that doesn't match any host (e.g. "default") —
+			// use it as --private-key for all hosts. injectSSHKeyPaths already
+			// injects it into inventory, but this provides an extra safety net.
+			for keyName := range cfg.SSHKeys {
+				privateKeyFlag = " --private-key /tmp/ssh-keys/" + keyName
+			}
 		}
 	}
 

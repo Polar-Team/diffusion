@@ -215,6 +215,16 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 			// If there's also a wildcard, apply it as --private-key fallback.
 			if _, hasWildcard := cfg.SSHKeys["*"]; hasWildcard {
 				ansibleCmd += " --private-key /tmp/ssh-keys/_wildcard_"
+			} else {
+				// Fallback: if there's exactly one key and it doesn't match any host
+				// name (e.g. "default"), use it as --private-key for all hosts.
+				// injectSSHKeyPaths already injects it into inventory, but this
+				// provides an extra safety net.
+				if len(cfg.SSHKeys) == 1 {
+					for keyName := range cfg.SSHKeys {
+						ansibleCmd += " --private-key /tmp/ssh-keys/" + keyName
+					}
+				}
 			}
 		}
 
@@ -293,6 +303,12 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 // for each per-host SSH key. The key paths point to /tmp/ssh-keys/<host> which is
 // where the container decodes the base64 keys at runtime.
 // This produces valid YAML instead of relying on fragile sed manipulation.
+//
+// Key name matching:
+//   - "*" is a wildcard handled via --private-key flag (not injected here).
+//   - If a key name matches a host in the inventory, it's assigned to that host only.
+//   - If a key name does NOT match any host (e.g. "default"), it's treated as a
+//     fallback key and injected into ALL hosts that don't already have a key assigned.
 func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]byte, error) {
 	var inv map[string]any
 	if err := yaml.Unmarshal(inventoryContent, &inv); err != nil {
@@ -317,14 +333,20 @@ func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]by
 		return nil, fmt.Errorf("'all.hosts' is not a map")
 	}
 
-	// For each SSH key entry (except wildcard), inject the key path into the host vars.
-	for keyHost, _ := range sshKeys {
+	// First pass: inject per-host keys (key name matches a host name exactly).
+	// Also collect fallback key names (key names that don't match any host).
+	var fallbackKeyName string
+	for keyHost := range sshKeys {
 		if keyHost == "*" {
 			continue
 		}
 		hostVarsRaw, exists := hostsMap[keyHost]
 		if !exists {
-			// Host not in inventory — skip (wildcard will cover it via --private-key flag).
+			// Key name doesn't match any host — it's a fallback key.
+			// Use the first fallback key found (typically "default").
+			if fallbackKeyName == "" {
+				fallbackKeyName = keyHost
+			}
 			continue
 		}
 		var hostVars map[string]any
@@ -338,6 +360,28 @@ func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]by
 		}
 		hostVars["ansible_ssh_private_key_file"] = "/tmp/ssh-keys/" + keyHost
 		hostsMap[keyHost] = hostVars
+	}
+
+	// Second pass: apply fallback key to all hosts that don't already have a key.
+	if fallbackKeyName != "" {
+		fallbackKeyPath := "/tmp/ssh-keys/" + fallbackKeyName
+		for hostName, hostVarsRaw := range hostsMap {
+			var hostVars map[string]any
+			switch v := hostVarsRaw.(type) {
+			case map[string]any:
+				hostVars = v
+			case nil:
+				hostVars = make(map[string]any)
+			default:
+				continue
+			}
+			// Don't overwrite a key that was already explicitly assigned.
+			if _, hasKey := hostVars["ansible_ssh_private_key_file"]; hasKey {
+				continue
+			}
+			hostVars["ansible_ssh_private_key_file"] = fallbackKeyPath
+			hostsMap[hostName] = hostVars
+		}
 	}
 
 	data, err := yaml.Marshal(inv)
