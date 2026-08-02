@@ -163,6 +163,103 @@ func TestInjectSSHKeyPaths_MixedPerHostAndFallback(t *testing.T) {
 	}
 }
 
+func TestInjectSSHKeyPaths_GroupKey(t *testing.T) {
+	inventory := []byte(`all:
+  hosts:
+    web01:
+      ansible_host: "1.2.3.4"
+    web02:
+      ansible_host: "5.6.7.8"
+    db01:
+      ansible_host: "10.0.0.1"
+  children:
+    webservers:
+      hosts:
+        web01: {}
+        web02: {}
+    databases:
+      hosts:
+        db01: {}
+`)
+	// Group key applies to all hosts in the "webservers" group.
+	keys := map[string]string{"group:webservers": "d2Vic2VydmVyX2tleQ=="}
+	out, err := injectSSHKeyPaths(inventory, keys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	// web01 and web02 should get the group key.
+	if !contains(s, "group_webservers") {
+		t.Errorf("expected group key path injected, got:\n%s", s)
+	}
+	if !contains(s, "ansible_ssh_private_key_file") {
+		t.Errorf("expected ansible_ssh_private_key_file in output, got:\n%s", s)
+	}
+}
+
+func TestInjectSSHKeyPaths_GroupKeyDoesNotOverridePerHost(t *testing.T) {
+	inventory := []byte(`all:
+  hosts:
+    web01:
+      ansible_host: "1.2.3.4"
+    web02:
+      ansible_host: "5.6.7.8"
+  children:
+    webservers:
+      hosts:
+        web01: {}
+        web02: {}
+`)
+	// web01 gets a specific key, group key should only apply to web02.
+	keys := map[string]string{
+		"web01":            "cGVyX2hvc3Rfa2V5",
+		"group:webservers": "Z3JvdXBfa2V5",
+	}
+	out, err := injectSSHKeyPaths(inventory, keys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	if !contains(s, "/tmp/ssh-keys/web01") {
+		t.Errorf("expected per-host key for web01, got:\n%s", s)
+	}
+	if !contains(s, "group_webservers") {
+		t.Errorf("expected group key for web02, got:\n%s", s)
+	}
+}
+
+func TestInjectSSHKeyPaths_MultipleGroupKeys(t *testing.T) {
+	inventory := []byte(`all:
+  hosts:
+    web01:
+      ansible_host: "1.2.3.4"
+    db01:
+      ansible_host: "10.0.0.1"
+  children:
+    webservers:
+      hosts:
+        web01: {}
+    databases:
+      hosts:
+        db01: {}
+`)
+	keys := map[string]string{
+		"group:webservers": "d2Vi",
+		"group:databases":  "ZGI=",
+	}
+	out, err := injectSSHKeyPaths(inventory, keys)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	if !contains(s, "group_webservers") {
+		t.Errorf("expected webservers group key, got:\n%s", s)
+	}
+	if !contains(s, "group_databases") {
+		t.Errorf("expected databases group key, got:\n%s", s)
+	}
+}
+
 func TestInjectSSHKeyPaths_InvalidYAML(t *testing.T) {
 	_, err := injectSSHKeyPaths([]byte("not: [valid: yaml: {{"), nil)
 	if err == nil {
