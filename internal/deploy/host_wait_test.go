@@ -267,6 +267,44 @@ func TestInjectSSHKeyPaths_InvalidYAML(t *testing.T) {
 	}
 }
 
+func TestInjectSSHKeyPaths_InvalidKeyName(t *testing.T) {
+	inventory := []byte(`all:
+  hosts:
+    web01: {}
+`)
+	keys := map[string]string{
+		"; rm -rf / #": "ZGI=",
+	}
+	_, err := injectSSHKeyPaths(inventory, keys)
+	if err == nil {
+		t.Fatal("expected error for invalid SSH key name, got nil")
+	}
+}
+
+func TestSSHKeyEnvSanitize_Wildcard(t *testing.T) {
+	got := sshKeyEnvSanitize("*")
+	if got == "*" {
+		t.Fatal("expected wildcard to be sanitized, got literal '*'")
+	}
+	if contains(got, "*") {
+		t.Errorf("expected sanitized name to not contain '*', got %q", got)
+	}
+	if got != "WILDCARD" {
+		t.Errorf("expected 'WILDCARD', got %q", got)
+	}
+}
+
+func TestBuildContainerCommand_NoUnquotedWildcardGlob(t *testing.T) {
+	cfg := DeployContainerConfig{
+		SSHKeys:          map[string]string{"*": "dGVzdA=="},
+		InventoryContent: []byte("all:\n  hosts:\n    h1: {}"),
+	}
+	cmd := buildContainerCommand(cfg)
+	if contains(cmd, "printenv SSH_KEY_*") {
+		t.Errorf("unexpected unquoted glob 'printenv SSH_KEY_*' in command:\n%s", cmd)
+	}
+}
+
 func TestExtractSSHKeyDirsFromContent_NoKeys(t *testing.T) {
 	inventory := []byte(`all:
   hosts:

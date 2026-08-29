@@ -353,6 +353,54 @@ func TestParseKeyValues_ValueWithEquals(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// parseSSHKeys
+// ---------------------------------------------------------------------------
+
+func TestParseSSHKeys_HappyPath(t *testing.T) {
+	m, err := parseSSHKeys([]string{"web01=dGVzdA==", "*=b3RoZXI="})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m["web01"] != "dGVzdA==" || m["*"] != "b3RoZXI=" {
+		t.Errorf("unexpected map: %v", m)
+	}
+}
+
+func TestParseSSHKeys_Nil(t *testing.T) {
+	m, err := parseSSHKeys(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m != nil {
+		t.Errorf("expected nil for nil input, got %v", m)
+	}
+}
+
+func TestParseSSHKeys_MissingEquals(t *testing.T) {
+	_, err := parseSSHKeys([]string{"noequals"})
+	if err == nil {
+		t.Fatal("expected error for missing '='")
+	}
+}
+
+func TestParseSSHKeys_InvalidHostName(t *testing.T) {
+	_, err := parseSSHKeys([]string{"; rm -rf / #=dGVzdA=="})
+	if err == nil {
+		t.Fatal("expected error for invalid host name")
+	}
+}
+
+func TestParseSSHKeys_GroupPrefix(t *testing.T) {
+	m, err := parseSSHKeys([]string{"group:webservers=dGVzdA=="})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m["group:webservers"] != "dGVzdA==" {
+		t.Errorf("unexpected map: %v", m)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // parseWaitConfig
 // ---------------------------------------------------------------------------
 
