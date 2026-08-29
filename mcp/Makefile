@@ -9,7 +9,7 @@ CACHE_PATH ?= ./cache
 TEST_CONTAINER := false
 
 # Path to the diffusion Go source (parent repo by default)
-DIFFUSION_SRC ?= ../..
+DIFFUSION_SRC ?= ../
 
 ifeq ($(TEST_CONTAINER), true)
 	TEST_SUFFIX := -test
@@ -132,7 +132,7 @@ publish: check_cache setup-buildx login build-and-push-separate ## Full pipeline
 .PHONY: build-local
 build-local: prepare-context ## Build image locally for current platform
 	@echo "Building local image for testing..."
-	docker build $(BUILD_ARGS) -t $(IMAGE_NAME):local .
+	docker build --no-cache $(BUILD_ARGS) -t $(IMAGE_NAME):local .
 	@$(MAKE) clean-context
 	@echo "Image built: $(IMAGE_NAME):local"
 	@echo "Test with: docker run --rm -v \$$(pwd):/project $(IMAGE_NAME):local diffusion --version"

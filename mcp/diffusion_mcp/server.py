@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -33,7 +33,7 @@ else:
 
 import yaml
 
-mcp = FastMCP("diffusion-mcp")
+mcp = MCPServer("diffusion-mcp")
 
 
 def _run(cmd: list[str], timeout: int = 30, cwd: str | None = None) -> dict[str, Any]:
@@ -175,7 +175,7 @@ def list_molecule_containers() -> str:
     if result["returncode"] != 0:
         return f"Error listing containers: {result['stderr']}"
 
-    lines = [l for l in result["stdout"].splitlines() if l.strip()]
+    lines = [line for line in result["stdout"].splitlines() if line.strip()]
     if not lines:
         return "No molecule containers found."
 
@@ -1553,7 +1553,9 @@ def troubleshoot_molecule_container(role: str) -> str:
             "(test -d /opt/venv && echo 'venv present (legacy path)' || echo 'venv MISSING')",
         ]
     )
-    diagnostics.append({"check": "uv venv (/opt/uv/.venv)", "result": venv_check["stdout"]})
+    diagnostics.append(
+        {"check": "uv venv (/opt/uv/.venv)", "result": venv_check["stdout"]}
+    )
     if "MISSING" not in venv_check.get("stdout", ""):
         # Determine the correct venv path
         venv_python = "/opt/uv/.venv/bin/python"
@@ -2037,7 +2039,11 @@ def troubleshoot_ssh_keys(role: str = "", project_path: str = "") -> str:
     ssh_dir = Path.home() / ".ssh"
     if ssh_dir.exists():
         for f in sorted(ssh_dir.iterdir()):
-            if f.is_file() and not f.name.endswith(".pub") and not f.name == "known_hosts":
+            if (
+                f.is_file()
+                and not f.name.endswith(".pub")
+                and not f.name == "known_hosts"
+            ):
                 try:
                     content = f.read_text(encoding="utf-8", errors="replace")
                     first_line = content.split("\n")[0] if content else ""
@@ -2049,8 +2055,12 @@ def troubleshoot_ssh_keys(role: str = "", project_path: str = "") -> str:
                             "status": "ok" if is_pem else "warning",
                             "pem_format": is_pem,
                             "size_bytes": size,
-                            "first_line": first_line[:40] + "..." if len(first_line) > 40 else first_line,
-                            "suggestion": "" if is_pem else "Key does not start with PEM header. May not be a valid private key.",
+                            "first_line": first_line[:40] + "..."
+                            if len(first_line) > 40
+                            else first_line,
+                            "suggestion": ""
+                            if is_pem
+                            else "Key does not start with PEM header. May not be a valid private key.",
                         }
                     )
                 except Exception as e:
@@ -2288,7 +2298,7 @@ def get_terraform_provider_reference(resource: str = "") -> str:
                     "priority_order": "per-host > group > fallback/wildcard",
                     "validators": ["Map keys must not contain '=' character"],
                     "examples": [
-                        '{ default = tls_private_key.ssh.private_key_openssh }',
+                        "{ default = tls_private_key.ssh.private_key_openssh }",
                         '{ "group:webservers" = tls_private_key.web.private_key_openssh }',
                         '{ "waf-01" = tls_private_key.waf.private_key_openssh }',
                     ],
@@ -2411,7 +2421,7 @@ def get_server_version() -> str:
 
     info: dict[str, Any] = {}
 
-    for pkg in ("diffusion-mcp", "mcp", "fastmcp"):
+    for pkg in ("diffusion-mcp", "mcp"):
         try:
             info[pkg] = importlib.metadata.version(pkg)
         except importlib.metadata.PackageNotFoundError:
