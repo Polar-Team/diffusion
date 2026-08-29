@@ -119,6 +119,10 @@ func RunDeployContainer(cfg DeployContainerConfig) error {
 //	a) installs roles + collections from requirements.yml into /tmp/diffusion/
 //	b) runs ansible-playbook with those paths set via ANSIBLE_* env vars
 func buildDeployDockerArgs(cfg DeployContainerConfig, image string) ([]string, error) {
+	if err := validateSSHKeyNames(cfg.SSHKeys); err != nil {
+		return nil, err
+	}
+
 	var args []string
 
 	// --- Volume mounts (read-only; host paths → container paths) ---

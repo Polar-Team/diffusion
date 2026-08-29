@@ -56,6 +56,13 @@ func TestBuildContainerCommand_SSHKeyWildcard(t *testing.T) {
 	if !strings.Contains(cmd, "--private-key /tmp/ssh-keys/_wildcard_") {
 		t.Error("expected --private-key flag with _wildcard_ path")
 	}
+	// The env var name must never appear unquoted as a shell glob.
+	if strings.Contains(cmd, "printenv SSH_KEY_*") {
+		t.Errorf("unexpected unquoted glob 'printenv SSH_KEY_*' in command, got:\n%s", cmd)
+	}
+	if !strings.Contains(cmd, "printenv SSH_KEY_WILDCARD") {
+		t.Errorf("expected sanitized env var name SSH_KEY_WILDCARD, got:\n%s", cmd)
+	}
 }
 
 func TestBuildContainerCommand_SSHKeyPerHost(t *testing.T) {
@@ -136,6 +143,29 @@ func TestBuildContainerCommand_SetE(t *testing.T) {
 
 	if !strings.HasPrefix(cmd, "set -e") {
 		t.Error("expected command to start with 'set -e'")
+	}
+}
+
+func TestBuildDeployDockerArgs_InvalidSSHKeyName(t *testing.T) {
+	cfg := DeployContainerConfig{
+		SSHKeys:          map[string]string{"; rm -rf / #": "dGVzdA=="},
+		InventoryContent: []byte("all:\n  hosts:\n    h1: {}"),
+	}
+	_, err := buildDeployDockerArgs(cfg, "some-image:latest")
+	if err == nil {
+		t.Fatal("expected error for invalid SSH key name, got nil")
+	}
+}
+
+func TestBuildDeployDockerArgs_ValidSSHKeyName(t *testing.T) {
+	cfg := DeployContainerConfig{
+		SSHKeys:          map[string]string{"web01": "dGVzdA=="},
+		InventoryContent: []byte("all:\n  hosts:\n    web01: {}"),
+		PlaybookDir:      "/tmp/playbook",
+	}
+	_, err := buildDeployDockerArgs(cfg, "some-image:latest")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

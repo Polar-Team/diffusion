@@ -365,6 +365,11 @@ func ensureDeployCacheDir(runID, customPath string) (string, error) {
 
 // writeFailureState writes a failure marker to all remote hosts.
 func writeFailureState(inventoryContent []byte, runID string, cfg DeployContainerConfig) {
+	if err := validateSSHKeyNames(cfg.SSHKeys); err != nil {
+		log.Printf(config.ColorYellow+"warning: could not write failure state to remote hosts: %v"+config.ColorReset, err)
+		return
+	}
+
 	image := ""
 	if cfg.ContainerRegistry != nil {
 		image = cfg.ContainerRegistry.RegistryServer + "/" +
@@ -386,7 +391,7 @@ func writeFailureState(inventoryContent []byte, runID string, cfg DeployContaine
 
 	// Pass SSH keys as env vars.
 	for host, keyB64 := range cfg.SSHKeys {
-		envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
+		envName := "SSH_KEY_" + strings.ToUpper(sshKeyEnvSanitize(host))
 		dockerArgs = append(dockerArgs, "-e", envName+"="+keyB64)
 	}
 
@@ -403,11 +408,8 @@ func writeFailureState(inventoryContent []byte, runID string, cfg DeployContaine
 	if len(cfg.SSHKeys) > 0 {
 		steps = append(steps, "mkdir -p /tmp/ssh-keys")
 		for host := range cfg.SSHKeys {
-			envName := "SSH_KEY_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(host))
-			keyFile := host
-			if host == "*" {
-				keyFile = "_wildcard_"
-			}
+			envName := "SSH_KEY_" + strings.ToUpper(sshKeyEnvSanitize(host))
+			keyFile := sshKeyFileName(host)
 			keyPath := "/tmp/ssh-keys/" + keyFile
 			steps = append(steps,
 				fmt.Sprintf("printenv %s | base64 -d > %s && chmod 600 %s", envName, keyPath, keyPath))

@@ -135,6 +135,10 @@ func WaitForHosts(ctx context.Context, inventoryContent []byte, containerCfg Dep
 // actual deploy container. The inventory is injected as a base64-encoded env
 // var and decoded inside the container — no host-side file mount is needed.
 func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cfg DeployContainerConfig) error {
+	if err := validateSSHKeyNames(cfg.SSHKeys); err != nil {
+		return fmt.Errorf("invalid deploy config: %w", err)
+	}
+
 	// If per-host SSH keys are provided, inject ansible_ssh_private_key_file
 	// into the inventory YAML in Go (proper YAML, no sed hacks).
 	probeInventory := inventoryContent
@@ -306,6 +310,10 @@ func runPingProbe(ctx context.Context, image string, inventoryContent []byte, cf
 //     it's treated as a fallback key and injected into ALL hosts that don't
 //     already have a key assigned.
 func injectSSHKeyPaths(inventoryContent []byte, sshKeys map[string]string) ([]byte, error) {
+	if err := validateSSHKeyNames(sshKeys); err != nil {
+		return nil, err
+	}
+
 	var inv map[string]any
 	if err := yaml.Unmarshal(inventoryContent, &inv); err != nil {
 		return nil, fmt.Errorf("failed to parse inventory: %w", err)
@@ -456,9 +464,14 @@ func extractGroupHostsFromInventory(allMap map[string]any) map[string][]string {
 }
 
 // sshKeyEnvSanitize converts an SSH key name into a string safe for use as an
-// environment variable suffix. Replaces dashes, dots, colons, and slashes with
-// underscores.
+// environment variable suffix. Replaces dashes, dots, colons, slashes, and the
+// wildcard character with underscores/a fixed token — critical for "*" since
+// an unmapped "*" would produce an env var name like "SSH_KEY_*" that gets
+// glob-expanded when embedded unquoted in a shell command.
 func sshKeyEnvSanitize(name string) string {
+	if name == "*" {
+		return "WILDCARD"
+	}
 	return strings.NewReplacer(
 		"-", "_",
 		".", "_",

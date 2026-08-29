@@ -184,6 +184,11 @@ func runDeploy(ctx context.Context, f *deployFlags) error {
 		return err
 	}
 
+	sshKeys, err := parseSSHKeys(f.sshKeys)
+	if err != nil {
+		return err
+	}
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, config.ColorYellow+"warning: could not load diffusion.toml: %v — using defaults\n"+config.ColorReset, err)
@@ -206,7 +211,7 @@ func runDeploy(ctx context.Context, f *deployFlags) error {
 		Groups:             groups,
 		GlobalVars:         globalVars,
 		ExtraVars:          extraVars,
-		SSHKeys:            parseSSHKeys(f.sshKeys),
+		SSHKeys:            sshKeys,
 		SkipIfSucceededFor: skipPeriod,
 		ContainerRegistry:  cfg.ContainerRegistry,
 		ArtifactSourcesCfg: cfg.ArtifactSources,
@@ -383,17 +388,22 @@ func parseDurationWithDefault(s string, def time.Duration, flag string) (time.Du
 }
 
 // parseSSHKeys converts "--ssh-key host=<base64>" flag values into a map.
-func parseSSHKeys(raw []string) map[string]string {
+// Rejects host/key names that fail deploy.ValidateSSHKeyName so that
+// malformed or malicious values never reach the deploy package.
+func parseSSHKeys(raw []string) (map[string]string, error) {
 	if len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	m := make(map[string]string, len(raw))
 	for _, s := range raw {
 		k, v, ok := strings.Cut(s, "=")
 		if !ok {
-			continue
+			return nil, fmt.Errorf("--ssh-key %q: expected format \"hostname=<base64>\"", s)
+		}
+		if err := deploy.ValidateSSHKeyName(k); err != nil {
+			return nil, fmt.Errorf("--ssh-key %q: %w", s, err)
 		}
 		m[k] = v
 	}
-	return m
+	return m, nil
 }
