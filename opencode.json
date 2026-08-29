@@ -1,0 +1,47 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "team-lead",
+  "mcp": {
+    "diffusion": {
+      "type": "local",
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        "./:/project",
+        "ghcr.io/polar-team/diffusion-mcp-server:latest-amd64"
+      ],
+      "enabled": true
+    }
+  },
+  "tools": {
+    "diffusion*": false
+  },
+  "agent": {
+    "team-lead": {
+      "tools": {
+        "diffusion*": true
+      },
+      "permission": {
+        "diffusion_get_diffusion_config": "allow",
+        "diffusion_get_lock_file": "allow",
+        "diffusion_get_diffusion_cli_reference": "allow",
+        "diffusion_get_server_version": "allow",
+        "diffusion_get_requirements_yml": "allow",
+        "diffusion_list_molecule_containers": "allow",
+        "diffusion_list_molecule_scenarios": "allow",
+        "diffusion_check_molecule_yml": "allow",
+        "diffusion_check_verify_yml": "allow",
+        "diffusion_check_docker_environment": "allow",
+        "diffusion_run_diffusion_command": "allow",
+        "diffusion_docker_exec_in_molecule": "allow",
+        "diffusion_docker_in_docker_in_molecule": "allow",
+        "diffusion_update_diffusion_docs": "allow"
+      }
+    }
+  }
+}
