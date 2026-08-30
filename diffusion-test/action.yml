@@ -197,68 +197,40 @@ runs:
         if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
           echo "Detected Ubuntu/Debian - relaxing AppArmor unprivileged userns restriction"
 
-          # 1. Relax the sysctl gate (Ubuntu 24.04 restricts unprivileged userns by default).
+          # This is a host kernel gate: Ubuntu 24.04 restricts unprivileged user
+          # namespaces by default. Relaxing it here lets nested/unprivileged userns
+          # be created inside the privileged molecule container (where rootless
+          # Docker actually runs). No host-level AppArmor profiles are installed:
+          # the rootless stack lives inside the container, not on the runner host.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-
-          # 2. On Ubuntu 24.04 the sysctl alone is insufficient: the shipped
-          #    'rootlesskit'/'unshare'/'unprivileged_userns' AppArmor profiles still
-          #    confine rootless dockerd. Install a permissive profile that explicitly
-          #    allows userns so rootlesskit/unshare can create user namespaces.
-          if command -v apparmor_parser >/dev/null 2>&1; then
-            APPARMOR_PROFILE="/etc/apparmor.d/rootlesskit-diffusion"
-            ROOTLESSKIT_BIN="$(command -v rootlesskit 2>/dev/null || echo /usr/bin/rootlesskit)"
-            sudo tee "${APPARMOR_PROFILE}" >/dev/null <<EOF
-        abi <abi/4.0>,
-        include <tunables/global>
-
-        profile rootlesskit-diffusion "${ROOTLESSKIT_BIN}" flags=(unconfined) {
-          userns,
-          include if exists <local/rootlesskit-diffusion>
-        }
-        EOF
-            # Load it; never fail the build if AppArmor tooling/kernel support is absent.
-            sudo apparmor_parser -r -W "${APPARMOR_PROFILE}" 2>/dev/null || true
-
-            # Neutralize the distro-shipped profiles that block unprivileged userns,
-            # falling back to unconfined where they exist.
-            for prof in \
-              /etc/apparmor.d/unprivileged_userns \
-              /etc/apparmor.d/rootlesskit \
-              /etc/apparmor.d/usr.bin.rootlesskit; do
-              if [ -e "${prof}" ] && command -v aa-complain >/dev/null 2>&1; then
-                sudo aa-complain "${prof}" 2>/dev/null || true
-              fi
-            done
-          else
-            echo "apparmor_parser not present, skipping AppArmor profile install"
-          fi
         else
           echo "Not Ubuntu/Debian, skipping AppArmor tweak"
         fi
 
-    - name: Ensure cgroup v2 memory/io delegation for user manager
+    - name: Check cgroup v2 user.slice for rootless volume mounting
       if: runner.os == 'Linux'
       shell: bash
       run: |
         if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
-          echo "Detected Ubuntu/Debian - ensuring cgroup v2 delegation for systemd user manager"
+          echo "Detected Ubuntu/Debian - checking cgroup v2 user.slice for the systemd user manager"
 
-          # Rootless Docker relies on the systemd user manager having memory/io
-          # controllers delegated. On the GitHub 24.04 runner only cpu/cpuset/pids
-          # are delegated by default, which breaks the rootless stack. Install an
-          # idempotent drop-in that delegates the full controller set.
-          DROPIN_DIR="/etc/systemd/system/user@.service.d"
-          DROPIN_FILE="${DROPIN_DIR}/delegate.conf"
-          sudo mkdir -p "${DROPIN_DIR}"
-          sudo tee "${DROPIN_FILE}" >/dev/null <<'EOF'
-        [Service]
-        Delegate=cpu cpuset io memory pids
-        EOF
-
-          # Reload so the drop-in takes effect for newly started user managers.
-          sudo systemctl daemon-reload || true
+          # The presence of the per-user systemd cgroup scope is what's essential
+          # for rootless volume mounting. Verify the path exists rather than
+          # unconditionally mutating host systemd config. Non-fatal: absence is
+          # surfaced as a diagnostic so runners without it are not broken.
+          USER_SLICE="/sys/fs/cgroup/user.slice"
+          USER_SERVICE="${USER_SLICE}/user-1000.service"
+          if [ -d "${USER_SERVICE}" ]; then
+            echo "Found ${USER_SERVICE} - cgroup delegation for user-1000 is in place"
+          elif [ -d "${USER_SLICE}" ]; then
+            echo "WARNING: ${USER_SLICE} exists but ${USER_SERVICE} is missing;" \
+                 "rootless volume mounting may not work until the user manager is started"
+          else
+            echo "WARNING: ${USER_SLICE} not found; cgroup v2 user delegation may be" \
+                 "unavailable, which can break rootless volume mounting"
+          fi
         else
-          echo "Not Ubuntu/Debian, skipping cgroup delegation tweak"
+          echo "Not Ubuntu/Debian, skipping cgroup user.slice check"
         fi
 
     - name: Run converge
