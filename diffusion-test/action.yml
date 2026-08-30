@@ -207,30 +207,62 @@ runs:
           echo "Not Ubuntu/Debian, skipping AppArmor tweak"
         fi
 
-    - name: Check cgroup v2 user.slice for rootless volume mounting
+    - name: Ensure systemd user manager for rootless Docker
       if: runner.os == 'Linux'
       shell: bash
       run: |
         if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
-          echo "Detected Ubuntu/Debian - checking cgroup v2 user.slice for the systemd user manager"
+          echo "Detected Ubuntu/Debian - ensuring the systemd user manager is up for rootless Docker"
 
-          # The presence of the per-user systemd cgroup scope is what's essential
-          # for rootless volume mounting. Verify the path exists rather than
-          # unconditionally mutating host systemd config. Non-fatal: absence is
-          # surfaced as a diagnostic so runners without it are not broken.
-          USER_SLICE="/sys/fs/cgroup/user.slice"
-          USER_SERVICE="${USER_SLICE}/user-1000.service"
-          if [ -d "${USER_SERVICE}" ]; then
-            echo "Found ${USER_SERVICE} - cgroup delegation for user-1000 is in place"
-          elif [ -d "${USER_SLICE}" ]; then
-            echo "WARNING: ${USER_SLICE} exists but ${USER_SERVICE} is missing;" \
-                 "rootless volume mounting may not work until the user manager is started"
+          # The per-user systemd cgroup scope (user-<uid>.service under user.slice)
+          # only exists while that user's systemd manager (user@<uid>.service) is
+          # running. Without it there is no /run/user/<uid> runtime dir, no
+          # user-scoped docker.sock and no delegated cgroup subtree, which prevents
+          # the rootless Docker compose stack from starting and binding its port.
+          # Bring the user manager up generically (no hard-coded uid) and wait for
+          # the runtime dir and cgroup scope to appear.
+
+          # Resolve a target user robustly: prefer a dedicated rootless "docker"
+          # user, then the GitHub runner default "runner", then the invoking user.
+          TARGET_USER=""
+          for candidate in docker runner "${USER:-}" "$(id -un 2>/dev/null)"; do
+            if [ -n "${candidate}" ] && id -u "${candidate}" >/dev/null 2>&1; then
+              TARGET_USER="${candidate}"
+              break
+            fi
+          done
+
+          if [ -z "${TARGET_USER}" ]; then
+            echo "WARNING: could not resolve a target user for the systemd user manager; skipping"
           else
-            echo "WARNING: ${USER_SLICE} not found; cgroup v2 user delegation may be" \
-                 "unavailable, which can break rootless volume mounting"
+            TARGET_UID="$(id -u "${TARGET_USER}")"
+            echo "Selected user '${TARGET_USER}' (uid ${TARGET_UID}) for the systemd user manager"
+
+            USER_SLICE="/sys/fs/cgroup/user.slice"
+            USER_SERVICE="${USER_SLICE}/user-${TARGET_UID}.service"
+            RUNTIME_DIR="/run/user/${TARGET_UID}"
+
+            # Persist the user manager across sessions and start it explicitly.
+            sudo loginctl enable-linger "${TARGET_USER}" || true
+            sudo systemctl start "user@${TARGET_UID}.service" || true
+
+            # Poll for both the runtime dir and the cgroup scope (bounded ~30s).
+            for _ in $(seq 1 30); do
+              if [ -d "${RUNTIME_DIR}" ] && [ -d "${USER_SERVICE}" ]; then
+                break
+              fi
+              sleep 1
+            done
+
+            if [ -d "${USER_SERVICE}" ]; then
+              echo "Found ${USER_SERVICE} - user manager is up, cgroup delegation in place"
+            else
+              echo "WARNING: could not bring up the systemd user manager for uid ${TARGET_UID};" \
+                   "${USER_SERVICE} is still missing, rootless volume mounting may not work"
+            fi
           fi
         else
-          echo "Not Ubuntu/Debian, skipping cgroup user.slice check"
+          echo "Not Ubuntu/Debian, skipping systemd user manager setup"
         fi
 
     - name: Run converge
