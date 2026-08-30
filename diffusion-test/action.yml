@@ -195,10 +195,42 @@ runs:
       shell: bash
       run: |
         if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
-          echo "Detected Ubuntu/Debian — disabling AppArmor unprivileged userns restriction"
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          echo "Detected Ubuntu/Debian - relaxing AppArmor unprivileged userns restriction"
+
+          # This is a host kernel gate: Ubuntu 24.04 restricts unprivileged user
+          # namespaces by default. Relaxing it here lets nested/unprivileged userns
+          # be created inside the privileged molecule container (where rootless
+          # Docker actually runs). No host-level AppArmor profiles are installed:
+          # the rootless stack lives inside the container, not on the runner host.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
         else
           echo "Not Ubuntu/Debian, skipping AppArmor tweak"
+        fi
+
+    - name: Check cgroup v2 user.slice for rootless volume mounting
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
+          echo "Detected Ubuntu/Debian - checking cgroup v2 user.slice for the systemd user manager"
+
+          # The presence of the per-user systemd cgroup scope is what's essential
+          # for rootless volume mounting. Verify the path exists rather than
+          # unconditionally mutating host systemd config. Non-fatal: absence is
+          # surfaced as a diagnostic so runners without it are not broken.
+          USER_SLICE="/sys/fs/cgroup/user.slice"
+          USER_SERVICE="${USER_SLICE}/user-1000.service"
+          if [ -d "${USER_SERVICE}" ]; then
+            echo "Found ${USER_SERVICE} - cgroup delegation for user-1000 is in place"
+          elif [ -d "${USER_SLICE}" ]; then
+            echo "WARNING: ${USER_SLICE} exists but ${USER_SERVICE} is missing;" \
+                 "rootless volume mounting may not work until the user manager is started"
+          else
+            echo "WARNING: ${USER_SLICE} not found; cgroup v2 user delegation may be" \
+                 "unavailable, which can break rootless volume mounting"
+          fi
+        else
+          echo "Not Ubuntu/Debian, skipping cgroup user.slice check"
         fi
 
     - name: Run converge
