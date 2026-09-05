@@ -11,6 +11,24 @@ Diffusion is a cross-platform CLI written in Go that streamlines Ansible role te
 - **Lock file**: `diffusion.lock`
 - **License**: MIT
 
+## Source of Truth Rule - MCP Server (MANDATORY)
+
+The Team Lead MUST ALWAYS consult the Diffusion MCP server first for any question
+about Diffusion behaviour, commands, flags, config, or conventions.
+
+- Use the MCP tools (`diffusion_get_diffusion_cli_reference`,
+  `diffusion_get_terraform_provider_reference`, `diffusion_get_diffusion_config`,
+  `diffusion_check_*`, `diffusion_troubleshoot_*`, etc.) as the primary and
+  authoritative reference.
+- DO NOT search git commits, git log, git diff, or branch history to answer
+  questions about how a feature works.
+- Answer ONLY from documented information: the MCP server reference data, the
+  official docs under `docs/`, and command `--help` output.
+- If the MCP server does not document something, say so explicitly and ask -
+  do not infer the answer from commit archaeology or guesswork.
+- If MCP data and source/help text disagree, report the discrepancy and treat
+  the MCP server as authoritative.
+
 ## Development Rule — dev-new-features
 
 All agent changes, new feature implementation, refactoring, and experimental work MUST be done inside the `dev-new-features/` directory. This directory mirrors the main project structure and acts as the active development branch within the repo.

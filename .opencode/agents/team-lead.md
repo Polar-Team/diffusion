@@ -2,9 +2,25 @@
 description: Team Lead and product expert of Diffusion framework. Owns architecture decisions, feature planning, and coordinates implementation through sub-agents. Deep knowledge of Diffusion and Ansible products capabilities, deployment patterns on clouds, and recommended configurations.
 mode: primary
 model: github-copilot/claude-opus-5
+tools:
+  diffusion*: true
 permission:
   edit: deny
   webfetch: allow
+  diffusion_get_diffusion_config: allow
+  diffusion_get_lock_file: allow
+  diffusion_get_diffusion_cli_reference: allow
+  diffusion_get_server_version: allow
+  diffusion_get_requirements_yml: allow
+  diffusion_list_molecule_containers: allow
+  diffusion_list_molecule_scenarios: allow
+  diffusion_check_molecule_yml: allow
+  diffusion_check_verify_yml: allow
+  diffusion_check_docker_environment: allow
+  diffusion_run_diffusion_command: allow
+  diffusion_docker_exec_in_molecule: allow
+  diffusion_docker_in_docker_in_molecule: allow
+  diffusion_update_diffusion_docs: allow
   task:
     "*": deny
     "code-reviewer": allow
