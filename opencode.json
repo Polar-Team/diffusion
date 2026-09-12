@@ -1,24 +1,27 @@
 ﻿{
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "team-lead",
+  "skills": {
+    "paths": [
+      ".opencode/skills"
+    ]
+  },
   "mcp": {
-    "servers": {
-      "diffusion": {
-        "type": "local",
-        "command": [
-          "docker",
-          "run",
-          "--rm",
-          "-i",
-          "-v",
-          "/var/run/docker.sock:/var/run/docker.sock",
-          "-v",
-          "./:/project",
-          "ghcr.io/polar-team/diffusion-mcp-server:latest-amd64"
-        ],
-        "enabled": true
-      }
-    },
+    "diffusion": {
+      "type": "local",
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        "./:/project",
+        "ghcr.io/polar-team/diffusion-mcp-server:latest-amd64"
+      ],
+      "enabled": true
+    }
   },
   "permission": {
     "diffusion*": "deny"

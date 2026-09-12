@@ -1,7 +1,7 @@
 ---
 description: Senior Go developer specialized in the Diffusion project — a cross-platform CLI tool built with Go, Cobra, TOML/YAML config, and Vault integration. Works inside dev-new-features/.
 mode: subagent
-model: github-copilot/claude-sonnet-5
+model: github-copilot/claude-opus-5
 permission:
   edit:
     "*": deny
