@@ -1,12 +1,12 @@
-package deploy
+package dependency
 
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"diffusion/internal/config"
-	"diffusion/internal/dependency"
 	"diffusion/internal/galaxy"
 )
 
@@ -19,10 +19,10 @@ import (
 //   - Python version: min = max(all mins), max = min(all maxes).
 //   - Tools (ansible, molecule, etc.): same intersection as collections.
 //   - python_deps maps: merge; on key conflict keep the higher pinned version.
-func MergeLocks(locks []dependency.LockFile) (*dependency.LockFile, error) {
+func MergeLocks(locks []LockFile) (*LockFile, error) {
 	if len(locks) == 0 {
-		return &dependency.LockFile{
-			Version: dependency.LockFileVersion,
+		return &LockFile{
+			Version: LockFileVersion,
 			Python: &config.PythonVersion{
 				Min:    config.DefaultMinPythonVersion,
 				Max:    config.DefaultMaxPythonVersion,
@@ -36,8 +36,8 @@ func MergeLocks(locks []dependency.LockFile) (*dependency.LockFile, error) {
 		return &l, nil
 	}
 
-	merged := &dependency.LockFile{
-		Version: dependency.LockFileVersion,
+	merged := &LockFile{
+		Version: LockFileVersion,
 	}
 
 	// --- Python version ---
@@ -48,7 +48,7 @@ func MergeLocks(locks []dependency.LockFile) (*dependency.LockFile, error) {
 	merged.Python = python
 
 	// --- Tools ---
-	toolEntries, err := mergeEntries(locks, func(lf dependency.LockFile) []dependency.LockFileEntry {
+	toolEntries, err := mergeEntries(locks, func(lf LockFile) []LockFileEntry {
 		return lf.Tools
 	}, "tool")
 	if err != nil {
@@ -57,7 +57,7 @@ func MergeLocks(locks []dependency.LockFile) (*dependency.LockFile, error) {
 	merged.Tools = toolEntries
 
 	// --- Collections ---
-	colEntries, err := mergeEntries(locks, func(lf dependency.LockFile) []dependency.LockFileEntry {
+	colEntries, err := mergeEntries(locks, func(lf LockFile) []LockFileEntry {
 		return lf.Collections
 	}, "collection")
 	if err != nil {
@@ -66,7 +66,7 @@ func MergeLocks(locks []dependency.LockFile) (*dependency.LockFile, error) {
 	merged.Collections = colEntries
 
 	// --- Roles ---
-	roleEntries, err := mergeEntries(locks, func(lf dependency.LockFile) []dependency.LockFileEntry {
+	roleEntries, err := mergeEntries(locks, func(lf LockFile) []LockFileEntry {
 		return lf.Roles
 	}, "role")
 	if err != nil {
@@ -82,13 +82,13 @@ func MergeLocks(locks []dependency.LockFile) (*dependency.LockFile, error) {
 // intersects them (keeping the strictest lower-bound), then re-resolves via
 // Galaxy API to find the highest satisfying version.
 func mergeEntries(
-	locks []dependency.LockFile,
-	extract func(dependency.LockFile) []dependency.LockFileEntry,
+	locks []LockFile,
+	extract func(LockFile) []LockFileEntry,
 	kind string,
-) ([]dependency.LockFileEntry, error) {
+) ([]LockFileEntry, error) {
 	type accumulator struct {
 		constraints []string
-		base        dependency.LockFileEntry
+		base        LockFileEntry
 		pythonDeps  map[string]string
 	}
 
@@ -119,9 +119,18 @@ func mergeEntries(
 	}
 
 	galaxyAPI := galaxy.NewGalaxyAPI()
-	var result []dependency.LockFileEntry
+	var result []LockFileEntry
 
-	for _, a := range acc {
+	// Iterate in sorted key order: map iteration is randomised in Go and the
+	// merged lock file must be byte-stable across runs.
+	keys := make([]string, 0, len(acc))
+	for k := range acc {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		a := acc[k]
 		mergedConstraint := intersectConstraints(a.constraints)
 		resolved, err := resolveEntry(galaxyAPI, a.base, mergedConstraint, kind)
 		if err != nil {
@@ -143,7 +152,7 @@ func mergeEntries(
 
 // resolveEntry calls the Galaxy API (or git ls-remote for git roles) to find
 // the highest version that satisfies mergedConstraint.
-func resolveEntry(api *galaxy.GalaxyAPI, entry dependency.LockFileEntry, constraint, kind string) (string, error) {
+func resolveEntry(api *galaxy.GalaxyAPI, entry LockFileEntry, constraint, kind string) (string, error) {
 	if constraint == "" || constraint == "latest" {
 		// Use the already-resolved version from the lock if available.
 		if entry.ResolvedVersion != "" {
@@ -215,9 +224,9 @@ func intersectConstraints(constraints []string) string {
 		return constraints[0]
 	}
 
-	var lowerBound string   // highest ">=" seen
-	var exactPin string     // "==" pin if present
-	var upperBound string   // lowest "<=" seen
+	var lowerBound string // highest ">=" seen
+	var exactPin string   // "==" pin if present
+	var upperBound string // lowest "<=" seen
 
 	for _, c := range constraints {
 		c = strings.TrimSpace(c)
@@ -263,7 +272,7 @@ func intersectConstraints(constraints []string) string {
 }
 
 // mergePythonVersions intersects Python min/max across all lock files.
-func mergePythonVersions(locks []dependency.LockFile) (*config.PythonVersion, error) {
+func mergePythonVersions(locks []LockFile) (*config.PythonVersion, error) {
 	result := &config.PythonVersion{
 		Min:    config.DefaultMinPythonVersion,
 		Max:    config.DefaultMaxPythonVersion,
@@ -306,7 +315,20 @@ func mergePythonVersions(locks []dependency.LockFile) (*config.PythonVersion, er
 }
 
 // entryKey returns a stable map key for a lock file entry.
-func entryKey(e dependency.LockFileEntry) string {
+//
+// A Galaxy namespace is a globally declared identity: a collection installed
+// from git still installs as "community.general", so whenever a namespace is
+// present it wins and keeps the historical "namespace.name" key.
+//
+// Without a namespace the repository URL is the only identity available, and
+// keying on the name alone would be wrong: two unrelated repositories can
+// derive the same short name (org-a/ansible-collection-foo and
+// org-b/ansible-collection-foo both derive "foo") and would be silently
+// merged into a single dependency.
+func entryKey(e LockFileEntry) string {
+	if e.Namespace == "" && e.Src != "" {
+		return "git:" + normalizeIdentity(e.Src)
+	}
 	ns, name := splitNamespaceAndName(e.Namespace, e.Name)
 	return ns + "." + name
 }

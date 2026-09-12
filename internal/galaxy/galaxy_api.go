@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"diffusion/internal/utils"
 )
 
 // GalaxyAPI handles interactions with Ansible Galaxy API
@@ -295,6 +297,16 @@ func (g *GalaxyAPI) ResolveRoleVersion(namespace, name, versionConstraint string
 // It fetches tags from the git repo and returns the latest version or resolves a constraint
 func ResolveVersionFromGit(gitURL, versionConstraint string) (string, error) {
 
+	// gitURL and versionConstraint may originate from a third-party
+	// diffusion.lock during transitive resolution. Reject option-like values
+	// before they reach the git argument vector.
+	if err := utils.ValidateCLIArgument("git URL", gitURL); err != nil {
+		return "", err
+	}
+	if err := utils.ValidateCLIArgument("version constraint", versionConstraint); err != nil {
+		return "", err
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -347,7 +359,7 @@ func ResolveVersionFromGit(gitURL, versionConstraint string) (string, error) {
 			}
 
 			// Fetch all tags from git
-			cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--sort=-v:refname", gitURL)
+			cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--sort=-v:refname", "--", gitURL)
 			output, err := cmd.Output()
 
 			if err != nil {
@@ -407,11 +419,15 @@ func ResolveVersionFromGit(gitURL, versionConstraint string) (string, error) {
 
 // GetLatestGitTag fetches the latest tag from a git repository
 func GetLatestGitTag(gitURL string) (string, error) {
+	if err := utils.ValidateCLIArgument("git URL", gitURL); err != nil {
+		return "", err
+	}
+
 	// Use git ls-remote to fetch tags with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--sort=-v:refname", gitURL)
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--sort=-v:refname", "--", gitURL)
 	output, err := cmd.Output()
 	if err != nil {
 		return "main", nil // Fallback to main if git command fails

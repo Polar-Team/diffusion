@@ -23,6 +23,12 @@ func AnsibleGalaxyInit() (string, error) {
 		return "", fmt.Errorf("role name cannot be empty")
 	}
 
+	// The role name becomes a positional argument to ansible-galaxy, which has
+	// no "--" terminator.
+	if err := utils.ValidateCLIArgument("role name", roleName); err != nil {
+		return "", err
+	}
+
 	currentDir, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("failed to get current directory: %w", err)

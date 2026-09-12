@@ -27,7 +27,10 @@ type CLI struct {
 	NamespaceFlag string
 
 	// Collection flags
-	AddCollectionFlag string
+	AddCollectionFlag     string
+	CollectionSrcFlag     string
+	CollectionScmFlag     string
+	CollectionVersionFlag string
 
 	// Molecule flags
 	TagFlag            string

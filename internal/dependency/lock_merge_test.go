@@ -1,10 +1,9 @@
-package deploy
+package dependency
 
 import (
 	"testing"
 
 	"diffusion/internal/config"
-	"diffusion/internal/dependency"
 )
 
 // ---------------------------------------------------------------------------
@@ -64,11 +63,11 @@ func TestIntersectConstraints_KeepsLowestUpperBound(t *testing.T) {
 // mergePythonVersions
 // ---------------------------------------------------------------------------
 
-func makeLocksWithPython(specs ...config.PythonVersion) []dependency.LockFile {
-	locks := make([]dependency.LockFile, len(specs))
+func makeLocksWithPython(specs ...config.PythonVersion) []LockFile {
+	locks := make([]LockFile, len(specs))
 	for i, s := range specs {
 		p := s
-		locks[i] = dependency.LockFile{Python: &p}
+		locks[i] = LockFile{Python: &p}
 	}
 	return locks
 }
@@ -118,7 +117,7 @@ func TestMergePythonVersions_Conflict(t *testing.T) {
 func TestMergePythonVersions_NilPythonSkipped(t *testing.T) {
 	// Default min is 3.11; a lock with nil Python should not override it.
 	// Supply a non-nil lock with a higher min to verify the non-nil one wins.
-	locks := []dependency.LockFile{
+	locks := []LockFile{
 		{}, // nil Python — should be skipped
 		{Python: &config.PythonVersion{Min: "3.12", Max: "3.13", Pinned: "3.12"}},
 	}
@@ -149,14 +148,14 @@ func TestMergeLocks_EmptyReturnsDefaults(t *testing.T) {
 }
 
 func TestMergeLocks_SingleLock(t *testing.T) {
-	lock := dependency.LockFile{
-		Version: dependency.LockFileVersion,
+	lock := LockFile{
+		Version: LockFileVersion,
 		Python:  &config.PythonVersion{Min: "3.10", Max: "3.12", Pinned: "3.10"},
-		Tools: []dependency.LockFileEntry{
+		Tools: []LockFileEntry{
 			{Name: "ansible", Version: ">=9.0.0", ResolvedVersion: "9.2.0", Type: "tool"},
 		},
 	}
-	result, err := MergeLocks([]dependency.LockFile{lock})
+	result, err := MergeLocks([]LockFile{lock})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,7 +169,7 @@ func TestMergeLocks_SingleLock(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEntryKey(t *testing.T) {
-	e := dependency.LockFileEntry{Namespace: "community", Name: "default.general"}
+	e := LockFileEntry{Namespace: "community", Name: "default.general"}
 	got := entryKey(e)
 	if got != "community.general" {
 		t.Errorf("expected 'community.general', got %q", got)
