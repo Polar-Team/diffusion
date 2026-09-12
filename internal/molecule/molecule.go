@@ -825,7 +825,21 @@ func setupCIRepository(opts *MoleculeOptions, hostPath, roleDirName string) erro
 	// - pull_request: resolved from GITHUB_HEAD_REF (the PR source branch)
 	// We clone only that branch (--single-branch) for speed, then the
 	// checkout lands on the correct branch tip.
-	cloneCmd := `cd /tmp && rm -rf repo && git clone --single-branch --branch "$GIT_BRANCH" "$GIT_REMOTE" repo`
+	cloneCmd := `cd /tmp && rm -rf repo && git clone --single-branch --branch "${GIT_BRANCH}" "${GIT_REMOTE}" repo`
+	cleanCmd := `[ -d "/tmp/repo" ] && rm -rf /tmp/repo`
+	var attempts = 5
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cloneCmd); err == nil {
+			if err = utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cleanCmd); err != nil {
+				log.Fatalf(config.ColorRed+"Failed to clean up /tmp/repo after clone: %v"+config.ColorReset, err)
+			}
+			break
+		}
+		if attempt == attempts {
+			return fmt.Errorf("failed to clone repository —container after %d attempts: %w", attempts, err)
+		}
+	}
 	if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cloneCmd); err != nil {
 		return fmt.Errorf("failed to clone repository —container: %w", err)
 	}
@@ -1146,7 +1160,7 @@ func saveDinDImages(opts *MoleculeOptions) {
 
 	// Parse and filter out <none>:<none> entries
 	var images []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || line == "<none>:<none>" {
 			continue
