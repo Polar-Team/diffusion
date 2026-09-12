@@ -45,6 +45,7 @@ jobs:
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `diffusion-version` | Diffusion version to use (e.g., `latest`, `v0.3.13`) | No | `latest` |
+| `scenario` | Molecule scenario to update. If omitted, **all scenarios** are locked/checked/synced via `diffusion deps lock/check/sync` (no `--scenario` flag passed), and molecule tests then run against the `default` scenario. If set, only that scenario's `requirements.yml` (plus `meta/main.yml` when the scenario is `default`) is locked/checked/synced, and molecule tests run against that scenario | No | `""` (all scenarios) |
 | `target-branch` | Target branch for the pull request | **Yes** | — |
 | `working-directory` | Working directory for the role | No | `.` |
 | `run-lint` | Run lint tests after sync | No | `true` |
@@ -133,6 +134,22 @@ jobs:
           cache-enabled: "true"
           cache-uv: "true"
           cache-docker: "true"
+```
+
+### Update a Single Scenario
+
+Restrict locking/checking/syncing (and the molecule test run) to one scenario, e.g. `production`:
+
+```yaml
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Polar-Team/diffusion/diffusion-update@main
+        with:
+          target-branch: "main"
+          scenario: production
 ```
 
 ### Use Output in Subsequent Steps

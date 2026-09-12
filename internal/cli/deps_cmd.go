@@ -34,42 +34,62 @@ Generates diffusion.lock file and updates pyproject.toml for the molecule contai
 
 // newDepsLockCmd creates the lock subcommand
 func newDepsLockCmd() *cobra.Command {
-	return &cobra.Command{
+	var scenario string
+
+	cmd := &cobra.Command{
 		Use:   "lock",
 		Short: "Generate or update diffusion.lock file",
 		Long: `Generate or update the diffusion.lock file based on current dependencies
 from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("Generating lock file...")
-			if err := dependency.UpdateLockFile(); err != nil {
+			if scenario != "" {
+				fmt.Printf("Generating lock file for scenario %s...\n", scenario)
+			} else {
+				fmt.Println("Generating lock file...")
+			}
+			if err := dependency.UpdateLockFile(scenario); err != nil {
 				return fmt.Errorf("failed to update lock file: %w", err)
 			}
 			fmt.Printf("\033[32m%s\033[0m\n", config.MsgLockFileGenerated)
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&scenario, "scenario", "s", "", "Molecule scenario to operate on (default: all scenarios)")
+
+	return cmd
 }
 
 // newDepsCheckCmd creates the check subcommand
 func newDepsCheckCmd() *cobra.Command {
-	return &cobra.Command{
+	var scenario string
+
+	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Check if lock file is up-to-date",
 		Long:  `Check if the diffusion.lock file is up-to-date with current dependencies.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			upToDate, err := dependency.CheckLockFileStatus()
+			upToDate, err := dependency.CheckLockFileStatus(scenario)
 			if err != nil {
 				return fmt.Errorf("failed to check lock file: %w", err)
 			}
 			if upToDate {
 				fmt.Printf("\033[32m%s\033[0m\n", config.MsgLockFileUpToDate)
 			} else {
-				fmt.Printf("\033[33mLock file is not fitting yaml manifests. Run 'diffusion deps sync' to update.\033[0m\n")
+				if scenario != "" {
+					fmt.Printf("\033[33mLock file is not fitting yaml manifests for scenario %s. Run 'diffusion deps sync -s %s' to update.\033[0m\n", scenario, scenario)
+				} else {
+					fmt.Printf("\033[33mLock file is not fitting yaml manifests. Run 'diffusion deps sync' to update.\033[0m\n")
+				}
 				os.Exit(1)
 			}
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&scenario, "scenario", "s", "", "Molecule scenario to operate on (default: all scenarios)")
+
+	return cmd
 }
 
 // newDepsResolveCmd creates the resolve subcommand
@@ -392,7 +412,9 @@ func newDepsInitCmd() *cobra.Command {
 
 // newDepsSyncCmd creates the sync subcommand
 func newDepsSyncCmd() *cobra.Command {
-	return &cobra.Command{
+	var scenarioFlag string
+
+	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Sync dependencies from lock file to requirements.yml and meta.yml",
 		Long:  `Restore dependency versions from diffusion.lock to requirements.yml and meta.yml. Useful for rollback scenarios.`,
@@ -405,21 +427,10 @@ func newDepsSyncCmd() *cobra.Command {
 			if lockFile == nil {
 				return fmt.Errorf("lock file not found. Run 'diffusion deps lock' first")
 			}
-			scenarios := []string{}
-			scenariosDir := "scenarios"
-			if _, err := os.Stat(scenariosDir); err == nil {
-				// Read all scenario folders
-				entries, err := os.ReadDir(scenariosDir)
-				if err == nil {
-					for _, entry := range entries {
-						if entry.IsDir() {
-							scenarios = append(scenarios, entry.Name())
-						}
-					}
-				}
-			}
-			if len(scenarios) == 0 {
-				scenarios = append(scenarios, "default")
+
+			scenarios, err := dependency.ResolveScenarios(scenarioFlag)
+			if err != nil {
+				return err
 			}
 
 			// Sync roles and collections to requirements.yml for each scenario
@@ -505,9 +516,16 @@ func newDepsSyncCmd() *cobra.Command {
 
 			}
 			// Sync collections to meta/main.yml
-			// Only collections from the "default" scenario go into meta.yml
+			// Only collections from the "default" scenario go into meta.yml.
+			// Skipped only when a specific non-default scenario was requested.
+			if !dependency.IncludesDefaultScenario(scenarioFlag) {
+				fmt.Printf("\033[32mDependencies synced successfully from lock file\033[0m\n")
+				return nil
+			}
 
-			meta, _, err := role.LoadRoleConfig("")
+			// Only meta/main.yml is needed here; ParseMetaFile avoids requiring a
+			// scenarios/default/requirements.yml that may not exist.
+			meta, err := role.ParseMetaFile()
 			if err != nil {
 				return fmt.Errorf("failed to load meta config: %w", err)
 			}
@@ -540,4 +558,8 @@ func newDepsSyncCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&scenarioFlag, "scenario", "s", "", "Molecule scenario to operate on (default: all scenarios)")
+
+	return cmd
 }

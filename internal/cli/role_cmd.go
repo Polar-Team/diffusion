@@ -243,7 +243,7 @@ func newRoleAddRoleCmd(cli *CLI) *cobra.Command {
 				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
 
-			err = dependency.UpdateLockFile()
+			err = dependency.UpdateLockFile(cli.RoleScenario)
 			if err != nil {
 				return fmt.Errorf("failed to update lock file: %w", err)
 			}
@@ -304,7 +304,7 @@ func newRoleRemoveRoleCmd(cli *CLI) *cobra.Command {
 			if err := config.SaveConfig(cfg); err != nil {
 				return fmt.Errorf("failed to save diffusion.toml: %w", err)
 			}
-			err = dependency.UpdateLockFile()
+			err = dependency.UpdateLockFile(cli.RoleScenario)
 			if err != nil {
 				return fmt.Errorf("failed to update lock file: %w", err)
 			}

@@ -13,9 +13,9 @@ inputs:
     required: false
     default: "latest"
   scenario:
-    description: "Scenario name, could be omitted. If omitted - default"
+    description: "Molecule scenario to update. If omitted, all scenarios are locked/checked/synced (molecule tests then run against 'default')."
     required: false
-    default: "default"
+    default: ""
   target-branch:
     description: "Target branch for the pull request"
     required: true
@@ -162,13 +162,34 @@ runs:
         echo "Verifying installation..."
         diffusion --version
 
+    # ── Resolve scenario args ───────────────────────────────────────────
+    - name: Resolve scenario arguments
+      shell: bash
+      run: |
+        SCENARIO="${{ inputs.scenario }}"
+        if [ -n "${SCENARIO}" ] && ! [[ "${SCENARIO}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::Invalid scenario name: '${SCENARIO}'. Must match ^[A-Za-z0-9._-]+\$"
+          exit 1
+        fi
+
+        # Exported as a SINGLE shell token (--scenario=<name>). Consumer steps expand
+        # ${DIFFUSION_SCENARIO_ARGS} unquoted so an empty value disappears entirely;
+        # the =value form can never be word-split, and the regex above rejects whitespace.
+        if [ -n "${SCENARIO}" ]; then
+          echo "DIFFUSION_SCENARIO_ARGS=--scenario=${SCENARIO}" >> "$GITHUB_ENV"
+        else
+          echo "DIFFUSION_SCENARIO_ARGS=" >> "$GITHUB_ENV"
+        fi
+
+        echo "MOLECULE_SCENARIO=${SCENARIO:-default}" >> "$GITHUB_ENV"
+
     # ── Lock and check dependencies ────────────────────────────────────
     - name: Lock dependencies
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::Running diffusion deps lock"
-        diffusion deps lock
+        diffusion deps lock ${DIFFUSION_SCENARIO_ARGS}
         echo "::endgroup::"
 
     - name: Check dependencies
@@ -177,7 +198,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::Running diffusion deps check"
-        if diffusion deps check; then
+        if diffusion deps check ${DIFFUSION_SCENARIO_ARGS}; then
           echo "Dependencies are up to date — nothing to do."
           echo "sync-required=false" >> "$GITHUB_OUTPUT"
         else
@@ -193,7 +214,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::Running diffusion deps sync"
-        diffusion deps sync
+        diffusion deps sync ${DIFFUSION_SCENARIO_ARGS}
         echo "::endgroup::"
 
     - name: Verify sync
@@ -202,7 +223,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::Verifying deps after sync"
-        diffusion deps check
+        diffusion deps check ${DIFFUSION_SCENARIO_ARGS}
         echo "::endgroup::"
 
     # ── Run tests after sync ───────────────────────────────────────────
@@ -225,7 +246,7 @@ runs:
         ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule converge"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }} --force
+        diffusion molecule --ci --scenario "${MOLECULE_SCENARIO}" --force
         echo "::endgroup::"
 
     - name: Run lint
@@ -236,7 +257,7 @@ runs:
         ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule lint"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }} --lint
+        diffusion molecule --ci --scenario "${MOLECULE_SCENARIO}" --lint
         echo "::endgroup::"
 
     - name: Run verify
@@ -247,7 +268,7 @@ runs:
         ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule verify"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }} --verify
+        diffusion molecule --ci --scenario "${MOLECULE_SCENARIO}" --verify
         echo "::endgroup::"
 
     - name: Run idempotence
@@ -258,7 +279,7 @@ runs:
         ANSIBLE_REMOTE_TMP: /tmp/.ansible/tmp
       run: |
         echo "::group::Running molecule idempotence"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }} --idempotence
+        diffusion molecule --ci --scenario "${MOLECULE_SCENARIO}" --idempotence
         echo "::endgroup::"
 
     - name: Cleanup molecule
@@ -319,14 +340,19 @@ runs:
           done
         fi
 
+        SCENARIO_SUFFIX=""
+        if [ -n "${{ inputs.scenario }}" ]; then
+          SCENARIO_SUFFIX=" (scenario: ${{ inputs.scenario }})"
+        fi
+
         PR_BODY="## Automated Dependency Update
 
         This PR was created automatically by the **diffusion-update** action.
 
         ### What happened
-        1. \`diffusion deps lock\` updated the lockfile
-        2. \`diffusion deps check\` detected out-of-sync dependencies
-        3. \`diffusion deps sync\` resolved the dependencies
+        1. \`diffusion deps lock\` updated the lockfile${SCENARIO_SUFFIX}
+        2. \`diffusion deps check\` detected out-of-sync dependencies${SCENARIO_SUFFIX}
+        3. \`diffusion deps sync\` resolved the dependencies${SCENARIO_SUFFIX}
         4. Molecule tests (converge, lint, verify, idempotence) **passed**
 
         ### Changed files

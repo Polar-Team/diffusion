@@ -5,6 +5,13 @@ All notable changes to the Diffusion project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Scenario-Scoped Dependency Commands**:
+  - New `--scenario` / `-s` flag on `diffusion deps lock`, `diffusion deps check`, and `diffusion deps sync`
+  - Omitted (default) operates on all scenarios, preserving previous behaviour
+  - A scoped `deps lock` merges into the existing `diffusion.lock`, preserving entries of other scenarios
+  - A scoped run against a non-default scenario skips `meta/main.yml` (default-scenario collections only)
+  - If no `diffusion.lock` exists yet, a scoped lock falls back to generating the full file for all scenarios
+
 - **`diffusion docs` Command**: Auto-generate role variable documentation in README.md
   - Scans `defaults/main.yml`, `vars/main.yml`, `templates/`, and `tasks/` for variables
   - Annotation markers: `#—|` (type), `#—?` (description), `#—!` (required), `#—&` (optional)
@@ -44,11 +51,16 @@ All notable changes to the Diffusion project will be documented in this file.
   - `make dist-all` — Build both diffusion CLI and provider for all platforms
 
 ### Changed
+- **Role Commands Re-Lock Scoped**: `role add-role`, `role remove-role`, `role add-collection`, and `role remove-collection` now re-lock only their `--scenario` instead of regenerating the whole lock file
+- **`diffusion-update` Action**: `scenario` input default changed from `default` to empty (= all scenarios); the scenario name is now validated
 - **Go Version**: Upgraded to Go 1.25.4
 - **Terraform Provider Registry**: Source updated to `Polar-Team/diffusion`
 - **Molecule Container**: Docker DinD base updated to `29.5.3-dind-alpine3.23` (from `29.4.0`)
 - **Molecule Container**: uv package manager updated to `0.11.19` (from `0.9.30`)
 - **Molecule Container**: Alpine packages updated (git 2.52.0, curl 8.19.0, openssl 3.5.7, gcc 15.2.0)
+
+### Fixed
+- **`deps check` / `deps sync` in Repositories Without `scenarios/default/`**: Both commands failed with `open scenarios/default/requirements.yml: no such file or directory` when processing `meta/main.yml`; they now read `meta/main.yml` directly
 
 ## [0.8.3] - 2026-08-02
 
