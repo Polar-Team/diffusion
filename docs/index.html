@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -408,7 +408,7 @@
         <div class="card">
           <div class="card-icon">🤖</div>
           <h4>MCP Server</h4>
-          <p>AI assistant integration via Model Context Protocol — 16 tools for container management, validation, and troubleshooting.</p>
+          <p>AI assistant integration via Model Context Protocol — 23 tools for container management, validation, troubleshooting, deploy diagnostics and CLI / Terraform reference.</p>
         </div>
       </div>
     </div>
@@ -548,6 +548,22 @@ script:
           <tr><td><code>diffusion deps sync</code></td><td>Write locked versions back to <code>requirements.yml</code> / <code>meta.yml</code></td></tr>
         </tbody>
       </table></div>
+
+      <h3>Scenario-scoped operations</h3>
+      <p><code>deps lock</code>, <code>deps check</code> and <code>deps sync</code> accept <code>--scenario / -s &lt;name&gt;</code>. When omitted they operate on <strong>all</strong> scenarios found under <code>scenarios/</code> (falling back to <code>default</code>).</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Behaviour</th><th>Details</th></tr></thead>
+        <tbody>
+          <tr><td>Scoped <code>lock</code></td><td>Regenerates only <code>&lt;scenario&gt;.*</code> entries and <strong>merges</strong> them into the existing <code>diffusion.lock</code>; other scenarios are preserved verbatim. Tool/Python pins are global and always refreshed.</td></tr>
+          <tr><td>No lock file yet</td><td>A scoped <code>lock</code> falls back to a full generation for all scenarios — a scenario-only lock file is never written.</td></tr>
+          <tr><td><code>meta/main.yml</code></td><td>Holds default-scenario collections only. It is read/written for <code>-s default</code> or when the flag is omitted, and skipped for any other scenario.</td></tr>
+          <tr><td>Validation</td><td>The scenario must exist as <code>scenarios/&lt;name&gt;/</code> or be referenced by a <code>&lt;name&gt;.</code>-prefixed dependency in <code>diffusion.toml</code>; otherwise: <code>scenario "&lt;name&gt;" not found</code>.</td></tr>
+          <tr><td>Role commands</td><td><code>role add-role</code>, <code>remove-role</code>, <code>add-collection</code>, <code>remove-collection</code> pass their <code>--scenario</code> through, so they re-lock only that scenario.</td></tr>
+        </tbody>
+      </table></div>
+      <pre><code>diffusion deps lock  -s production   <span style="color:var(--muted)"># merge only production.* entries into diffusion.lock</span>
+diffusion deps check -s production   <span style="color:var(--muted)"># exit 1 if production requirements.yml drifted</span>
+diffusion deps sync  -s production   <span style="color:var(--muted)"># restore production requirements.yml from the lock</span></code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
     </div>
 
     <!-- CMD: CACHE -->
@@ -618,7 +634,7 @@ diffusion deploy --playbook site.yml --role-source scm=galaxy,version=&gt;=6.0.0
           <tr><td><code>--group</code></td><td><code>groupname=host1,host2</code> inventory group (repeatable)</td><td></td></tr>
           <tr><td><code>--var</code></td><td><code>key=value</code> global inventory variable (repeatable)</td><td></td></tr>
           <tr><td><code>--extra-var</code></td><td><code>key=value</code> ansible-playbook extra-var (repeatable)</td><td></td></tr>
-          <tr><td><code>--ssh-key</code></td><td>SSH private key as base64 (repeatable). Format: <code>hostname=&lt;base64&gt;</code> or <code>*=&lt;base64&gt;</code> for all hosts</td><td></td></tr>
+          <tr><td><code>--ssh-key</code></td><td>SSH private key as base64 (repeatable). Format: <code>&lt;name&gt;=&lt;base64&gt;</code> where <code>&lt;name&gt;</code> is a hostname, <code>group:&lt;groupname&gt;</code>, <code>*</code> (wildcard) or any fallback name. Names are validated — see <a href="#cmd-deploy">SSH key routing</a></td><td></td></tr>
           <tr><td><code>--skip-period</code></td><td>Skip re-deploy if last run succeeded within this period (Go duration, e.g. <code>24h</code>)</td><td></td></tr>
           <tr><td><code>--host-wait-initial-delay</code></td><td>Delay before first host reachability probe</td><td><code>10s</code></td></tr>
           <tr><td><code>--host-wait-interval</code></td><td>Interval between host probes</td><td><code>15s</code></td></tr>
@@ -662,6 +678,31 @@ diffusion deploy --playbook site.yml --role-source scm=galaxy,version=&gt;=6.0.0
 
       <h3>Remote state &amp; skip logic</h3>
       <p>After every successful run, a state file is written to <code>~/.diffusion/state</code> on each remote host. The <code>run_id</code> is a SHA-256 of all inputs (lock hash + inventory + playbook + extra-vars). If <code>--skip-period</code> is set and the last <code>run_id</code> matches, the deploy is skipped.</p>
+
+      <h3>SSH key routing &amp; validation</h3>
+      <p>Each <code>--ssh-key</code> name decides which hosts receive that key. Priority: <strong>per-host &gt; per-group &gt; fallback / wildcard</strong>.</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Name</th><th>Applies to</th><th>Inside the container</th></tr></thead>
+        <tbody>
+          <tr><td><code>web01</code></td><td>Only the inventory host <code>web01</code></td><td><code>SSH_KEY_WEB01</code> → <code>/tmp/ssh-keys/web01</code></td></tr>
+          <tr><td><code>group:webservers</code></td><td>Every host in group <code>webservers</code></td><td><code>SSH_KEY_GROUP_WEBSERVERS</code> → <code>/tmp/ssh-keys/group:webservers</code></td></tr>
+          <tr><td><code>*</code></td><td>All hosts without a more specific key</td><td><code>SSH_KEY_WILDCARD</code> → <code>/tmp/ssh-keys/_wildcard_</code></td></tr>
+          <tr><td><code>default</code> (any other name)</td><td>Fallback for unmatched hosts</td><td><code>SSH_KEY_DEFAULT</code> → <code>/tmp/ssh-keys/default</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>Because names are interpolated into env-var names, file paths and shell commands inside the container, they are strictly validated (also when set through the Terraform provider):</p>
+      <ul>
+        <li>Allowed characters: <code>A–Z a–z 0–9 . - _ : *</code> — spaces, quotes, <code>/</code> and shell metacharacters are rejected</li>
+        <li>Dot-only segments (<code>.</code>, <code>..</code>, <code>group:..</code>) are rejected</li>
+        <li>Names that collide with the wildcard sentinels (<code>wildcard</code>, <code>WILDCARD</code>, <code>_wildcard_</code>) are rejected — use <code>*</code></li>
+        <li>A value without <code>=</code> is a usage error: <code>expected format "hostname=&lt;base64&gt;"</code></li>
+      </ul>
+      <pre><code>diffusion deploy \
+  --role-source scm=git,version=main,url=https://github.com/org/role.git,apply_to=webservers \
+  --host web01=ansible_host=1.2.3.4,ansible_user=ubuntu \
+  --group webservers=web01 \
+  --ssh-key "group:webservers=$(base64 -w0 ~/.ssh/web_key)" \
+  --ssh-key "*=$(base64 -w0 ~/.ssh/id_rsa)"</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
     </div>
 
     <!-- CMD: DOCS -->
@@ -791,7 +832,15 @@ ghcr.io/polar-team/diffusion-mcp-server:{version}       <span style="color:var(-
           <tr><td><code>get_requirements_yml</code></td><td>Read Ansible <code>requirements.yml</code> for a scenario</td></tr>
           <tr><td><code>list_molecule_scenarios</code></td><td>List all scenarios with their key files</td></tr>
           <tr><td><code>run_diffusion_command</code></td><td>Run safe read-only diffusion CLI commands</td></tr>
+          <tr><td><code>docker_in_docker_in_molecule</code></td><td>Execute commands inside a scenario instance running in the DinD daemon</td></tr>
+          <tr><td><code>check_lock_file_scenarios</code></td><td>Per-scenario analysis of <code>diffusion.lock</code> vs <code>scenarios/</code> vs <code>diffusion.toml</code>; predicts whether a <code>--scenario</code> value is accepted</td></tr>
           <tr><td><code>get_diffusion_cli_reference</code></td><td>Structured CLI command reference with flags and examples</td></tr>
+          <tr><td><code>get_terraform_provider_reference</code></td><td>Reference for the provider block, <code>diffusion_deploy</code> and <code>diffusion_inventory</code></td></tr>
+          <tr><td><code>update_diffusion_docs</code></td><td>Run <code>diffusion docs --dry-run</code> and return the proposed changes</td></tr>
+          <tr><td><code>troubleshoot_deploy</code></td><td>Diagnose deploy prerequisites: binary, Docker, image, cache dir, SSH, <code>diffusion.toml</code></td></tr>
+          <tr><td><code>check_deploy_cache</code></td><td>Inspect <code>~/.diffusion/deploy-cache/</code> entries by RunID with sizes</td></tr>
+          <tr><td><code>troubleshoot_ssh_keys</code></td><td>Check PEM format, container <code>/tmp/ssh-keys</code>, and validate intended <code>--ssh-key</code> names (routing, env var, path)</td></tr>
+          <tr><td><code>get_troubleshooting_guide</code></td><td>Searchable knowledge base of known failure modes (deps scoping, SSH key validation, Terraform PEM, GitHub Actions)</td></tr>
           <tr><td><code>get_server_version</code></td><td>Return MCP server version and Python environment info</td></tr>
         </tbody>
       </table></div>
@@ -1058,6 +1107,7 @@ molecule_container_tag = "latest-amd64"</code><button class="copy-btn" onclick="
 
 - name: Check deps are locked
   run: diffusion deps check</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+        <p>Prefer the composite actions: <code>Polar-Team/diffusion/diffusion-test</code> (converge / lint / verify / idempotence, with supply-chain verification and Ubuntu 24.04 rootless prerequisites — AppArmor userns relaxation and a non-fatal cgroup v2 <code>user.slice</code> check) and <code>Polar-Team/diffusion/diffusion-update</code> (lock → check → sync → test → PR). The <code>scenario</code> input of <code>diffusion-update</code> is optional: empty means all scenarios are locked/checked/synced and tests run against <code>default</code>; a value must match <code>^[A-Za-z0-9._-]+$</code>.</p>
       </div>
       <div id="tab-ci-gl" class="tab-panel">
         <pre><code>molecule-test:
@@ -1748,9 +1798,9 @@ make dist-provider</code><button class="copy-btn" onclick="copyCode(this)">copy<
           <tr><td><code>playbook</code></td><td>string, optional</td><td>Path to existing playbook. Omit to auto-generate from <code>role_sources</code></td></tr>
           <tr><td><code>hosts</code></td><td>map(object)</td><td>Inventory hosts: hostname &#8594; <code>{ vars = { key = value } }</code></td></tr>
           <tr><td><code>groups</code></td><td>map(list)</td><td>Inventory groups: group name &#8594; list of host names</td></tr>
-          <tr><td><code>variables</code></td><td>map(string)</td><td>Global inventory variables</td></tr>
+          <tr><td><code>variables</code></td><td>map(object)</td><td>Group-scoped inventory variables: group name &#8594; <code>{ vars = { key = value } }</code>. Use key <code>all</code> for global variables</td></tr>
           <tr><td><code>extra_vars</code></td><td>map(string)</td><td>Extra vars passed to <code>ansible-playbook --extra-vars</code></td></tr>
-          <tr><td><code>ssh_private_keys</code></td><td>map(string), sensitive</td><td>Map of named SSH private keys in PEM format. Each value is base64-encoded automatically before passing to diffusion. Example: <code>{ default = tls_private_key.ssh.private_key_openssh }</code></td></tr>
+          <tr><td><code>ssh_private_keys</code></td><td>map(string), sensitive</td><td>Map of named SSH private keys in PEM format. Each value is base64-encoded automatically; literal <code>\n</code> escape sequences are normalised to real newlines first, so keys interpolated from JSON/tfvars strings still decode to a valid PEM. Key names follow the CLI routing rules (<code>hostname</code>, <code>group:&lt;name&gt;</code>, <code>*</code>, fallback) and the same character allowlist. Example: <code>{ "group:webservers" = tls_private_key.web.private_key_openssh }</code></td></tr>
           <tr><td><code>skip_if_succeeded_within</code></td><td>string</td><td>Go duration (e.g. <code>"24h"</code>). Skip re-deploy when inputs are identical</td></tr>
           <tr><td><code>host_wait_initial_delay</code></td><td>string</td><td>Override provider default initial delay</td></tr>
           <tr><td><code>host_wait_interval</code></td><td>string</td><td>Override provider default probe interval</td></tr>

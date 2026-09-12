@@ -6,14 +6,17 @@ environments, including:
 - Diffusion config inspection (diffusion.toml, diffusion.lock)
 - Molecule container management and docker exec helpers
 - Molecule scenario file validation (molecule.yml, verify.yml)
-- Dependency and cache status
-- CLI command reference
+- Dependency and cache status (incl. per-scenario lock analysis)
+- CLI command reference, Terraform provider reference
+- Troubleshooting knowledge base (deps --scenario, deploy --ssh-key validation,
+  Terraform PEM normalisation, GitHub Actions diagnostics)
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -94,6 +97,104 @@ def _load_yaml(path: Path) -> Any:
 def _container_name(role: str) -> str:
     """Return the molecule container name for a role."""
     return f"molecule-{role}"
+
+
+# --- SSH key name helpers (mirror internal/deploy/sanitize.go) ---------------
+
+# Allowlist used by `diffusion deploy --ssh-key <name>=<base64>` and by the
+# Terraform provider's ssh_private_keys map keys.
+_SSH_KEY_NAME_ALLOWLIST = re.compile(r"^[A-Za-z0-9_.:*-]+$")
+_SSH_KEY_WILDCARD_ENV = "WILDCARD"
+_SSH_KEY_WILDCARD_FILE = "_wildcard_"
+
+
+def _ssh_key_env_suffix(name: str) -> str:
+    """Return the env var suffix diffusion uses for an SSH key name.
+
+    '*' → 'WILDCARD'; otherwise '-', '.', ':', '/' → '_' and upper-cased.
+    Full env var is 'SSH_KEY_' + suffix.
+    """
+    if name == "*":
+        return _SSH_KEY_WILDCARD_ENV
+    return (
+        name.replace("-", "_").replace(".", "_").replace(":", "_").replace("/", "_")
+    ).upper()
+
+
+def _ssh_key_file_name(name: str) -> str:
+    """Return the file name under /tmp/ssh-keys/ diffusion uses for a key name."""
+    if name == "*":
+        return _SSH_KEY_WILDCARD_FILE
+    return name
+
+
+def _validate_ssh_key_name(name: str) -> str | None:
+    """Validate an SSH key/host name exactly like deploy.ValidateSSHKeyName.
+
+    Returns None when valid, otherwise the diffusion-style error message.
+    """
+    if not name or not _SSH_KEY_NAME_ALLOWLIST.match(name):
+        return (
+            f"invalid SSH key/host name {name!r}: only letters, digits, "
+            "'.', '-', '_', ':', '*' are allowed"
+        )
+    if name in (".", "..") or name.endswith(":.") or name.endswith(":.."):
+        return f"invalid SSH key/host name {name!r}: dot-only path segments are not allowed"
+    if name == "*":
+        return None
+    if (
+        _ssh_key_env_suffix(name).lower() == _SSH_KEY_WILDCARD_ENV.lower()
+        or _ssh_key_file_name(name) == _SSH_KEY_WILDCARD_FILE
+    ):
+        return (
+            f"invalid SSH key/host name {name!r}: collides with the reserved "
+            "wildcard ('*') key sentinel"
+        )
+    return None
+
+
+# --- Scenario helpers (mirror internal/dependency/dependency_scenario.go) ------
+
+
+def _discover_scenarios(root: Path) -> list[str]:
+    """List scenario directories under scenarios/; fallback to ['default']."""
+    scenarios_dir = root / "scenarios"
+    found: list[str] = []
+    if scenarios_dir.is_dir():
+        found = sorted(p.name for p in scenarios_dir.iterdir() if p.is_dir())
+    return found or ["default"]
+
+
+def _toml_dependency_scenarios(root: Path) -> set[str]:
+    """Return scenario prefixes referenced by [dependencies] in diffusion.toml."""
+    toml_path = root / "diffusion.toml"
+    if not toml_path.exists():
+        return set()
+    try:
+        data = _load_toml(toml_path)
+    except Exception:
+        return set()
+    deps = data.get("dependencies", {}) or {}
+    names: list[str] = []
+    for section in ("collections", "roles"):
+        entries = deps.get(section, []) or []
+        for e in entries:
+            n = e.get("name", "") if isinstance(e, dict) else str(e)
+            if n:
+                names.append(n)
+    return {n.split(".", 1)[0] for n in names if "." in n}
+
+
+def _lock_scenarios(lock: dict[str, Any]) -> dict[str, dict[str, int]]:
+    """Group diffusion.lock collections/roles by their '<scenario>.' prefix."""
+    out: dict[str, dict[str, int]] = {}
+    for section in ("collections", "roles"):
+        for e in lock.get(section, []) or []:
+            n = e.get("name", "") if isinstance(e, dict) else str(e)
+            scen = n.split(".", 1)[0] if "." in n else "(unprefixed)"
+            out.setdefault(scen, {"collections": 0, "roles": 0})
+            out[scen][section] += 1
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +739,10 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "description": "Organization / namespace prefix",
                     "default": "(from meta/main.yml)",
                 },
+                "--scenario, -s": {
+                    "description": "Molecule scenario name to run (maps to scenarios/<name>/). Also selects which requirements.yml is installed.",
+                    "default": "default",
+                },
                 "--tag, -t": {
                     "description": "Ansible tags to run (comma-separated, e.g. 'install,configure')",
                     "default": "",
@@ -704,6 +809,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "diffusion molecule --destroy                            # Destroy molecule instances (keep container)",
                 "diffusion molecule --wipe                               # Full cleanup: destroy + remove container + folder",
                 "diffusion molecule --converge --force                   # Force reinstall deps then converge",
+                "diffusion molecule --ci --scenario production --verify  # Run verify for a non-default scenario",
             ],
             "container_naming": "molecule-<role_name> (e.g. molecule-nginx)",
             "container_image": "ghcr.io/polar-team/diffusion-molecule-container:<tag>",
@@ -836,7 +942,17 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Dependencies are tracked in diffusion.toml (constraints) and diffusion.lock (resolved versions).",
                 "Collections and roles are stored per-scenario: '<scenario>.<name>' in the lock file.",
                 "Python tool versions (ansible, molecule, etc.) are also tracked and resolved.",
+                "lock, check and sync accept --scenario/-s to operate on a single scenario. Default (empty) = all scenarios discovered under scenarios/ (falls back to 'default' if scenarios/ is absent).",
+                "A scenario is valid if scenarios/<name>/ exists, OR (fallback) if any [dependencies] entry in diffusion.toml is prefixed '<name>.'. Otherwise: error 'scenario \"<name>\" not found (no scenarios/<name> directory)'.",
+                "meta/main.yml (default-scenario collections) is processed only when the selector is empty or 'default' — a scoped run for another scenario never touches meta/main.yml.",
+                "'diffusion role add-role/remove-role/add-collection/remove-collection' pass their --scenario to the lock update, so they perform a scenario-scoped lock merge.",
             ],
+            "scenario_flag": {
+                "flag": "--scenario, -s",
+                "default": "(empty = all scenarios)",
+                "applies_to": ["lock", "check", "sync"],
+                "validation": "scenarios/<name>/ directory OR '<name>.' prefix in diffusion.toml [dependencies]",
+            },
             "subcommands": {
                 "init": {
                     "usage": "diffusion deps init",
@@ -850,20 +966,40 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     ],
                 },
                 "lock": {
-                    "usage": "diffusion deps lock",
+                    "usage": "diffusion deps lock [--scenario <name>]",
                     "description": "Generate or update diffusion.lock from current dependencies in meta/main.yml, requirements.yml, and diffusion.toml",
+                    "flags": {
+                        "--scenario, -s": {
+                            "description": "Only regenerate entries for this scenario and merge them into the existing lock file",
+                            "default": "(empty = full regeneration for all scenarios)",
+                        },
+                    },
                     "behavior": [
                         "Resolves all collection and role versions from Galaxy API or git",
                         "Pins Python version and tool versions",
                         "Writes diffusion.lock (TOML format)",
+                        "With --scenario: entries of OTHER scenarios are preserved verbatim (original order), then the fresh entries of the target scenario are appended. Tools/Python metadata are global and always taken fresh.",
+                        "With --scenario but NO existing diffusion.lock: falls back to a FULL generation for all scenarios (prints 'No existing diffusion.lock found — generating full lock file for all scenarios'). A scenario-only lock file is never written.",
+                        "The lock hash is always computed over ALL scenarios, so a scoped lock has identical hash semantics to a full lock.",
+                    ],
+                    "examples": [
+                        "diffusion deps lock                 # full regeneration",
+                        "diffusion deps lock -s production   # scoped merge for 'production' only",
                     ],
                 },
                 "check": {
-                    "usage": "diffusion deps check",
+                    "usage": "diffusion deps check [--scenario <name>]",
                     "description": "Verify diffusion.lock is up-to-date with current YAML manifests",
+                    "flags": {
+                        "--scenario, -s": {
+                            "description": "Only check requirements.yml of this scenario (meta/main.yml is checked only for 'default' or when omitted)",
+                            "default": "(empty = all scenarios)",
+                        },
+                    },
                     "behavior": [
                         "Compares lock file against requirements.yml and meta.yml",
                         "Exits with code 1 if out of date (useful in CI)",
+                        "Scoped mismatch message: \"Lock file is not fitting yaml manifests for scenario <name>. Run 'diffusion deps sync -s <name>' to update.\"",
                     ],
                 },
                 "resolve": {
@@ -877,22 +1013,39 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     ],
                 },
                 "sync": {
-                    "usage": "diffusion deps sync",
+                    "usage": "diffusion deps sync [--scenario <name>]",
                     "description": "Restore dependency versions from diffusion.lock back to requirements.yml and meta/main.yml",
+                    "flags": {
+                        "--scenario, -s": {
+                            "description": "Only sync requirements.yml of this scenario (meta/main.yml is synced only for 'default' or when omitted)",
+                            "default": "(empty = all scenarios)",
+                        },
+                    },
                     "behavior": [
                         "Overwrites requirements.yml for each scenario with resolved versions from lock file",
-                        "Updates meta/main.yml collections (default scenario only)",
+                        "Updates meta/main.yml collections (default scenario only; skipped for a scoped non-default scenario)",
                         "Useful for rollback or ensuring consistency after lock file changes",
+                        "Requires an existing diffusion.lock — otherwise: \"lock file not found. Run 'diffusion deps lock' first\"",
                     ],
                 },
             },
             "examples": [
                 "diffusion deps init                # Initialize dependency tracking",
                 "diffusion deps lock                # Generate/update lock file",
+                "diffusion deps lock -s production  # Scoped lock merge for one scenario",
                 "diffusion deps check               # Verify lock file is current (CI gate)",
+                "diffusion deps check -s production # Verify one scenario only",
                 "diffusion deps resolve             # Show all resolved versions",
                 "diffusion deps sync                # Restore versions from lock to YAML files",
+                "diffusion deps sync -s production  # Restore one scenario only",
             ],
+            "github_action_integration": {
+                "action": "diffusion-update",
+                "input": "scenario",
+                "default": "(empty = all scenarios locked/checked/synced; molecule tests then run against 'default')",
+                "validation": "Must match ^[A-Za-z0-9._-]+$ — otherwise the action fails with '::error::Invalid scenario name'",
+                "note": "Passed to the CLI as a single token '--scenario=<name>' via DIFFUSION_SCENARIO_ARGS",
+            },
         },
         "cache": {
             "description": "Manage Ansible role/collection and Docker/Python package caching",
@@ -1156,6 +1309,17 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                         '"*=<base64-encoded-pem>"',
                         '"group:webservers=<base64-encoded-pem>"',
                     ],
+                    "name_validation": {
+                        "allowed_characters": "^[A-Za-z0-9_.:*-]+$ (letters, digits, '.', '-', '_', ':', '*')",
+                        "rejected": [
+                            "Empty name or any shell metacharacter / whitespace / quote / newline",
+                            "Dot-only path segments: '.', '..', or names ending in ':.' / ':..'",
+                            "Names colliding with the reserved wildcard sentinels: env suffix 'WILDCARD' (case-insensitive, e.g. 'wildcard') or filename '_wildcard_'",
+                            "A value without '=': error --ssh-key \"<value>\": expected format \"hostname=<base64>\"",
+                        ],
+                        "error_format": "--ssh-key \"<value>\": invalid SSH key/host name \"<name>\": only letters, digits, '.', '-', '_', ':', '*' are allowed",
+                        "where_enforced": "CLI flag parsing (fast usage error) AND defensively inside the deploy package (container args, host-wait probe, inventory patching, failure-state writer) because SSHKeys is also set directly by the Terraform provider",
+                    },
                 },
                 "--skip-period": {
                     "description": "Skip re-deploy if last run succeeded within this period and inputs are identical. Go duration string (e.g. '24h'). Empty = always deploy.",
@@ -1198,9 +1362,11 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "3. Fallback/Wildcard: key name is '*' or any other name — applies to all unmatched hosts",
                 ],
                 "behavior": [
-                    "Keys are passed as base64-encoded env vars into the container",
-                    "Container decodes keys to /tmp/ssh-keys/<host> at runtime",
+                    "Keys are passed as base64-encoded env vars into the container: SSH_KEY_<SANITIZED_NAME> where '-', '.', ':', '/' become '_' and the result is upper-cased (e.g. 'group:webservers' → SSH_KEY_GROUP_WEBSERVERS)",
+                    "The '*' wildcard key maps to env var SSH_KEY_WILDCARD and file /tmp/ssh-keys/_wildcard_ (never a literal '*', which would be glob-expanded in the shell)",
+                    "Container decodes keys to /tmp/ssh-keys/<host> at runtime (chmod 600)",
                     "Inventory is patched with ansible_ssh_private_key_file pointing to the decoded key",
+                    "All key names are validated (see --ssh-key name_validation) before any shell command, env var or file path is built",
                 ],
             },
             "deploy_caching": {
@@ -2022,18 +2188,58 @@ def check_deploy_cache(cache_path: str = "") -> str:
 
 
 @mcp.tool()
-def troubleshoot_ssh_keys(role: str = "", project_path: str = "") -> str:
+def troubleshoot_ssh_keys(
+    role: str = "", project_path: str = "", key_names: str = ""
+) -> str:
     """Diagnose SSH key issues for diffusion deploy.
 
     Checks: key file existence, key format (PEM headers), file permissions,
-    and common base64 encoding problems. Works both for file-based keys
-    and base64-injected keys (used by Terraform provider).
+    common base64 encoding problems, and --ssh-key / ssh_private_keys NAME
+    validity (allowlist ^[A-Za-z0-9_.:*-]+$, dot-only segments, wildcard
+    sentinel collisions). Works both for file-based keys and base64-injected
+    keys (used by Terraform provider).
 
     Args:
         role: Optional role name to check inside a running molecule container.
         project_path: Path to the project root (auto-detected if empty).
+        key_names: Optional comma-separated list of SSH key names you intend to
+                   pass (e.g. "web01,group:webservers,*"). Each is validated
+                   exactly like `diffusion deploy --ssh-key` and the resulting
+                   env var / file name is shown.
     """
     diagnostics: list[dict[str, Any]] = []
+
+    # Validate intended key names (mirrors deploy.ValidateSSHKeyName)
+    if key_names:
+        for raw_name in [n.strip() for n in key_names.split(",")]:
+            err = _validate_ssh_key_name(raw_name)
+            if err:
+                diagnostics.append(
+                    {
+                        "check": f"SSH key name: {raw_name!r}",
+                        "status": "error",
+                        "detail": err,
+                        "suggestion": "Rename the key. Allowed: letters, digits, '.', '-', '_', ':', '*'. "
+                        "Use '*' for the wildcard (not 'wildcard'/'_wildcard_'), "
+                        "'group:<name>' for a group key, or the exact inventory hostname.",
+                    }
+                )
+            else:
+                diagnostics.append(
+                    {
+                        "check": f"SSH key name: {raw_name!r}",
+                        "status": "ok",
+                        "env_var": f"SSH_KEY_{_ssh_key_env_suffix(raw_name)}",
+                        "container_path": f"/tmp/ssh-keys/{_ssh_key_file_name(raw_name)}",
+                        "routing": (
+                            "wildcard (all hosts)"
+                            if raw_name == "*"
+                            else "per-group"
+                            if raw_name.startswith("group:")
+                            else "per-host (if it matches an inventory hostname) else fallback"
+                        ),
+                    }
+                )
 
     # Check ~/.ssh directory
     ssh_dir = Path.home() / ".ssh"
@@ -2289,6 +2495,17 @@ def get_terraform_provider_reference(resource: str = "") -> str:
                         "Each value is base64-encoded automatically before passing to diffusion. "
                         "Key naming controls which hosts receive each key."
                     ),
+                    "pem_normalization": (
+                        "Literal two-character '\\n' escape sequences in a key value are converted to real newlines "
+                        "before base64 encoding. This fixes PEM keys that arrive with escaped newlines from Terraform "
+                        "interpolation (e.g. keys read from JSON/tfvars strings), which would otherwise decode to an "
+                        "invalid single-line PEM file inside the container."
+                    ),
+                    "name_validation": (
+                        "Map keys are forwarded verbatim as --ssh-key names and must satisfy the CLI allowlist "
+                        "^[A-Za-z0-9_.:*-]+$ ; names such as 'wildcard' or '_wildcard_' are rejected because they "
+                        "collide with the '*' sentinel."
+                    ),
                     "routing_rules": {
                         "per-host": "Use inventory host name as key (e.g. 'waf-01') — applies only to that host",
                         "per-group": "Prefix with 'group:' (e.g. 'group:checkpoint_waf') — applies to all hosts in that group",
@@ -2403,6 +2620,276 @@ def get_terraform_provider_reference(resource: str = "") -> str:
             return json.dumps(ref[r], indent=2)
         return f"Unknown resource '{resource}'. Available: {', '.join(ref.keys())}"
     return json.dumps(ref, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Tool: check_lock_file_scenarios
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def check_lock_file_scenarios(project_path: str = "", scenario: str = "") -> str:
+    """Analyse how diffusion.lock, scenarios/ and diffusion.toml agree per scenario.
+
+    Useful before/after `diffusion deps lock|check|sync --scenario <name>`:
+    - lists scenarios discovered under scenarios/ (fallback: default)
+    - lists scenario prefixes present in diffusion.lock and in diffusion.toml
+    - predicts whether a given --scenario value would be accepted by the CLI
+      (scenarios/<name>/ exists OR '<name>.' prefix in diffusion.toml)
+    - warns when a scoped lock would fall back to full generation (no lock file)
+    - flags lock entries whose scenario has no directory (stale scenarios)
+
+    Args:
+        project_path: Path to the project root (auto-detected if empty).
+        scenario: Optional --scenario value to validate (empty = all).
+    """
+    root = Path(project_path) if project_path else _find_project_root()
+    if root is None:
+        return "Error: Could not find project root."
+
+    report: dict[str, Any] = {"project_root": str(root)}
+    warnings: list[str] = []
+
+    dir_scenarios = _discover_scenarios(root)
+    has_scenarios_dir = (root / "scenarios").is_dir()
+    report["scenarios_dir_present"] = has_scenarios_dir
+    report["scenarios_from_directory"] = dir_scenarios
+
+    toml_scenarios = sorted(_toml_dependency_scenarios(root))
+    report["scenarios_from_diffusion_toml"] = toml_scenarios
+
+    lock_path = root / "diffusion.lock"
+    lock_data: dict[str, Any] | None = None
+    if lock_path.exists():
+        try:
+            lock_data = _load_toml(lock_path)
+        except Exception:
+            try:
+                lock_data = _load_yaml(lock_path)
+            except Exception as e:
+                return f"Error parsing diffusion.lock: {e}"
+    report["lock_file_present"] = lock_data is not None
+
+    if lock_data is not None:
+        per_scen = _lock_scenarios(lock_data)
+        report["lock_entries_by_scenario"] = per_scen
+        for scen in per_scen:
+            if scen != "(unprefixed)" and scen not in dir_scenarios and scen not in toml_scenarios:
+                warnings.append(
+                    f"diffusion.lock has entries for scenario '{scen}' but neither scenarios/{scen}/ "
+                    f"nor a '{scen}.' prefix in diffusion.toml exists — a full 'diffusion deps lock' will drop them."
+                )
+        for scen in dir_scenarios:
+            if scen not in per_scen and (root / "scenarios" / scen / "requirements.yml").exists():
+                warnings.append(
+                    f"scenarios/{scen}/requirements.yml exists but diffusion.lock has no '{scen}.' entries. "
+                    f"Run 'diffusion deps lock -s {scen}' (or a full 'diffusion deps lock')."
+                )
+    else:
+        warnings.append(
+            "No diffusion.lock. 'diffusion deps lock --scenario X' will FALL BACK to a full generation "
+            "for all scenarios; 'diffusion deps sync' / 'deps check' will fail until a lock exists."
+        )
+
+    # Predict CLI acceptance of the selector
+    sel = scenario.strip()
+    if sel:
+        accepted = (
+            (root / "scenarios" / sel).is_dir()
+            or (sel == "default" and not has_scenarios_dir)
+            or sel in toml_scenarios
+        )
+        verdict: dict[str, Any] = {
+            "selector": sel,
+            "accepted_by_cli": accepted,
+            "touches_meta_main_yml": sel == "default",
+        }
+        if not accepted:
+            verdict["expected_error"] = (
+                f'scenario "{sel}" not found (no scenarios/{sel} directory)'
+            )
+            verdict["suggestion"] = (
+                f"Create scenarios/{sel}/ (with requirements.yml) or add a '{sel}.<name>' "
+                "dependency to diffusion.toml, or omit --scenario to operate on all scenarios."
+            )
+        report["selector_check"] = verdict
+    else:
+        report["selector_check"] = {
+            "selector": "(empty = all scenarios)",
+            "resolves_to": dir_scenarios,
+            "touches_meta_main_yml": True,
+        }
+
+    report["warnings"] = warnings
+    report["summary"] = "ok" if not warnings else f"{len(warnings)} warning(s)"
+    return json.dumps(report, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_troubleshooting_guide
+# ---------------------------------------------------------------------------
+
+
+_TROUBLESHOOTING_CASES: dict[str, dict[str, Any]] = {
+    "deps-scenario-not-found": {
+        "area": "deps",
+        "symptom": 'scenario "<name>" not found (no scenarios/<name> directory)',
+        "trigger": "diffusion deps lock|check|sync --scenario <name> (or role add-role/… --scenario <name>)",
+        "cause": "The scenario is neither a directory under scenarios/ nor referenced as a '<name>.' prefix by any dependency in diffusion.toml.",
+        "fix": [
+            "Check spelling: scenario names are case-sensitive directory names.",
+            "Create scenarios/<name>/requirements.yml, or add a '<name>.<dep>' entry to diffusion.toml.",
+            "Omit --scenario to operate on all discovered scenarios.",
+            "Use MCP tool check_lock_file_scenarios(scenario=<name>) to see what the CLI will accept.",
+        ],
+    },
+    "deps-scoped-lock-full-fallback": {
+        "area": "deps",
+        "symptom": "No existing diffusion.lock found — generating full lock file for all scenarios",
+        "trigger": "diffusion deps lock --scenario <name> when diffusion.lock does not exist",
+        "cause": "A scenario-scoped lock is a MERGE into an existing lock. Without one, diffusion refuses to write a lock containing only one scenario and regenerates everything instead.",
+        "fix": [
+            "This is informational, not an error. Commit the full lock; subsequent -s runs will merge.",
+            "If resolution of another scenario fails during the fallback, fix that scenario first or temporarily remove it.",
+        ],
+    },
+    "deps-check-scoped-mismatch": {
+        "area": "deps",
+        "symptom": "Lock file is not fitting yaml manifests for scenario <name>. Run 'diffusion deps sync -s <name>' to update. (exit 1)",
+        "trigger": "diffusion deps check --scenario <name>",
+        "cause": "requirements.yml of that scenario (and meta/main.yml if <name> == default) disagrees with resolved versions in diffusion.lock.",
+        "fix": [
+            "To make YAML follow the lock: diffusion deps sync -s <name>",
+            "To make the lock follow YAML: diffusion deps lock -s <name> then deps check -s <name>",
+            "Note meta/main.yml is only compared for 'default' or when --scenario is omitted.",
+        ],
+    },
+    "deps-meta-not-updated-for-scenario": {
+        "area": "deps",
+        "symptom": "meta/main.yml collections unchanged after deps sync -s <non-default>",
+        "trigger": "diffusion deps sync --scenario production",
+        "cause": "By design meta/main.yml only carries default-scenario collections; scoped runs for other scenarios never touch it.",
+        "fix": ["Run 'diffusion deps sync' (all) or 'diffusion deps sync -s default'."],
+    },
+    "deps-lock-drops-scenario": {
+        "area": "deps",
+        "symptom": "Entries for a scenario vanished from diffusion.lock after a full 'diffusion deps lock'",
+        "trigger": "diffusion deps lock (no --scenario)",
+        "cause": "Full generation only includes scenarios discovered under scenarios/ (+ diffusion.toml). A scenario directory was removed/renamed while stale lock entries remained.",
+        "fix": [
+            "Restore the scenarios/<name>/ directory, or accept the removal.",
+            "Use check_lock_file_scenarios to spot stale lock scenarios before locking.",
+        ],
+    },
+    "deploy-ssh-key-format": {
+        "area": "deploy",
+        "symptom": '--ssh-key "<value>": expected format "hostname=<base64>"',
+        "trigger": "diffusion deploy --ssh-key <value> without an '=' separator",
+        "cause": "Previously such values were silently ignored; they are now a hard usage error.",
+        "fix": ["Use 'name=<base64>' e.g. --ssh-key \"*=$(base64 -w0 id_rsa)\"."],
+    },
+    "deploy-ssh-key-invalid-name": {
+        "area": "deploy",
+        "symptom": "invalid SSH key/host name \"<name>\": only letters, digits, '.', '-', '_', ':', '*' are allowed",
+        "trigger": "diffusion deploy --ssh-key, or Terraform diffusion_deploy.ssh_private_keys map key",
+        "cause": "Key names are interpolated into shell commands, env var names and file paths inside the container, so they are restricted to a strict allowlist (^[A-Za-z0-9_.:*-]+$). Spaces, quotes, '/', '$', ';' etc. are rejected.",
+        "fix": [
+            "Use the inventory hostname, 'group:<groupname>', '*' or a plain alphanumeric fallback name.",
+            "Validate with MCP tool troubleshoot_ssh_keys(key_names='web01,group:web,*').",
+        ],
+    },
+    "deploy-ssh-key-dot-segment": {
+        "area": "deploy",
+        "symptom": 'invalid SSH key/host name "<name>": dot-only path segments are not allowed',
+        "trigger": "--ssh-key name of '.', '..', or ending in ':.' / ':..'",
+        "cause": "Would produce a path-traversal-like file name under /tmp/ssh-keys/.",
+        "fix": ["Choose a real hostname or group name."],
+    },
+    "deploy-ssh-key-wildcard-collision": {
+        "area": "deploy",
+        "symptom": "invalid SSH key/host name \"<name>\": collides with the reserved wildcard (\"*\") key sentinel",
+        "trigger": "--ssh-key name such as 'wildcard', 'WILDCARD', or '_wildcard_'",
+        "cause": "The '*' key is stored as env var SSH_KEY_WILDCARD and file /tmp/ssh-keys/_wildcard_; another key sanitising to the same names would silently clobber it.",
+        "fix": ["Use '*' for the actual wildcard key and any other name (e.g. 'default') for a fallback key."],
+    },
+    "deploy-failure-state-not-written": {
+        "area": "deploy",
+        "symptom": "warning: could not write failure state to remote hosts: invalid SSH key/host name …",
+        "trigger": "Deploy failed AND SSHKeys contained an invalid name (only reachable via direct API use, e.g. an older Terraform provider)",
+        "cause": "The failure-state writer validates key names defensively and refuses to build a shell command from an unsafe name.",
+        "fix": ["Fix the key name; the deploy itself would already have failed for the same reason via the CLI."],
+    },
+    "terraform-pem-escaped-newlines": {
+        "area": "terraform",
+        "symptom": "Load key \"/tmp/ssh-keys/<name>\": invalid format / error in libcrypto during host wait or playbook",
+        "trigger": "diffusion_deploy.ssh_private_keys value built from a string that contains literal '\\n' sequences (tfvars JSON, templatefile, remote state)",
+        "cause": "The PEM arrived as one line with escaped newlines. Provider versions from 009ca4e onward normalise literal '\\n' to real newlines before base64 encoding; older providers do not.",
+        "fix": [
+            "Upgrade the terraform-provider-diffusion.",
+            "Or pass tls_private_key.<x>.private_key_openssh / file() output directly, which already contains real newlines.",
+            "Inside the container: docker exec molecule-<role> head -1 /tmp/ssh-keys/<name> should print '-----BEGIN …'.",
+        ],
+    },
+    "action-update-invalid-scenario": {
+        "area": "github-actions",
+        "symptom": "::error::Invalid scenario name: '<value>'. Must match ^[A-Za-z0-9._-]+$",
+        "trigger": "diffusion-update action with a 'scenario' input containing spaces or shell characters",
+        "cause": "The action forwards the value as a single '--scenario=<name>' token and rejects anything that could word-split or inject.",
+        "fix": ["Pass a plain scenario directory name, or leave 'scenario' empty to process all scenarios (tests then run on 'default')."],
+    },
+    "action-test-cgroup-user-slice": {
+        "area": "github-actions",
+        "symptom": "WARNING: /sys/fs/cgroup/user.slice/user-1000.service is missing; rootless volume mounting may not work",
+        "trigger": "diffusion-test action on Ubuntu/Debian runners (step 'Check cgroup v2 user.slice for rootless volume mounting')",
+        "cause": "Rootless Docker inside the molecule container relies on cgroup v2 delegation for the runner's user manager. The check is non-fatal and only diagnostic.",
+        "fix": [
+            "On self-hosted runners: ensure systemd user manager is running (loginctl enable-linger <user>) and cgroup v2 is enabled.",
+            "The AppArmor relaxation step (kernel.apparmor_restrict_unprivileged_userns=0) is now non-fatal ('|| true') — failure there no longer aborts the job.",
+        ],
+    },
+}
+
+
+@mcp.tool()
+def get_troubleshooting_guide(query: str = "") -> str:
+    """Look up known Diffusion failure modes and their fixes.
+
+    Covers deps --scenario scoping, deploy --ssh-key name validation,
+    Terraform provider PEM normalisation, and diffusion-test / diffusion-update
+    GitHub Action diagnostics.
+
+    Args:
+        query: Case id (e.g. "deploy-ssh-key-invalid-name"), an area
+               ("deps", "deploy", "terraform", "github-actions"), or free text
+               matched against symptoms/triggers. Empty = list all cases.
+    """
+    q = query.strip().lower()
+    if not q:
+        return json.dumps(
+            {
+                cid: {"area": c["area"], "symptom": c["symptom"]}
+                for cid, c in _TROUBLESHOOTING_CASES.items()
+            },
+            indent=2,
+        )
+    if q in _TROUBLESHOOTING_CASES:
+        return json.dumps({q: _TROUBLESHOOTING_CASES[q]}, indent=2)
+
+    matches = {
+        cid: c
+        for cid, c in _TROUBLESHOOTING_CASES.items()
+        if q == c["area"]
+        or q in cid
+        or q in c["symptom"].lower()
+        or q in c["trigger"].lower()
+        or q in c["cause"].lower()
+    }
+    if not matches:
+        return (
+            f"No troubleshooting case matched {query!r}. "
+            f"Available ids: {', '.join(_TROUBLESHOOTING_CASES)}"
+        )
+    return json.dumps(matches, indent=2)
 
 
 # ---------------------------------------------------------------------------

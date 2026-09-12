@@ -11,6 +11,9 @@ All notable changes to the Diffusion project will be documented in this file.
   - A scoped `deps lock` merges into the existing `diffusion.lock`, preserving entries of other scenarios
   - A scoped run against a non-default scenario skips `meta/main.yml` (default-scenario collections only)
   - If no `diffusion.lock` exists yet, a scoped lock falls back to generating the full file for all scenarios
+  - The scenario must exist as `scenarios/<name>/` or be referenced by a `<name>.`-prefixed dependency in `diffusion.toml`; otherwise `scenario "<name>" not found`
+
+- **Deploy SSH Key Routing**: `--ssh-key` names now support `group:<groupname>=<base64>` (all hosts in a group) and arbitrary fallback names in addition to per-host and `*` wildcard keys. Priority: per-host > group > fallback/wildcard
 
 - **`diffusion docs` Command**: Auto-generate role variable documentation in README.md
   - Scans `defaults/main.yml`, `vars/main.yml`, `templates/`, and `tasks/` for variables
@@ -20,7 +23,8 @@ All notable changes to the Diffusion project will be documented in this file.
   - Flags: `--path` / `-p` (role directory), `--dry-run` (preview without writing)
 
 - **MCP Server**: Model Context Protocol server for AI assistant integration
-  - 16 tools for container management, validation, troubleshooting, and CLI reference
+  - 23 tools for container management, validation, troubleshooting, deploy diagnostics, and CLI / Terraform reference
+  - New tools: `docker_in_docker_in_molecule`, `update_diffusion_docs`, `troubleshoot_deploy`, `check_deploy_cache`, `troubleshoot_ssh_keys` (now validates intended `--ssh-key` names), `get_terraform_provider_reference`, `check_lock_file_scenarios`, `get_troubleshooting_guide`
   - Built with FastMCP (Python 3.11+), runs via `uv` or Docker container
   - Container image: `ghcr.io/polar-team/diffusion-mcp-server` (multi-arch: amd64, arm64)
   - Tools include: `get_diffusion_config`, `list_molecule_containers`, `inspect_molecule_container`, `docker_exec_in_molecule`, `check_molecule_yml`, `check_verify_yml`, `troubleshoot_molecule_container`, `run_diffusion_command`, and more
@@ -50,7 +54,13 @@ All notable changes to the Diffusion project will be documented in this file.
   - `make dist-provider` — Build Terraform provider for all platforms
   - `make dist-all` — Build both diffusion CLI and provider for all platforms
 
+### Security
+- **Deploy SSH Key Name Sanitization**: `--ssh-key` / `ssh_private_keys` names are validated against the allowlist `^[A-Za-z0-9_.:*-]+$` before being interpolated into container env vars, file paths or shell commands. Dot-only segments (`.`, `..`, `group:..`) and names colliding with the wildcard sentinels (`wildcard`, `_wildcard_`) are rejected. Validation is enforced at CLI flag parsing and defensively inside the deploy package (container args, host-wait probe, inventory patching, failure-state writer)
+- **Wildcard Key Env Var**: The `*` key is now exported as `SSH_KEY_WILDCARD` (file `/tmp/ssh-keys/_wildcard_`) instead of a name containing a literal `*` that could be glob-expanded by the shell
+
 ### Changed
+- **`--ssh-key` Without `=`**: A value lacking the `=` separator is now a usage error (`expected format "hostname=<base64>"`) instead of being silently ignored
+- **`diffusion-test` Action**: AppArmor `kernel.apparmor_restrict_unprivileged_userns=0` step is now non-fatal; new diagnostic step checks the cgroup v2 `user.slice/user-1000.service` path required for rootless volume mounting on Ubuntu 24.04 runners (warning only)
 - **Role Commands Re-Lock Scoped**: `role add-role`, `role remove-role`, `role add-collection`, and `role remove-collection` now re-lock only their `--scenario` instead of regenerating the whole lock file
 - **`diffusion-update` Action**: `scenario` input default changed from `default` to empty (= all scenarios); the scenario name is now validated
 - **Go Version**: Upgraded to Go 1.25.4
@@ -60,6 +70,7 @@ All notable changes to the Diffusion project will be documented in this file.
 - **Molecule Container**: Alpine packages updated (git 2.52.0, curl 8.19.0, openssl 3.5.7, gcc 15.2.0)
 
 ### Fixed
+- **Terraform Provider — PEM Keys With Escaped Newlines**: `ssh_private_keys` values containing literal `\n` sequences (e.g. keys interpolated from JSON/tfvars strings) are normalised to real newlines before base64 encoding, so the key decodes to a valid PEM file inside the container
 - **`deps check` / `deps sync` in Repositories Without `scenarios/default/`**: Both commands failed with `open scenarios/default/requirements.yml: no such file or directory` when processing `meta/main.yml`; they now read `meta/main.yml` directly
 
 ## [0.8.3] - 2026-08-02
