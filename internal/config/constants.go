@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -176,14 +177,12 @@ func ValidatePythonVersion(version string) (string, error) {
 	normalized := ExtractMajorMinor(version)
 
 	// Check if it's an allowed version
-	for _, allowed := range AllowedPythonVersions {
-		if normalized == allowed {
-			return normalized, nil
-		}
+	if slices.Contains(AllowedPythonVersions, normalized) {
+		return normalized, nil
 	}
 
 	// Not allowed
-	return "", fmt.Errorf("Python version %s is not allowed. Allowed versions: 3.13, 3.12, 3.11", version)
+	return "", fmt.Errorf("python version %s is not allowed. Allowed versions: 3.13, 3.12, 3.11", version)
 }
 
 // ExtractMajorMinor extracts major.minor from a version string
