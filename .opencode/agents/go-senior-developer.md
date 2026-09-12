@@ -15,13 +15,8 @@ permission:
     "dev-new-features/*.md": allow
   bash:
     "*": ask
-    "go build ./...": allow
-    "go test ./...": allow
-    "go test -v ./...": allow
-    "go vet ./...": allow
-    "go fmt ./...": allow
-    "go mod tidy": allow
-    "go mod download": allow
+    "gofmt*": allow
+    "go*": allow
     "make build": allow
     "make test": allow
     "make clean": allow
