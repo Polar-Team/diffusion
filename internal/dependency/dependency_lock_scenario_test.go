@@ -89,7 +89,7 @@ Version = ">=7.4.0"
 	}
 
 	// Update lock file
-	err = UpdateLockFile()
+	err = UpdateLockFile("")
 	if err != nil {
 		t.Fatalf("UpdateLockFile() error = %v", err)
 	}

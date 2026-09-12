@@ -58,12 +58,15 @@ git clone https://github.com/Polar-Team/diffusion.git && cd diffusion && make bu
 diffusion role --init          # scaffold a new Ansible role
 diffusion deps init            # add dependency config
 diffusion deps lock            # pin all versions to diffusion.lock
+diffusion deps lock -s prod    # re-lock only the 'prod' scenario (others preserved)
 diffusion molecule             # converge
 diffusion molecule --verify    # verify
 diffusion molecule --lint      # lint
 diffusion molecule --idempotence
 diffusion molecule --destroy
 ```
+
+`deps lock`, `deps check` and `deps sync` accept `--scenario` / `-s`. Omitted means all scenarios. A non-default scenario skips `meta/main.yml` (it only ever holds default-scenario collections). If no `diffusion.lock` exists yet, a scoped lock generates the full file for every scenario.
 
 ## [Commands](https://polar-team.github.io/diffusion#cmd-molecule)
 

@@ -302,8 +302,11 @@ func ValidateLockFile(lockFile *LockFile, collections []config.CollectionRequire
 	return lockFile.Hash == currentHash, nil
 }
 
-// UpdateLockFile updates the lock file with current dependencies
-func UpdateLockFile() error {
+// UpdateLockFile updates the lock file with current dependencies.
+// When scenario is empty, the whole lock file is regenerated. Otherwise only
+// the entries belonging to the given scenario are regenerated and merged into
+// the existing lock file.
+func UpdateLockFile(scenario string) error {
 	// Load current configuration
 	depConfig, err := LoadDependencyConfig()
 	if err != nil {
@@ -355,13 +358,66 @@ func UpdateLockFile() error {
 		toolVersions["yamllint"] = config.DefaultYamlLintVersion
 	}
 
-	// Generate and save lock file
-	lockFile, err := GenerateLockFile(collections, roles, toolVersions, pythonVersion)
+	// generateAndSaveFull regenerates the complete lock file for every scenario.
+	generateAndSaveFull := func() error {
+		lockFile, err := GenerateLockFile(collections, roles, toolVersions, pythonVersion)
+		if err != nil {
+			return fmt.Errorf("failed to generate lock file: %w", err)
+		}
+
+		if err := SaveLockFile(lockFile); err != nil {
+			return fmt.Errorf("failed to save lock file: %w", err)
+		}
+
+		return nil
+	}
+
+	if scenario == "" {
+		return generateAndSaveFull()
+	}
+
+	// Scenario-scoped update: regenerate only the entries of this scenario.
+	if _, err := ResolveScenarios(scenario); err != nil {
+		return err
+	}
+
+	// Load the existing lock file BEFORE generating anything: a scoped update
+	// only makes sense as a merge into an existing lock file. Without one we
+	// would emit a lock file that silently omits every other scenario.
+	existing, err := LoadLockFile()
+	if err != nil {
+		return fmt.Errorf("failed to load existing lock file: %w", err)
+	}
+	if NeedsFullGeneration(scenario, existing) {
+		fmt.Println("No existing diffusion.lock found — generating full lock file for all scenarios")
+		return generateAndSaveFull()
+	}
+
+	prefix := scenario + "."
+	scopedCollections := make([]config.CollectionRequirement, 0, len(collections))
+	for _, col := range collections {
+		if strings.HasPrefix(col.Name, prefix) {
+			scopedCollections = append(scopedCollections, col)
+		}
+	}
+	scopedRoles := make([]config.RoleRequirement, 0, len(roles))
+	for _, r := range roles {
+		if strings.HasPrefix(r.Name, prefix) {
+			scopedRoles = append(scopedRoles, r)
+		}
+	}
+
+	fresh, err := GenerateLockFile(scopedCollections, scopedRoles, toolVersions, pythonVersion)
 	if err != nil {
 		return fmt.Errorf("failed to generate lock file: %w", err)
 	}
 
-	if err := SaveLockFile(lockFile); err != nil {
+	// Hash semantics must stay identical to a full lock.
+	fresh.Hash = ComputeDependencyHash(collections, roles, toolVersions, pythonVersion)
+
+	merged := MergeLockFileForScenario(existing, fresh, scenario)
+
+	if err := SaveLockFile(merged); err != nil {
 		return fmt.Errorf("failed to save lock file: %w", err)
 	}
 
@@ -370,7 +426,8 @@ func UpdateLockFile() error {
 
 // CheckLockFileStatus checks if YAML manifests (requirements.yml, meta.yml)
 // are in sync with the lock file. It compares names and resolved versions.
-func CheckLockFileStatus() (bool, error) {
+// When scenario is empty, all scenarios are checked.
+func CheckLockFileStatus(scenario string) (bool, error) {
 	lockFile, err := LoadLockFile()
 	if err != nil {
 		return false, err
@@ -380,21 +437,9 @@ func CheckLockFileStatus() (bool, error) {
 		return false, nil // No lock file exists
 	}
 
-	// Discover scenarios from scenarios/ directory
-	scenarios := []string{}
-	scenariosDir := "scenarios"
-	if info, err := os.Stat(scenariosDir); err == nil && info.IsDir() {
-		entries, err := os.ReadDir(scenariosDir)
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					scenarios = append(scenarios, entry.Name())
-				}
-			}
-		}
-	}
-	if len(scenarios) == 0 {
-		scenarios = append(scenarios, "default")
+	scenarios, err := ResolveScenarios(scenario)
+	if err != nil {
+		return false, err
 	}
 
 	// Check requirements.yml for each scenario
@@ -477,8 +522,15 @@ func CheckLockFileStatus() (bool, error) {
 		}
 	}
 
-	// Check meta.yml — only default scenario collections
-	meta, _, err := role.LoadRoleConfig("")
+	// Check meta.yml — only default scenario collections.
+	// Skipped only when a specific non-default scenario was requested.
+	if !IncludesDefaultScenario(scenario) {
+		return true, nil
+	}
+
+	// Only meta/main.yml is needed here; ParseMetaFile avoids requiring a
+	// scenarios/default/requirements.yml that may not exist.
+	meta, err := role.ParseMetaFile()
 	if err != nil {
 		return false, fmt.Errorf("failed to load meta config: %w", err)
 	}
