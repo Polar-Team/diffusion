@@ -231,6 +231,67 @@ func ParseCollectionString(col string) (name, version string) {
 	return
 }
 
+// IsGitURL reports whether the given string looks like a git remote URL
+// rather than a Galaxy "namespace.name" identifier.
+func IsGitURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	return strings.Contains(s, "://") || strings.HasPrefix(s, "git@")
+}
+
+// collectionURLPrefixes are the conventional repository name prefixes used for
+// Ansible collections. They are stripped when deriving a short collection name.
+var collectionURLPrefixes = []string{"ansible-collection-", "ansible_collection_", "ansible-collection_", "ansible_collection-"}
+
+// DeriveCollectionShortName derives a short collection name from a git URL.
+// It takes the repository basename, strips a trailing ".git", removes the
+// conventional "ansible-collection-"/"ansible_collection_" prefixes and
+// replaces any remaining dots with underscores (dots are reserved as scenario
+// prefixes in diffusion.toml collection keys).
+//
+//	https://github.com/org/ansible-collection-foo.git -> foo
+//	git@github.com:org/my.repo.git                    -> my_repo
+func DeriveCollectionShortName(gitURL string) string {
+	name := strings.TrimSpace(gitURL)
+	name = strings.TrimSuffix(name, "/")
+
+	// Basename: everything after the last '/' or ':' (scp-like syntax).
+	if idx := strings.LastIndexAny(name, "/:"); idx != -1 {
+		name = name[idx+1:]
+	}
+
+	name = strings.TrimSuffix(name, ".git")
+
+	for _, prefix := range collectionURLPrefixes {
+		if len(name) > len(prefix) && strings.HasPrefix(strings.ToLower(name), prefix) {
+			name = name[len(prefix):]
+			break
+		}
+	}
+
+	return strings.ReplaceAll(name, ".", "_")
+}
+
+// ValidateCLIArgument rejects a value that would be interpreted as a command
+// line option by an external tool rather than as a positional argument.
+//
+// This matters because URLs and refs can originate from third-party
+// diffusion.lock / diffusion.toml files pulled in during transitive dependency
+// resolution. A value such as "--upload-pack=/bin/sh" handed to `git clone`
+// would execute arbitrary commands. Call sites additionally pass "--" before
+// their positionals where the tool supports it; this guard covers the tools
+// that do not.
+//
+// kind is used in the error message (e.g. "url", "ref", "role").
+func ValidateCLIArgument(kind, value string) error {
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("refusing to use %q: %s looks like a command line option", value, kind)
+	}
+	return nil
+}
+
 // RunCommandCapture executes a command with context and returns its output
 func RunCommandCapture(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)

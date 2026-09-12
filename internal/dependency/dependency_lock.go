@@ -25,6 +25,7 @@ type LockFileEntry struct {
 	PythonDeps      map[string]string `yaml:"python_deps,omitempty"` // Python dependencies with versions
 	Src             string            `yaml:"src,omitempty"`         // Source URL for roles (git repo)
 	Source          string            `yaml:"scm,omitempty"`         // SCM type for roles (git, hg, etc.)
+	RequiredBy      string            `yaml:"required_by,omitempty"` // Identity of the dependency that pulled this in (empty = direct)
 }
 
 // LockFile represents the diffusion.lock file structure
@@ -41,6 +42,15 @@ type LockFile struct {
 const (
 	LockFileVersion = "1.0"
 )
+
+// IsGitCollection reports whether a lock file collection entry describes a
+// git-sourced collection rather than a Galaxy one.
+func IsGitCollection(entry LockFileEntry) bool {
+	if entry.Source == "git" {
+		return true
+	}
+	return entry.Src != "" && entry.Source != "galaxy"
+}
 
 // LoadLockFile loads the diffusion.lock file
 func LoadLockFile() (*LockFile, error) {
@@ -108,10 +118,11 @@ func GenerateLockFile(collections []config.CollectionRequirement, roles []config
 		}
 
 		if col.Source != "galaxy" {
-			// For non-Galaxy sources we are trying to resolve from git
+			// For non-Galaxy sources we are trying to resolve from git.
+			// A missing source URL is a configuration error — dropping the
+			// dependency silently would produce an incomplete lock file.
 			if col.SourceURL == "" {
-				log.Printf("Skipping collection %s: missing source URL for non-Galaxy source %s", col.Name, col.Source)
-				continue
+				return nil, fmt.Errorf("collection %s: missing SourceURL for non-Galaxy source %q", col.Name, col.Source)
 			}
 
 			resolvedVersion, err := galaxy.ResolveVersionFromGit(col.SourceURL, col.Version)
@@ -302,11 +313,26 @@ func ValidateLockFile(lockFile *LockFile, collections []config.CollectionRequire
 	return lockFile.Hash == currentHash, nil
 }
 
+// LockOptions tunes a lock file update.
+type LockOptions struct {
+	// Transitive overrides the diffusion.toml [dependencies].transitive
+	// setting. nil means "use the configured value" (which defaults to true).
+	Transitive *bool
+}
+
 // UpdateLockFile updates the lock file with current dependencies.
 // When scenario is empty, the whole lock file is regenerated. Otherwise only
 // the entries belonging to the given scenario are regenerated and merged into
 // the existing lock file.
+//
+// Transitive resolution follows the diffusion.toml configuration; use
+// UpdateLockFileWithOptions to override it.
 func UpdateLockFile(scenario string) error {
+	return UpdateLockFileWithOptions(scenario, LockOptions{})
+}
+
+// UpdateLockFileWithOptions is UpdateLockFile with explicit overrides.
+func UpdateLockFileWithOptions(scenario string, opts LockOptions) error {
 	// Load current configuration
 	depConfig, err := LoadDependencyConfig()
 	if err != nil {
@@ -358,11 +384,32 @@ func UpdateLockFile(scenario string) error {
 		toolVersions["yamllint"] = config.DefaultYamlLintVersion
 	}
 
+	// Transitive resolution settings are shared by both generation paths.
+	transitiveEnabled := depConfig.TransitiveEnabled()
+	if opts.Transitive != nil {
+		transitiveEnabled = *opts.Transitive
+	}
+	transitiveOpts := TransitiveOptions{
+		Enabled:      transitiveEnabled,
+		SelfIdentity: DetectSelfIdentity(),
+	}
+	if transitiveEnabled {
+		transitiveOpts.Creds = loadArtifactCredentials()
+		warnOnWeakSelfIdentity(transitiveOpts.SelfIdentity)
+	}
+
 	// generateAndSaveFull regenerates the complete lock file for every scenario.
 	generateAndSaveFull := func() error {
 		lockFile, err := GenerateLockFile(collections, roles, toolVersions, pythonVersion)
 		if err != nil {
 			return fmt.Errorf("failed to generate lock file: %w", err)
+		}
+
+		if transitiveEnabled {
+			lockFile, err = expandTransitiveAllScenarios(lockFile, transitiveOpts)
+			if err != nil {
+				return err
+			}
 		}
 
 		if err := SaveLockFile(lockFile); err != nil {
@@ -412,6 +459,15 @@ func UpdateLockFile(scenario string) error {
 		return fmt.Errorf("failed to generate lock file: %w", err)
 	}
 
+	if transitiveEnabled {
+		expanded, warnings, err := ResolveTransitive(scenario, fresh, transitiveOpts)
+		if err != nil {
+			return fmt.Errorf("failed to resolve transitive dependencies for scenario %s: %w", scenario, err)
+		}
+		printTransitiveWarnings(warnings)
+		fresh = expanded
+	}
+
 	// Hash semantics must stay identical to a full lock.
 	fresh.Hash = ComputeDependencyHash(collections, roles, toolVersions, pythonVersion)
 
@@ -458,14 +514,20 @@ func CheckLockFileStatus(scenario string) (bool, error) {
 			if !strings.HasPrefix(col.Name, prefix) {
 				continue
 			}
+			version := col.ResolvedVersion
+			if version == "" {
+				version = col.Version
+			}
+			if IsGitCollection(col) {
+				// Git collections are keyed by their repository URL in
+				// requirements.yml (ansible-galaxy git collection format).
+				expectedCols[col.Src] = version
+				continue
+			}
 			colName := strings.TrimPrefix(col.Name, prefix)
 			yamlName := colName
 			if col.Namespace != "" {
 				yamlName = col.Namespace + "." + colName
-			}
-			version := col.ResolvedVersion
-			if version == "" {
-				version = col.Version
 			}
 			expectedCols[yamlName] = version
 		}
@@ -540,6 +602,11 @@ func CheckLockFileStatus(scenario string) (bool, error) {
 	expectedMeta := map[string]bool{}
 	for _, col := range lockFile.Collections {
 		if !strings.HasPrefix(col.Name, defaultPrefix) {
+			continue
+		}
+		if IsGitCollection(col) {
+			// meta/main.yml collections only accept "namespace.name" — git
+			// collections cannot be represented there.
 			continue
 		}
 		colName := strings.TrimPrefix(col.Name, defaultPrefix)

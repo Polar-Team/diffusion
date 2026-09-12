@@ -240,8 +240,10 @@ func ComputeDependencyHash(collections []config.CollectionRequirement, roles []c
 		return collections[i].Name < collections[j].Name
 	})
 	for _, col := range collections {
-		// Resolve collection version using namespace and name separately
-		if col.Namespace != "" {
+		isGalaxy := col.Source == "" || col.Source == "galaxy"
+		// Resolve collection version using namespace and name separately.
+		// Non-Galaxy sources (e.g. git) must not be looked up on Galaxy.
+		if isGalaxy && col.Namespace != "" {
 			// Strip scenario prefix from collection name (e.g., "default.general" -> "general")
 			colName := col.Name
 			if parts := strings.SplitN(colName, ".", 2); len(parts) == 2 {
@@ -253,7 +255,18 @@ func ComputeDependencyHash(collections []config.CollectionRequirement, roles []c
 				col.Version = resolvedVersion
 			}
 		}
-		_, err := fmt.Fprintf(h, "collection:%s:%s:%s\n", col.Namespace, col.Name, col.Version)
+
+		// Hash line compatibility: a project with only Galaxy collections must
+		// produce exactly the same hash as before git collections existed, so
+		// that adding this feature does not invalidate every existing
+		// diffusion.lock. The Source/SourceURL fields are only appended when
+		// they actually carry information.
+		var err error
+		if isGalaxy && col.SourceURL == "" {
+			_, err = fmt.Fprintf(h, "collection:%s:%s:%s\n", col.Namespace, col.Name, col.Version)
+		} else {
+			_, err = fmt.Fprintf(h, "collection:%s:%s:%s:%s:%s\n", col.Namespace, col.Name, col.Version, col.Source, col.SourceURL)
+		}
 		if err != nil {
 			fmt.Printf("Error hashing collection: %v\n", err)
 		}

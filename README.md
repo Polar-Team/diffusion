@@ -59,6 +59,7 @@ diffusion role --init          # scaffold a new Ansible role
 diffusion deps init            # add dependency config
 diffusion deps lock            # pin all versions to diffusion.lock
 diffusion deps lock -s prod    # re-lock only the 'prod' scenario (others preserved)
+diffusion deps lock --no-transitive   # skip nested dependency resolution
 diffusion molecule             # converge
 diffusion molecule --verify    # verify
 diffusion molecule --lint      # lint
@@ -66,7 +67,28 @@ diffusion molecule --idempotence
 diffusion molecule --destroy
 ```
 
+```bash
+# Add dependencies
+diffusion role add-collection general --namespace community                              # collection from Galaxy
+diffusion role add-collection foo --src https://github.com/org/ansible-collection-foo.git --version main   # collection from git
+```
+
 `deps lock`, `deps check` and `deps sync` accept `--scenario` / `-s`. Omitted means all scenarios. A non-default scenario skips `meta/main.yml` (it only ever holds default-scenario collections). If no `diffusion.lock` exists yet, a scoped lock generates the full file for every scenario.
+
+### Transitive dependencies
+
+When a git-sourced role or collection's repository itself contains a `diffusion.lock` (or just a `diffusion.toml`), `deps lock` pulls that repo's **default-scenario** collections and roles into your lock file, recursing through nested git dependencies up to a depth of 10. Version constraints from all sources are intersected, and every pulled-in entry records a `required_by` field naming the dependency that required it.
+
+Duplicates and cycles are skipped with a warning — including a dependency that points back at your own repository, whose identity is detected from the git `origin` URL and the `role_name` in `meta/main.yml`. Only the remote's `default` scenario is imported; its other scenarios are its own testing concern.
+
+Disable it per-run with `--no-transitive`, or permanently in `diffusion.toml`:
+
+```toml
+[dependencies]
+transitive = false
+```
+
+Note that git-sourced collections cannot be expressed in `meta/main.yml` (it only accepts `namespace.name`), so they are skipped there and written to `requirements.yml` only.
 
 ## [Commands](https://polar-team.github.io/diffusion#cmd-molecule)
 

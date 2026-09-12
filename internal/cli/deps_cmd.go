@@ -35,19 +35,32 @@ Generates diffusion.lock file and updates pyproject.toml for the molecule contai
 // newDepsLockCmd creates the lock subcommand
 func newDepsLockCmd() *cobra.Command {
 	var scenario string
+	var noTransitive bool
 
 	cmd := &cobra.Command{
 		Use:   "lock",
 		Short: "Generate or update diffusion.lock file",
 		Long: `Generate or update the diffusion.lock file based on current dependencies
-from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
+from meta/main.yml, requirements.yml, and diffusion.toml configuration.
+
+Git dependencies that are themselves diffusion projects contribute their own
+dependencies to the lock file (transitive resolution). Cycles and duplicates
+are skipped with a warning. Use --no-transitive to lock direct dependencies
+only.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if scenario != "" {
 				fmt.Printf("Generating lock file for scenario %s...\n", scenario)
 			} else {
 				fmt.Println("Generating lock file...")
 			}
-			if err := dependency.UpdateLockFile(scenario); err != nil {
+
+			opts := dependency.LockOptions{}
+			if noTransitive {
+				disabled := false
+				opts.Transitive = &disabled
+			}
+
+			if err := dependency.UpdateLockFileWithOptions(scenario, opts); err != nil {
 				return fmt.Errorf("failed to update lock file: %w", err)
 			}
 			fmt.Printf("\033[32m%s\033[0m\n", config.MsgLockFileGenerated)
@@ -56,6 +69,7 @@ from meta/main.yml, requirements.yml, and diffusion.toml configuration.`,
 	}
 
 	cmd.Flags().StringVarP(&scenario, "scenario", "s", "", "Molecule scenario to operate on (default: all scenarios)")
+	cmd.Flags().BoolVar(&noTransitive, "no-transitive", false, "Do not resolve nested dependencies of git-sourced roles and collections")
 
 	return cmd
 }
@@ -142,11 +156,17 @@ func newDepsResolveCmd() *cobra.Command {
 				if parts := strings.SplitN(col.Name, ".", 2); len(parts) == 2 {
 					scenario = parts[0]
 					colName := parts[1]
-					if col.Namespace != "" {
+					if col.Namespace != "" && !dependency.IsGitCollection(col) {
 						displayName = col.Namespace + "." + colName
 					} else {
 						displayName = colName
 					}
+				}
+				if dependency.IsGitCollection(col) {
+					displayName = fmt.Sprintf("%s (git: %s)", displayName, col.Src)
+				}
+				if col.RequiredBy != "" {
+					displayName = fmt.Sprintf("%s (via %s)", displayName, col.RequiredBy)
 				}
 				constraint := col.Version
 				resolved := col.ResolvedVersion
@@ -178,6 +198,9 @@ func newDepsResolveCmd() *cobra.Command {
 						} else {
 							displayName = roleName
 						}
+					}
+					if r.RequiredBy != "" {
+						displayName = fmt.Sprintf("%s (via %s)", displayName, r.RequiredBy)
 					}
 					constraint := r.Version
 					resolved := r.ResolvedVersion
@@ -236,7 +259,15 @@ func newDepsInitCmd() *cobra.Command {
 				Roles:       []config.RoleRequirement{},
 			}
 
-			// Scan for existing requirements.yml files in scenario folders
+			// Scan for existing requirements.yml files in scenario folders.
+			//
+			// Note: this deliberately scans the YAML manifests, never
+			// diffusion.lock. Transitively resolved entries (LockFileEntry with
+			// RequiredBy != "") therefore never leak into diffusion.toml as if
+			// they were direct dependencies — they are re-derived from their
+			// parent on every `deps lock`. Requirements.yml does contain them
+			// after `deps sync`, but `deps init` only runs on a project that
+			// has no [dependencies] section yet.
 			fmt.Println("Scanning for existing requirements.yml files...")
 			scenariosDir := "scenarios"
 			if _, err := os.Stat(scenariosDir); err == nil {
@@ -261,6 +292,34 @@ func newDepsInitCmd() *cobra.Command {
 
 								// Add collections from this scenario
 								for _, col := range req.Collections {
+									// Git-sourced collection: the YAML "name" is
+									// the repository URL, so derive a short name
+									// for the diffusion.toml key.
+									if col.Type == "git" || utils.IsGitURL(col.Name) {
+										shortName := utils.DeriveCollectionShortName(col.Name)
+										configName := scenarioName + "." + shortName
+
+										exists := false
+										for _, existing := range cfg.DependencyConfig.Collections {
+											if existing.Name == configName {
+												exists = true
+												break
+											}
+										}
+										if exists {
+											continue
+										}
+
+										cfg.DependencyConfig.Collections = append(cfg.DependencyConfig.Collections, config.CollectionRequirement{
+											Name:      configName,
+											Source:    "git",
+											SourceURL: col.Name,
+											Version:   col.Version,
+										})
+										fmt.Printf("    + Added git collection: %s (src: %s) %s\n", configName, col.Name, col.Version)
+										continue
+									}
+
 									// Parse namespace and name from collection name (format: "namespace.name")
 									colParts := strings.SplitN(col.Name, ".", 2)
 									var namespace, colName string
@@ -410,6 +469,16 @@ func newDepsInitCmd() *cobra.Command {
 	}
 }
 
+// viaSuffix renders the transitive-origin annotation for console output.
+// It is console-only on purpose: requirements.yml stays plain YAML with no
+// diffusion-specific comments, so ansible-galaxy consumes it unchanged.
+func viaSuffix(requiredBy string) string {
+	if requiredBy == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (via %s)", requiredBy)
+}
+
 // newDepsSyncCmd creates the sync subcommand
 func newDepsSyncCmd() *cobra.Command {
 	var scenarioFlag string
@@ -450,6 +519,26 @@ func newDepsSyncCmd() *cobra.Command {
 					if !strings.HasPrefix(col.Name, colPrefix) {
 						continue
 					}
+
+					version := col.ResolvedVersion
+					if version == "" {
+						version = col.Version
+					}
+
+					// Git collections use the ansible-galaxy git format:
+					//   - name: <git url>
+					//     type: git
+					//     version: <ref>
+					if dependency.IsGitCollection(col) {
+						req.Collections = append(req.Collections, role.RequirementCollection{
+							Name:    col.Src,
+							Type:    "git",
+							Version: version,
+						})
+						fmt.Printf("  + %s (git): %s%s\n", col.Src, version, viaSuffix(col.RequiredBy))
+						continue
+					}
+
 					// Strip scenario prefix from collection name
 					colName := strings.TrimPrefix(col.Name, colPrefix)
 					// Reconstruct namespace.name format for YAML output
@@ -458,15 +547,11 @@ func newDepsSyncCmd() *cobra.Command {
 						yamlName = col.Namespace + "." + colName
 					}
 
-					version := col.ResolvedVersion
-					if version == "" {
-						version = col.Version
-					}
 					req.Collections = append(req.Collections, role.RequirementCollection{
 						Name:    yamlName,
 						Version: version,
 					})
-					fmt.Printf("  + %s: %s\n", yamlName, version)
+					fmt.Printf("  + %s: %s%s\n", yamlName, version, viaSuffix(col.RequiredBy))
 				}
 
 				// Sync roles to requirements.yml
@@ -506,7 +591,7 @@ func newDepsSyncCmd() *cobra.Command {
 						Src:     lockRole.Src,    // Restore git URL
 						Scm:     lockRole.Source, // Restore SCM type
 					})
-					fmt.Printf("  + %s: %s\n", yamlRoleName, version)
+					fmt.Printf("  + %s: %s%s\n", yamlRoleName, version, viaSuffix(lockRole.RequiredBy))
 				}
 				// Save requirements.yml
 				if err := role.SaveRequirementFile(req, scenario); err != nil {
@@ -537,6 +622,12 @@ func newDepsSyncCmd() *cobra.Command {
 			for _, col := range lockFile.Collections {
 				if !strings.HasPrefix(col.Name, defaultColPrefix) {
 					continue // Only default scenario collections go into meta.yml
+				}
+				if dependency.IsGitCollection(col) {
+					// meta/main.yml collections only accept "namespace.name";
+					// git collections live in requirements.yml only.
+					fmt.Printf("  \033[33m- skipping git collection %s (not expressible in meta/main.yml)\033[0m\n", col.Src)
+					continue
 				}
 				// Strip scenario prefix and reconstruct namespace.name format
 				colName := strings.TrimPrefix(col.Name, defaultColPrefix)

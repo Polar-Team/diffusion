@@ -34,6 +34,19 @@ type DependencyConfig struct {
 	YamlLint    string                  `toml:"yamllint,omitempty"`     // e.g., ">=1.35.0"
 	Collections []CollectionRequirement `toml:"collections,omitempty"`
 	Roles       []RoleRequirement       `toml:"roles,omitempty"` // Roles per scenario: scenario.role_name
+	// Transitive enables nested ("transitive") dependency resolution: git
+	// dependencies that are themselves diffusion projects contribute their own
+	// dependencies to our lock file. A nil pointer means enabled (the default).
+	Transitive *bool `toml:"transitive,omitempty"`
+}
+
+// TransitiveEnabled reports whether transitive dependency resolution is on.
+// A nil DependencyConfig or a nil Transitive field both mean "enabled".
+func (dc *DependencyConfig) TransitiveEnabled() bool {
+	if dc == nil || dc.Transitive == nil {
+		return true
+	}
+	return *dc.Transitive
 }
 
 // RoleRequirement represents a role with version constraints
@@ -188,6 +201,13 @@ func LoadConfig() (*Config, error) {
 	}
 	configPath := filepath.Join(projectDir, "diffusion.toml")
 
+	return LoadConfigFrom(configPath)
+}
+
+// LoadConfigFrom reads and parses a diffusion.toml from an explicit path.
+// Unlike LoadConfig it does not assume the current working directory, which
+// makes it usable for inspecting cloned remote repositories.
+func LoadConfigFrom(configPath string) (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)

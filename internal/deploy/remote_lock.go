@@ -10,8 +10,7 @@ import (
 
 	"diffusion/internal/config"
 	"diffusion/internal/dependency"
-
-	"gopkg.in/yaml.v3"
+	"diffusion/internal/utils"
 )
 
 // RoleSource describes a remote Ansible role repo to fetch a diffusion.lock from.
@@ -99,40 +98,21 @@ func FetchRemoteLocks(sources []RoleSource, creds []config.ArtifactCredentials) 
 
 // fetchLockFromGit shallow-clones the git repo and reads diffusion.lock from
 // its root. Supports authenticated repos via ArtifactCredentials.
+// The clone/parse logic lives in internal/dependency so the transitive
+// resolver can share it.
 func fetchLockFromGit(src RoleSource, creds []config.ArtifactCredentials) (*dependency.LockFile, error) {
 	if src.URL == "" {
 		return nil, fmt.Errorf("URL is required for SCM=git")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "diffusion-remote-lock-*")
+	manifest, err := dependency.FetchLockFromGit(src.URL, src.Version, creds)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temp dir: %w", err)
+		return nil, err
 	}
-	defer func() {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			log.Printf(config.ColorYellow+"warning: failed to clean temp dir %s: %v"+config.ColorReset, tmpDir, err)
-		}
-	}()
-
-	cloneArgs := []string{"clone", "--depth", "1", "--no-tags"}
-
-	// Resolve the ref: for git we use Version as the branch/tag/commit ref.
-	ref := resolveGitRef(src.Version)
-	if ref != "" {
-		cloneArgs = append(cloneArgs, "--branch", ref)
+	if manifest == nil {
+		return nil, nil
 	}
-
-	cloneArgs = append(cloneArgs, src.URL, tmpDir)
-
-	cmd := exec.Command("git", cloneArgs...)
-	cmd.Env = buildGitEnv(src.URL, creds)
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("git clone failed: %w\n%s", err, string(out))
-	}
-
-	return readLockFromDir(tmpDir)
+	return manifest.Lock, nil
 }
 
 // fetchLockFromGalaxy downloads the role tarball from Ansible Galaxy at the
@@ -147,6 +127,15 @@ func fetchLockFromGalaxy(src RoleSource) (*dependency.LockFile, error) {
 		return nil, fmt.Errorf("invalid galaxy name %q: expected \"namespace.role_name\" format", src.Galaxy)
 	}
 	namespace, roleName := parts[0], parts[1]
+
+	// The galaxy name and version end up as a positional argument;
+	// ansible-galaxy has no "--" terminator, so reject option-like values.
+	if err := utils.ValidateCLIArgument("galaxy name", src.Galaxy); err != nil {
+		return nil, err
+	}
+	if err := utils.ValidateCLIArgument("version", src.Version); err != nil {
+		return nil, err
+	}
 
 	tmpDir, err := os.MkdirTemp("", "diffusion-galaxy-lock-*")
 	if err != nil {
@@ -178,89 +167,6 @@ func fetchLockFromGalaxy(src RoleSource) (*dependency.LockFile, error) {
 	// ansible-galaxy installs into <tmpDir>/<namespace>.<rolename>/
 	roleDir := filepath.Join(tmpDir, fmt.Sprintf("%s.%s", namespace, roleName))
 	return readLockFromDir(roleDir)
-}
-
-// readLockFromDir reads and parses diffusion.lock from the given directory.
-// Returns (nil, nil) if the file does not exist (role has no lock).
-func readLockFromDir(dir string) (*dependency.LockFile, error) {
-	lockPath := filepath.Join(dir, config.LockFileName)
-
-	data, err := os.ReadFile(lockPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read %s: %w", config.LockFileName, err)
-	}
-
-	var lf dependency.LockFile
-	if err := yaml.Unmarshal(data, &lf); err != nil {
-		return nil, fmt.Errorf("failed to parse %s: %w", config.LockFileName, err)
-	}
-
-	return &lf, nil
-}
-
-// resolveGitRef converts a version constraint or ref name into a usable git ref.
-// Plain semver constraints like ">=1.0.0" cannot be used as a branch; in that
-// case we return "" to clone the default branch and let the merger handle version
-// resolution later.
-func resolveGitRef(version string) string {
-	if version == "" || version == "latest" {
-		return ""
-	}
-	// If it looks like a constraint operator, clone default branch.
-	if strings.HasPrefix(version, ">=") || strings.HasPrefix(version, "<=") ||
-		strings.HasPrefix(version, ">") || strings.HasPrefix(version, "<") ||
-		strings.HasPrefix(version, "==") {
-		return ""
-	}
-	return version
-}
-
-// buildGitEnv constructs an os.Environ slice injecting GIT_ASKPASS and
-// credential env vars for the matching artifact credential, following the
-// GIT_USER_* / GIT_PASSWORD_* / GIT_URL_* convention used in molecule.go.
-func buildGitEnv(repoURL string, creds []config.ArtifactCredentials) []string {
-	env := os.Environ()
-
-	for _, cred := range creds {
-		if cred.URL == "" || !strings.Contains(repoURL, stripScheme(cred.URL)) {
-			continue
-		}
-		// Use a sanitised key suffix derived from the credential name.
-		key := sanitizeEnvKey(cred.Name)
-		env = append(env,
-			fmt.Sprintf("%s%s=%s", config.EnvGitUserPrefix, key, cred.Username),
-			fmt.Sprintf("%s%s=%s", config.EnvGitPassPrefix, key, cred.Password),
-			fmt.Sprintf("%s%s=%s", config.EnvGitURLPrefix, key, cred.URL),
-		)
-
-		// Configure git credential helper inline so git uses our env vars.
-		// GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n is the
-		// portable way to inject git config without touching ~/.gitconfig.
-		env = append(env,
-			"GIT_CONFIG_COUNT=1",
-			"GIT_CONFIG_KEY_0=credential.helper",
-			fmt.Sprintf("GIT_CONFIG_VALUE_0=!f(){ echo username=$%s%s; echo password=$%s%s; }; f",
-				config.EnvGitUserPrefix, key,
-				config.EnvGitPassPrefix, key),
-		)
-		break
-	}
-
-	return env
-}
-
-func stripScheme(u string) string {
-	for _, pfx := range []string{"https://", "http://", "git@"} {
-		u = strings.TrimPrefix(u, pfx)
-	}
-	return u
-}
-
-func sanitizeEnvKey(name string) string {
-	return strings.ToUpper(strings.NewReplacer("-", "_", ".", "_", " ", "_").Replace(name))
 }
 
 func sourceLabel(src RoleSource) string {

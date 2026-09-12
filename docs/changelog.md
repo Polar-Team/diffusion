@@ -5,6 +5,26 @@ All notable changes to the Diffusion project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Git-Sourced Collections**: Collections can now be installed from a git repository instead of Ansible Galaxy
+  - New `--src` (git URL), `--scm` (default `git`), and `--version` / `-v` flags on `diffusion role add-collection`
+  - `--namespace` / `-n` stays required for Galaxy collections but is optional for git collections
+  - With `--version` omitted the highest tag is resolved from the remote and stored as `>=<version>`; a branch name (`main`, `develop`, …) or an explicit constraint is stored verbatim
+  - `requirements.yml` uses the ansible-galaxy git collection shape: `name: <git url>`, `type: git`, `version: <ref>`. Galaxy entries keep their existing `name` / `version` output unchanged
+  - `deps init` recognises git collections in an existing `requirements.yml` (by `type: git` or a URL-shaped name) and derives the `diffusion.toml` key from the repository basename, stripping `ansible-collection-` / `ansible_collection_` prefixes
+  - `deps sync` writes git collections to `requirements.yml`; `deps check` compares them by repository URL
+  - Git collections cannot be expressed in `meta/main.yml` (it only accepts `namespace.name`) and are skipped there with a note
+  - `deps resolve` displays them as `<name> (git: <url>)`
+
+- **Transitive Dependency Resolution**: A git-sourced role or collection whose repository contains a `diffusion.lock` (or only a `diffusion.toml`) now contributes its own dependencies to your lock file
+  - Only the remote's `default` scenario is imported; entries are re-prefixed with the scenario that pulled them in
+  - Recurses through nested git dependencies up to a depth of 10; exceeding the limit emits a warning and stops descending
+  - Version constraints from all sources are intersected and re-resolved
+  - New `required_by` field on lock file entries records which dependency pulled an entry in; `deps resolve` and `deps sync` show it as `(via <id>)` (console output only — `requirements.yml` stays plain YAML)
+  - Duplicates and cycles are skipped with a warning, including a dependency that points back at your own repository; self-identity is detected from the git `origin` URL, the `role_name` / `namespace.role_name` in `meta/main.yml`, and the working directory name
+  - Repository identities are compared after normalisation, so `https://GitHub.com/Org/Repo.git/` and `git@github.com:org/repo` are recognised as the same repo
+  - A dependency that cannot be fetched is a warning, not a fatal error — the remaining dependencies still resolve
+  - New `--no-transitive` flag on `diffusion deps lock`, and a `transitive` key under `[dependencies]` in `diffusion.toml` (defaults to `true`)
+
 - **Scenario-Scoped Dependency Commands**:
   - New `--scenario` / `-s` flag on `diffusion deps lock`, `diffusion deps check`, and `diffusion deps sync`
   - Omitted (default) operates on all scenarios, preserving previous behaviour
@@ -55,10 +75,13 @@ All notable changes to the Diffusion project will be documented in this file.
   - `make dist-all` — Build both diffusion CLI and provider for all platforms
 
 ### Security
+- **Git Argument Injection Hardening**: `git clone` and `git ls-remote` invocations now pass `--` before positional arguments and reject URLs, refs and version constraints that start with `-` (e.g. `--upload-pack=...`, which git would execute as a command). This matters for transitive dependency resolution, where URLs and refs originate from third-party `diffusion.lock` / `diffusion.toml` files. The same `-`-prefix guard is applied to the positional arguments of `ansible-galaxy role install` and `ansible-galaxy role init`, which have no `--` terminator
 - **Deploy SSH Key Name Sanitization**: `--ssh-key` / `ssh_private_keys` names are validated against the allowlist `^[A-Za-z0-9_.:*-]+$` before being interpolated into container env vars, file paths or shell commands. Dot-only segments (`.`, `..`, `group:..`) and names colliding with the wildcard sentinels (`wildcard`, `_wildcard_`) are rejected. Validation is enforced at CLI flag parsing and defensively inside the deploy package (container args, host-wait probe, inventory patching, failure-state writer)
 - **Wildcard Key Env Var**: The `*` key is now exported as `SSH_KEY_WILDCARD` (file `/tmp/ssh-keys/_wildcard_`) instead of a name containing a literal `*` that could be glob-expanded by the shell
 
 ### Changed
+- **Lock Merge Output Is Sorted**: `deploy`'s lock-merge step now emits merged collections, roles and tools in sorted key order instead of Go's randomised map iteration order, producing stable lock files across runs
+- **`deps lock` Fails Loudly On Missing `source_url`**: `deps lock` now fails with a clear error when a non-Galaxy collection has no `source_url` (previously silently skipped)
 - **`--ssh-key` Without `=`**: A value lacking the `=` separator is now a usage error (`expected format "hostname=<base64>"`) instead of being silently ignored
 - **`diffusion-test` Action**: AppArmor `kernel.apparmor_restrict_unprivileged_userns=0` step is now non-fatal; new diagnostic step checks the cgroup v2 `user.slice/user-1000.service` path required for rootless volume mounting on Ubuntu 24.04 runners (warning only)
 - **Role Commands Re-Lock Scoped**: `role add-role`, `role remove-role`, `role add-collection`, and `role remove-collection` now re-lock only their `--scenario` instead of regenerating the whole lock file
