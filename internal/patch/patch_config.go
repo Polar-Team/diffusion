@@ -30,6 +30,14 @@ type PatchingTask struct {
 	NewBecome      *PatchBecomeSetup  `yaml:"new_become_user,omitempty"`
 	NewEnvironment []PatchEnvironment `yaml:"new_environment,omitempty"`
 	NewBlock       []PatchingTask     `yaml:"new_block,omitempty"`
+	// NewFileSrc overlays a file from the scenario patch folder
+	// (scenarios/<scenario>/patch/files/<value>) onto the leaf task's
+	// recorded file src. Only the src is replaced; dest is unchanged.
+	NewFileSrc string `yaml:"new_file_src,omitempty"`
+	// NewTemplateSrc overlays a template from the scenario patch folder
+	// (scenarios/<scenario>/patch/templates/<value>) onto the leaf task's
+	// recorded template src. Only the src is replaced.
+	NewTemplateSrc string `yaml:"new_template_src,omitempty"`
 }
 
 type PatchConditions struct {
@@ -193,22 +201,90 @@ func (b *PatchBundle) validateRoleName() error {
 		b.PatchBundleName, roleName, scenario, strings.Join(available, ", "))
 }
 
-// validate implements Validate. allowEmptyID is true for entries nested
-// under NewBlock, which describe fresh tasks and therefore carry no
-// target task_id of their own.
-func (t *PatchingTask) validate() error {
+// splitTaskID separates the optional 'h' handler prefix from the numeric
+// segments: "h2" -> (true, [2]); "1.3.1" -> (false, [1 3 1]). The prefix
+// is case-insensitive and canonicalizes to lowercase "h".
+func splitTaskID(taskID string) (handler bool, parts []int, err error) {
+	trimmed := strings.TrimSpace(taskID)
+	if len(trimmed) > 1 && (trimmed[0] == 'h' || trimmed[0] == 'H') {
+		handler = true
+		trimmed = strings.TrimSpace(trimmed[1:])
+	}
+	parts, err = ParseTaskID(trimmed)
+	if err != nil {
+		return false, nil, err
+	}
+	return handler, parts, nil
+}
+
+// canonicalAnyID returns the normalized form of a task or handler ID
+// (" 1.2 " -> "1.2", "H2" -> "h2").
+func canonicalAnyID(taskID string) (string, error) {
+	handler, parts, err := splitTaskID(taskID)
+	if err != nil {
+		return "", err
+	}
+	str := make([]string, len(parts))
+	for i, n := range parts {
+		str[i] = strconv.Itoa(n)
+	}
+	out := strings.Join(str, ".")
+	if handler {
+		out = "h" + out
+	}
+	return out, nil
+}
+
+// parentAnyID returns the parent of a task or handler ID ("1.3.1" -> "1.3",
+// "h1.2" -> "h1"). It returns "" for top-level IDs and invalid input.
+func parentAnyID(taskID string) string {
+	handler, parts, err := splitTaskID(taskID)
+	if err != nil || len(parts) <= 1 {
+		return ""
+	}
+	str := make([]string, len(parts)-1)
+	for i, n := range parts[:len(parts)-1] {
+		str[i] = strconv.Itoa(n)
+	}
+	out := strings.Join(str, ".")
+	if handler {
+		out = "h" + out
+	}
+	return out
+}
+
+// isHandlerID reports whether the ID addresses a handler ("h1", "h1.2").
+func isHandlerID(taskID string) bool {
+	handler, _, err := splitTaskID(taskID)
+	return err == nil && handler
+}
+
+// validate implements Validate. scenario scopes overlay lookups under
+// scenarios/<scenario>/patch/{files,templates} (empty means "default").
+func (t *PatchingTask) validate(scenario string) error {
 	if t == nil {
 		return fmt.Errorf(config.ColorRed + "patching bundles is nil" + config.ColorReset)
 	}
 	id := strings.TrimSpace(t.TaskId)
 	if id == "" {
 		return fmt.Errorf(config.ColorRed + "patching task: task_id is required" + config.ColorReset)
-	} else if _, err := ParseTaskID(id); err != nil {
+	} else if _, _, err := splitTaskID(id); err != nil {
 		return fmt.Errorf(config.ColorRed+"patching task %q: %w"+config.ColorReset, t.TaskId, err)
 	}
 	if t.NewModule == "" && len(t.NewModuleSetup) == 0 && len(t.NewConditions) == 0 &&
-		t.NewBecome == nil && len(t.NewEnvironment) == 0 && len(t.NewBlock) == 0 {
+		t.NewBecome == nil && len(t.NewEnvironment) == 0 && len(t.NewBlock) == 0 &&
+		strings.TrimSpace(t.NewFileSrc) == "" && strings.TrimSpace(t.NewTemplateSrc) == "" {
 		return fmt.Errorf(config.ColorRed+"patching task %q: no patch action specified"+config.ColorReset, t.TaskId)
+	}
+	if strings.TrimSpace(t.NewFileSrc) != "" && strings.TrimSpace(t.NewTemplateSrc) != "" {
+		return fmt.Errorf(config.ColorRed+"patching task %q: new_file_src and new_template_src are mutually exclusive"+config.ColorReset, t.TaskId)
+	}
+	if (strings.TrimSpace(t.NewFileSrc) != "" || strings.TrimSpace(t.NewTemplateSrc) != "") &&
+		(t.NewModule != "" || len(t.NewModuleSetup) > 0) {
+		return fmt.Errorf(config.ColorRed+"patching task %q: src overlay cannot be combined with new_module/new_module_setup"+config.ColorReset, t.TaskId)
+	}
+	if err := t.validateOverlays(scenario); err != nil {
+		return err
 	}
 	for i := range t.NewConditions {
 		c := &t.NewConditions[i]
@@ -236,11 +312,47 @@ func (t *PatchingTask) validate() error {
 		return fmt.Errorf(config.ColorRed+"patching task %q: become setup sets neither user nor become"+config.ColorReset, t.TaskId)
 	}
 	for i := range t.NewBlock {
-		if err := t.NewBlock[i].validate(); err != nil {
+		if err := t.NewBlock[i].validate(scenario); err != nil {
 			return fmt.Errorf(config.ColorRed+"patching task %q block %d: %w"+config.ColorReset, t.TaskId, i, err)
 		}
 	}
 	return nil
+}
+
+// validateOverlays checks that file/template src overrides point at real
+// files inside the scenario patch folder:
+// scenarios/<scenario>/patch/files|templates/<value>. Only the src is
+// replaced at apply time; absolute paths and escapes are rejected.
+func (t *PatchingTask) validateOverlays(scenario string) error {
+	if strings.TrimSpace(scenario) == "" {
+		scenario = config.DefaultScenario
+	}
+	check := func(value, subdir, field string) error {
+		v := strings.TrimSpace(value)
+		if v == "" {
+			return nil
+		}
+		if filepath.IsAbs(v) {
+			return fmt.Errorf(config.ColorRed+"patching task %q: %s must be relative, got %q"+config.ColorReset, t.TaskId, field, value)
+		}
+		rel := filepath.FromSlash(v)
+		if clean := filepath.Clean(rel); clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf(config.ColorRed+"patching task %q: %s escapes the patch folder: %q"+config.ColorReset, t.TaskId, field, value)
+		}
+		full := overlaySourcePath(scenario, subdir, v)
+		info, err := os.Stat(full)
+		if err != nil {
+			return fmt.Errorf(config.ColorRed+"patching task %q: %s overlay not found: %s"+config.ColorReset, t.TaskId, field, full)
+		}
+		if info.IsDir() {
+			return fmt.Errorf(config.ColorRed+"patching task %q: %s overlay is a directory: %s"+config.ColorReset, t.TaskId, field, full)
+		}
+		return nil
+	}
+	if err := check(t.NewFileSrc, "files", "new_file_src"); err != nil {
+		return err
+	}
+	return check(t.NewTemplateSrc, "templates", "new_template_src")
 }
 
 // Validate reports whether the bundle is well-formed: non-empty name,
@@ -259,12 +371,13 @@ func (b *PatchBundle) validate() error {
 		return fmt.Errorf(config.ColorRed+"patch bundle %q: no tasks to patch"+config.ColorReset, b.PatchBundleName)
 	}
 	seen := make(map[string]struct{}, len(b.TasksToPatch))
+	scenario := strings.TrimSpace(b.Scenario)
 	for i := range b.TasksToPatch {
 		task := &b.TasksToPatch[i]
-		if err := task.validate(); err != nil {
+		if err := task.validate(scenario); err != nil {
 			return fmt.Errorf(config.ColorRed+"patch bundle %q task %d: %w"+config.ColorReset, b.PatchBundleName, i, err)
 		}
-		canon, err := canonicalTaskID(task.TaskId)
+		canon, err := canonicalAnyID(task.TaskId)
 		if err != nil {
 			return fmt.Errorf(config.ColorRed+"patch bundle %q task %d: %w"+config.ColorReset, b.PatchBundleName, i, err)
 		}

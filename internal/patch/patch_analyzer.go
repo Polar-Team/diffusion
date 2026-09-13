@@ -21,6 +21,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -31,6 +32,7 @@ import (
 
 	"diffusion/internal/cache"
 	"diffusion/internal/config"
+	"diffusion/internal/utils"
 )
 
 // Artifact kinds recorded as evidence on a leaf task.
@@ -67,6 +69,14 @@ var branchPalette = []string{
 	"\033[38;5;229m", // pale yellow
 }
 
+// FileIndex locates one task statement: Index-th entry of File's task
+// list (0-based). A leaf's Path chains these hops from the entry file,
+// so patch.go can re-descend to the exact YAML node.
+type FileIndex struct {
+	File  string `yaml:"file"`
+	Index int    `yaml:"index"`
+}
+
 // ArtifactLeaf is display evidence attached to a leaf task: a file or
 // template reference, or a handler notification. Leaves are addressable;
 // artifacts are not (they share the owning leaf's ID).
@@ -89,6 +99,7 @@ type TaskNode struct {
 	Tags      []string       `yaml:"tags,omitempty"`
 	Branch    string         `yaml:"branch,omitempty"` // enclosing top-level branch ("1"), "" for top-level leaves
 	Artifacts []ArtifactLeaf `yaml:"artifacts,omitempty"`
+	Path      []FileIndex    `yaml:"path,omitempty"` // hop chain from the entry file to this task
 }
 
 // BranchNode is a visual-only include/block grouping. It is never a patch
@@ -105,10 +116,12 @@ type BranchNode struct {
 	Notify  []string `yaml:"notify,omitempty"`
 	Warning string   `yaml:"warning,omitempty"`
 	Color   string   `yaml:"-"`
+	Path    []FileIndex `yaml:"path,omitempty"` // hop chain from the entry file to this statement
 }
 
 // RoleAnalysis is the result of analyzing one role's tasks/ tree.
 type RoleAnalysis struct {
+	RoleName  string              `yaml:"role_name"`
 	RolePath  string              `yaml:"role_path"`
 	Scenario  string              `yaml:"scenario"`
 	Leaves    []*TaskNode         `yaml:"leaves"`
@@ -127,6 +140,10 @@ type TreeOptions struct {
 	FilterTags []string
 	// NoColor disables all ANSI colors (use for CI/piped output).
 	NoColor bool
+	// Overlays annotates leaves with overlay sources: leaf ID (any form)
+	// -> display path (e.g. "patch/files/banner.custom"), rendered as
+	// "<= <path>" on the leaf line.
+	Overlays map[string]string
 }
 
 // reservedTaskKeys are task mapping keys that never denote a module.
@@ -282,6 +299,7 @@ func stringParam(args map[string]any, keys ...string) string {
 // walker accumulates analysis state while expanding the tasks/ tree.
 type walker struct {
 	roleRoot   string
+	idPrefix   string // "h" while expanding handlers/, "" for tasks/
 	leaves     []*TaskNode
 	branches   []*BranchNode
 	files      map[string][]string
@@ -290,6 +308,23 @@ type walker struct {
 	warnings   []string
 	branchByID map[string]*BranchNode
 	stack      []string // in-progress files for cycle detection (role-relative, slash)
+}
+
+// idOf renders numeric segments with the walker's namespace prefix.
+func (w *walker) idOf(level []int) string {
+	id := dottedID(level)
+	if w.idPrefix != "" {
+		id = w.idPrefix + id
+	}
+	return id
+}
+
+// extendPath returns base plus one hop, without aliasing base.
+func extendPath(base []FileIndex, file string, index int) []FileIndex {
+	out := make([]FileIndex, len(base)+1)
+	copy(out, base)
+	out[len(base)] = FileIndex{File: file, Index: index}
+	return out
 }
 
 // warn records a diagnostic without aborting the walk.
@@ -311,8 +346,9 @@ func (w *walker) insideRoot(targetRel string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// walkFile expands one tasks/*.yml file, numbering its entries under prefix.
-func (w *walker) walkFile(rel string, prefix []int) {
+// walkFile expands one tasks/*.yml or handlers/*.yml file, numbering its
+// entries under prefix. base is the hop chain leading to this file.
+func (w *walker) walkFile(rel string, prefix []int, base []FileIndex) {
 	full := filepath.Join(w.roleRoot, filepath.FromSlash(rel))
 	data, err := os.ReadFile(full)
 	if err != nil {
@@ -340,7 +376,7 @@ func (w *walker) walkFile(rel string, prefix []int) {
 	}
 	w.stack = append(w.stack, rel)
 	defer func() { w.stack = w.stack[:len(w.stack)-1] }()
-	w.walkList(items, rel, prefix)
+	w.walkList(items, rel, prefix, base)
 }
 
 // mappingEntries returns the key order and first-seen value per key.
@@ -361,10 +397,11 @@ func mappingEntries(n *yaml.Node) ([]string, map[string]*yaml.Node) {
 }
 
 // walkList enumerates one task list, assigning IDs prefix+index.
-func (w *walker) walkList(items []*yaml.Node, fileRel string, prefix []int) {
+func (w *walker) walkList(items []*yaml.Node, fileRel string, prefix []int, base []FileIndex) {
 	for i, item := range items {
 		level := append(append([]int{}, prefix...), i+1)
-		id := dottedID(level)
+		id := w.idOf(level)
+		hop := extendPath(base, fileRel, i)
 		if item == nil || item.Kind != yaml.MappingNode {
 			w.warn("%s: entry %d is not a task mapping, skipped", fileRel, i+1)
 			continue
@@ -379,7 +416,7 @@ func (w *walker) walkList(items []*yaml.Node, fileRel string, prefix []int) {
 		if vals["block"] != nil || vals["rescue"] != nil || vals["always"] != nil {
 			w.addBranch(&BranchNode{
 				ID: id, File: fileRel, Line: item.Line, Name: name,
-				Kind: BranchBlock, Tags: tags, Notify: notify,
+				Kind: BranchBlock, Tags: tags, Notify: notify, Path: hop,
 			})
 			var sub []*yaml.Node
 			for _, key := range []string{"block", "rescue", "always"} {
@@ -387,13 +424,13 @@ func (w *walker) walkList(items []*yaml.Node, fileRel string, prefix []int) {
 					sub = append(sub, seq.Content...)
 				}
 			}
-			w.walkList(sub, fileRel, level)
+			w.walkList(sub, fileRel, level, hop)
 			continue
 		}
 
 		// include_tasks/import_tasks form a file branch.
 		if mod, key := w.branchKey(vals, BranchIncludeTasks, BranchImportTasks); key != "" {
-			w.walkInclude(id, fileRel, item.Line, name, mod, vals[key], tags, notify)
+			w.walkInclude(id, hop, fileRel, item.Line, name, mod, vals[key], tags, notify)
 			continue
 		}
 
@@ -403,12 +440,12 @@ func (w *walker) walkList(items []*yaml.Node, fileRel string, prefix []int) {
 			target := w.roleTarget(vals[key])
 			w.addBranch(&BranchNode{
 				ID: id, File: fileRel, Line: item.Line, Name: name,
-				Kind: mod, Target: target, Opaque: true, Tags: tags, Notify: notify,
+				Kind: mod, Target: target, Opaque: true, Tags: tags, Notify: notify, Path: hop,
 			})
 			continue
 		}
 
-		w.addLeaf(id, level, fileRel, item, vals, name, tags, notify)
+		w.addLeaf(id, level, hop, fileRel, item, vals, name, tags, notify)
 	}
 }
 
@@ -428,11 +465,11 @@ func (w *walker) branchKey(vals map[string]*yaml.Node, mods ...string) (string, 
 
 // walkInclude expands an include_tasks/import_tasks branch or records it
 // as opaque when the target is dynamic, missing, cyclic or out of root.
-func (w *walker) walkInclude(id, fileRel string, line int, name, mod string, val *yaml.Node, tags, notify []string) {
+func (w *walker) walkInclude(id string, hop []FileIndex, fileRel string, line int, name, mod string, val *yaml.Node, tags, notify []string) {
 	target, ok := includeTarget(val)
 	branch := &BranchNode{
 		ID: id, File: fileRel, Line: line, Name: name,
-		Kind: mod, Tags: tags, Notify: notify,
+		Kind: mod, Tags: tags, Notify: notify, Path: hop,
 	}
 	if !ok || strings.TrimSpace(target) == "" {
 		branch.Opaque = true
@@ -477,7 +514,7 @@ func (w *walker) walkInclude(id, fileRel string, line int, name, mod string, val
 	}
 	branch.Target = targetRel
 	w.addBranch(branch)
-	w.walkFile(targetRel, mustParseID(id))
+	w.walkFile(targetRel, mustParseParts(id), hop)
 }
 
 // includeTarget extracts the included file from an include_tasks value:
@@ -513,11 +550,12 @@ func (w *walker) roleTarget(val *yaml.Node) string {
 	return ""
 }
 
-// mustParseID converts a walker-assigned ID back to segments. Walker IDs
-// are always well-formed by construction; on failure it returns nil and
-// the caller treats the subtree as top-level.
-func mustParseID(id string) []int {
-	parts, err := ParseTaskID(id)
+// mustParseParts converts a walker-assigned ID back to numeric segments,
+// dropping the handler prefix. Walker IDs are always well-formed by
+// construction; on failure it returns nil and the caller treats the
+// subtree as top-level.
+func mustParseParts(id string) []int {
+	_, parts, err := splitTaskID(id)
 	if err != nil {
 		return nil
 	}
@@ -531,7 +569,7 @@ func (w *walker) addBranch(b *BranchNode) {
 }
 
 // addLeaf records one patchable leaf task with its evidence.
-func (w *walker) addLeaf(id string, level []int, fileRel string, item *yaml.Node, vals map[string]*yaml.Node, name string, tags, notify []string) {
+func (w *walker) addLeaf(id string, level []int, hop []FileIndex, fileRel string, item *yaml.Node, vals map[string]*yaml.Node, name string, tags, notify []string) {
 	order, _ := mappingEntries(item)
 	module := "unknown"
 	var argsNode *yaml.Node
@@ -556,7 +594,7 @@ func (w *walker) addLeaf(id string, level []int, fileRel string, item *yaml.Node
 	args := moduleArgs(argsNode)
 	leaf := &TaskNode{
 		ID: id, File: fileRel, Line: item.Line, Name: name,
-		Module: module, Notify: notify, Tags: tags,
+		Module: module, Notify: notify, Tags: tags, Path: hop,
 	}
 	if len(level) > 1 {
 		leaf.Branch = strconv.Itoa(level[0])
@@ -586,6 +624,11 @@ func (w *walker) addLeaf(id string, level []int, fileRel string, item *yaml.Node
 		leaf.Artifacts = append(leaf.Artifacts, ArtifactLeaf{Kind: ArtifactHandler, Ref: n})
 		w.handlers[n] = append(w.handlers[n], id)
 	}
+	if w.idPrefix == "h" && strings.TrimSpace(name) != "" {
+		// Handler definition site: visible next to notifier IDs so the
+		// Handlers map shows both who notifies and where it is defined.
+		w.handlers[name] = append(w.handlers[name], id)
+	}
 	w.leaves = append(w.leaves, leaf)
 }
 
@@ -613,14 +656,24 @@ func indirectModule(vals map[string]*yaml.Node) (string, *yaml.Node) {
 	return "", nil
 }
 
-// AnalyzeExternalRole inspects the role at rolePath (a directory containing
-// tasks/) and enumerates its leaf tasks with dotted IDs. scenario is
-// recorded as context only; it does not change enumeration.
-func AnalyzeExternalRole(rolePath, scenario string) (*RoleAnalysis, error) {
+// AnalyzeRoleAtPath analyzes the role directory at rolePath. Unlike
+// AnalyzeExternalRole it performs no resolution or installation: the
+// caller supplies the exact directory (e.g. a staged copy or --path).
+func AnalyzeRoleAtPath(rolePath, scenario, roleName string) (*RoleAnalysis, error) {
+	return analyzeRoleAtPath(rolePath, scenario, roleName)
+}
+
+// analyzeRoleAtPath inspects the role directory at rolePath and enumerates
+// its leaf tasks with dotted IDs. Task IDs are plain ("1.3.1"); handler
+// IDs carry the "h" prefix ("h1", "h1.2").
+func analyzeRoleAtPath(rolePath, scenario, roleName string) (*RoleAnalysis, error) {
 	root := filepath.Clean(rolePath)
 	entry := filepath.Join(root, "tasks", "main.yml")
 	if _, err := os.Stat(entry); err != nil {
 		return nil, fmt.Errorf("no tasks/main.yml under %s: not an analyzable role", root)
+	}
+	if strings.TrimSpace(roleName) == "" {
+		roleName = filepath.Base(root)
 	}
 	w := &walker{
 		roleRoot:   root,
@@ -631,15 +684,178 @@ func AnalyzeExternalRole(rolePath, scenario string) (*RoleAnalysis, error) {
 		handlers:   map[string][]string{},
 		branchByID: map[string]*BranchNode{},
 	}
-	w.walkFile(filepath.ToSlash("tasks/main.yml"), nil)
+	w.walkFile(filepath.ToSlash("tasks/main.yml"), nil, nil)
+	if _, err := os.Stat(filepath.Join(root, "handlers", "main.yml")); err == nil {
+		w.idPrefix = "h"
+		w.walkFile(filepath.ToSlash("handlers/main.yml"), nil, nil)
+		w.idPrefix = ""
+	}
 	a := &RoleAnalysis{
-		RolePath: root, Scenario: scenario,
+		RoleName: strings.TrimSpace(roleName), RolePath: root, Scenario: scenario,
 		Leaves: w.leaves, Branches: w.branches,
 		Files: w.files, Templates: w.templates, Handlers: w.handlers,
 		Warnings: w.warnings,
 	}
 	AssignBranchColors(a, scenario+"\x00"+root)
 	return a, nil
+}
+
+// AnalyzeExternalRole analyzes the installed role roleName for scenario.
+// Path is the general installed location resolved on this system (Galaxy
+// roles path, diffusion cache, molecule working copies). When the role is
+// not installed anywhere, it is installed into a running molecule
+// container first and analyzed from a temporary copy.
+func AnalyzeExternalRole(scenario, roleName string) (*RoleAnalysis, error) {
+	if err := utils.ValidateCLIArgument("role", roleName); err != nil {
+		return nil, err
+	}
+	if path, err := ResolveInstalledRolePath(roleName); err == nil {
+		return analyzeRoleAtPath(path, scenario, roleName)
+	}
+	path, cleanup, err := ensureRoleViaContainer(roleName)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	return analyzeRoleAtPath(path, scenario, roleName)
+}
+
+// resolveRoleCandidates lists installed-role search paths in priority
+// order. Empty base dirs are skipped. Pure function for testability.
+func resolveRoleCandidates(cacheDir, cwd, home, roleName string) []string {
+	var out []string
+	if cacheDir != "" {
+		for _, v := range roleDirVariants(roleName) {
+			out = append(out, filepath.Join(cacheDir, config.CacheRolesDir, v))
+		}
+	}
+	if cwd != "" {
+		for _, v := range roleDirVariants(roleName) {
+			out = append(out, filepath.Join(cwd, config.MoleculeDir, v))
+		}
+	}
+	if home != "" {
+		for _, v := range roleDirVariants(roleName) {
+			out = append(out, filepath.Join(home, ".ansible", "roles", v))
+		}
+	}
+	return out
+}
+
+// ResolveInstalledRolePath returns the installed directory of roleName,
+// searching the diffusion cache, molecule working copies and the user
+// Galaxy roles path. It never installs anything; see
+// AnalyzeExternalRole for the installing entry point.
+func ResolveInstalledRolePath(roleName string) (string, error) {
+	var cacheDir, cwd, home string
+	if cfg, err := config.LoadConfig(); err == nil && cfg != nil &&
+		cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
+		cacheDir, _ = cache.GetCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
+	}
+	cwd, _ = os.Getwd()
+	home, _ = os.UserHomeDir()
+	tried := resolveRoleCandidates(cacheDir, cwd, home, roleName)
+	for _, p := range tried {
+		if st, err := os.Stat(filepath.Join(p, "tasks")); err == nil && st.IsDir() {
+			return p, nil
+		}
+	}
+	// Short names ("docker") also match namespaced install dirs
+	// ("geerlingguy.docker") via directory scan.
+	if !strings.Contains(roleName, ".") {
+		short := strings.TrimSpace(roleName)
+		var bases []string
+		if cacheDir != "" {
+			bases = append(bases, filepath.Join(cacheDir, config.CacheRolesDir))
+		}
+		if cwd != "" {
+			bases = append(bases, filepath.Join(cwd, config.MoleculeDir))
+		}
+		if home != "" {
+			bases = append(bases, filepath.Join(home, ".ansible", "roles"))
+		}
+		for _, base := range bases {
+			if p, ok := matchShortRoleDir(base, short); ok {
+				tried = append(tried, p)
+				return p, nil
+			}
+		}
+	}
+	if len(tried) == 0 {
+		return "", fmt.Errorf("role %q not found: no roles paths to search", roleName)
+	}
+	return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(tried, ", "))
+}
+
+// matchShortRoleDir finds an installed dir for a short role name inside
+// baseDir: exact match first, then "<namespace>.<short>".
+func matchShortRoleDir(baseDir, short string) (string, bool) {
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if e.Name() == short {
+			if st, err := os.Stat(filepath.Join(baseDir, e.Name(), "tasks")); err == nil && st.IsDir() {
+				return filepath.Join(baseDir, e.Name()), true
+			}
+		}
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), "."+short) {
+			if st, err := os.Stat(filepath.Join(baseDir, e.Name(), "tasks")); err == nil && st.IsDir() {
+				return filepath.Join(baseDir, e.Name()), true
+			}
+		}
+	}
+	return "", false
+}
+
+// ensureRoleViaContainer installs roleName into a running molecule
+// container and copies it to a temp dir for host-side analysis. It
+// returns the temp path and a cleanup func removing it.
+func ensureRoleViaContainer(roleName string) (string, func(), error) {
+	noop := func() {}
+	out, err := exec.Command("docker", "ps", "--format", "{{.Names}}").Output()
+	if err != nil {
+		return "", noop, fmt.Errorf("role %q is not installed and docker is unavailable: %v", roleName, err)
+	}
+	container := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		if name := strings.TrimSpace(line); strings.HasPrefix(name, config.MoleculeContainerPrefix) {
+			container = name
+			break
+		}
+	}
+	if container == "" {
+		return "", noop, fmt.Errorf("role %q is not installed: no running %s* container found (run diffusion molecule first)", roleName, config.MoleculeContainerPrefix)
+	}
+	rolesPath := config.ContainerRolesCachePath
+	if res, err := exec.Command("docker", "exec", container, "ansible-galaxy", "role", "install", roleName, "-p", rolesPath).CombinedOutput(); err != nil {
+		return "", noop, fmt.Errorf("failed to install role %q in container %s: %v: %s",
+			roleName, container, err, strings.TrimSpace(string(res)))
+	}
+	dir := ""
+	for _, v := range roleDirVariants(roleName) {
+		if err := exec.Command("docker", "exec", container, "test", "-d", rolesPath+"/"+v).Run(); err == nil {
+			dir = v
+			break
+		}
+	}
+	if dir == "" {
+		return "", noop, fmt.Errorf("role %q installed but directory not found under %s in container %s", roleName, rolesPath, container)
+	}
+	tmp, err := os.MkdirTemp("", "diffusion-patch-role-")
+	if err != nil {
+		return "", noop, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(tmp) }
+	if res, err := exec.Command("docker", "cp", container+":"+rolesPath+"/"+dir, tmp+"/role").CombinedOutput(); err != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("failed to copy role %q from container %s: %v: %s",
+			roleName, container, err, strings.TrimSpace(string(res)))
+	}
+	return filepath.Join(tmp, "role"), cleanup, nil
 }
 
 // roleDirVariants returns candidate directory names for a role reference:
@@ -658,42 +874,21 @@ func roleDirVariants(roleName string) []string {
 	return []string{name}
 }
 
-// AnalyzeInstalledRole locates an installed external role (host cache or
-// molecule working copy) and analyzes it. It never installs anything.
+// AnalyzeInstalledRole locates an installed external role and analyzes it.
+// It is a thin wrapper over AnalyzeExternalRole kept for callers that
+// already resolved nothing themselves.
 func AnalyzeInstalledRole(scenario, roleName string) (*RoleAnalysis, error) {
-	var tried []string
-	if cfg, err := config.LoadConfig(); err == nil && cfg != nil &&
-		cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
-		if dir, err := cache.GetCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath); err == nil {
-			for _, v := range roleDirVariants(roleName) {
-				tried = append(tried, filepath.Join(dir, config.CacheRolesDir, v))
-			}
-		}
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		for _, v := range roleDirVariants(roleName) {
-			tried = append(tried, filepath.Join(cwd, config.MoleculeDir, v))
-		}
-	}
-	for _, p := range tried {
-		if st, err := os.Stat(filepath.Join(p, "tasks")); err == nil && st.IsDir() {
-			return AnalyzeExternalRole(p, scenario)
-		}
-	}
-	if len(tried) == 0 {
-		return nil, fmt.Errorf("role %q not found: no cache or molecule paths to search", roleName)
-	}
-	return nil, fmt.Errorf("role %q not found (tried: %s)", roleName, strings.Join(tried, ", "))
+	return AnalyzeExternalRole(scenario, roleName)
 }
 
-// FindLeafByID returns the leaf with the given dotted ID (whitespace and
-// non-canonical forms tolerated) or nil. Shared with patch.go so
-// inspection and patching resolve IDs identically.
+// FindLeafByID returns the leaf (task or handler) with the given ID
+// (whitespace and non-canonical forms tolerated) or nil. Shared with
+// patch.go so inspection and patching resolve IDs identically.
 func (a *RoleAnalysis) FindLeafByID(id string) *TaskNode {
 	if a == nil {
 		return nil
 	}
-	canon, err := canonicalTaskID(id)
+	canon, err := canonicalAnyID(id)
 	if err != nil {
 		return nil
 	}
@@ -710,7 +905,7 @@ func (a *RoleAnalysis) FindBranchByID(id string) *BranchNode {
 	if a == nil {
 		return nil
 	}
-	canon, err := canonicalTaskID(id)
+	canon, err := canonicalAnyID(id)
 	if err != nil {
 		return nil
 	}
@@ -775,7 +970,7 @@ func colorize(s, code string, noColor bool) string {
 // nearestTaggedBranch returns the closest enclosing branch of leafID that
 // carries tags, or nil.
 func (a *RoleAnalysis) nearestTaggedBranch(leafID string) *BranchNode {
-	for parent := ParentId(leafID); parent != ""; parent = ParentId(parent) {
+	for parent := parentAnyID(leafID); parent != ""; parent = parentAnyID(parent) {
 		if b := a.FindBranchByID(parent); b != nil && len(b.Tags) > 0 {
 			return b
 		}
@@ -806,7 +1001,8 @@ func tagMarker(tags []string, ancestor *BranchNode) string {
 }
 
 // PrintTree renders the branch/leaf tree with per-branch colors and tag
-// intersection markers. Branches print with ▶, leaves with ●.
+// intersection markers. Branches print with ▶, leaves with ●. Handler
+// leaves render in a trailing "handlers:" section.
 func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 	if a == nil || w == nil {
 		return
@@ -827,8 +1023,23 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 		}
 		return false
 	}
-	_, err := fmt.Fprintf(w, "role %s (scenario: %s) — %d tasks, %d branches\n",
-		a.RolePath, a.Scenario, len(a.Leaves), len(a.Branches))
+	// Overlay annotations keyed by canonical leaf ID.
+	overlays := map[string]string{}
+	for id, ref := range opts.Overlays {
+		if canon, err := canonicalAnyID(id); err == nil {
+			overlays[canon] = ref
+		}
+	}
+	tasks, handlers := 0, 0
+	for _, l := range a.Leaves {
+		if handler, _, _ := splitTaskID(l.ID); handler {
+			handlers++
+		} else {
+			tasks++
+		}
+	}
+	_, err := fmt.Fprintf(w, "role %s %s (scenario: %s) — %d tasks, %d handlers, %d branches\n",
+		a.RoleName, a.RolePath, a.Scenario, tasks, handlers, len(a.Branches))
 	if err != nil {
 		fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
 	}
@@ -845,15 +1056,16 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 		children[parent] = append(children[parent], it)
 	}
 	for _, b := range a.Branches {
-		addChild(ParentId(b.ID), &item{id: b.ID, branch: b})
+		addChild(parentAnyID(b.ID), &item{id: b.ID, branch: b})
 	}
 	for _, l := range a.Leaves {
-		addChild(ParentId(l.ID), &item{id: l.ID, leaf: l})
+		addChild(parentAnyID(l.ID), &item{id: l.ID, leaf: l})
 	}
 	for parent := range children {
 		sibs := children[parent]
 		sort.Slice(sibs, func(i, j int) bool {
-			pi, pj := mustParseID(sibs[i].id), mustParseID(sibs[j].id)
+			_, pi, _ := splitTaskID(sibs[i].id)
+			_, pj, _ := splitTaskID(sibs[j].id)
 			if len(pi) == 0 || len(pj) == 0 {
 				return sibs[i].id < sibs[j].id
 			}
@@ -861,11 +1073,18 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 		})
 	}
 	// branchMatches reports whether a branch subtree or its own tags match.
+	// Handler branches only see handler leaves (h-prefix), task branches
+	// only task leaves.
 	var branchMatches = func(id string) bool {
 		if b := a.FindBranchByID(id); b != nil && matches(b.Tags) {
 			return true
 		}
+		handler, _, _ := splitTaskID(id)
 		for _, l := range a.Leaves {
+			lh, _, _ := splitTaskID(l.ID)
+			if lh != handler {
+				continue
+			}
 			if l.ID == id || strings.HasPrefix(l.ID, id+".") {
 				if matches(l.Tags) {
 					return true
@@ -927,6 +1146,9 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 			if len(l.Notify) > 0 {
 				line += " notify=" + strings.Join(l.Notify, ",")
 			}
+			if ref, ok := overlays[l.ID]; ok {
+				line += " <= " + ref
+			}
 			if showTags {
 				line += tagMarker(l.Tags, a.nearestTaggedBranch(l.ID))
 			}
@@ -939,7 +1161,33 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 			}
 		}
 	}
+	// Tasks tree first, then the handlers section.
+	var taskRoots, handlerRoots []string
+	for _, it := range children[""] {
+		if handler, _, _ := splitTaskID(it.id); handler {
+			handlerRoots = append(handlerRoots, it.id)
+		} else {
+			taskRoots = append(taskRoots, it.id)
+		}
+	}
+	saved := children[""]
+	children[""] = nil
+	for _, id := range taskRoots {
+		children[""] = append(children[""], byID[id])
+	}
 	render("", "")
+	if len(handlerRoots) > 0 {
+		_, err := fmt.Fprintln(w, "handlers:")
+		if err != nil {
+			fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
+		}
+		children[""] = nil
+		for _, id := range handlerRoots {
+			children[""] = append(children[""], byID[id])
+		}
+		render("", "")
+	}
+	children[""] = saved
 
 	if len(a.Warnings) > 0 {
 		_, err := fmt.Fprintln(w, "warnings:")
