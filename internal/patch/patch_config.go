@@ -19,6 +19,7 @@ type PatchBundle struct {
 	PatchBundleName string
 	TasksToPatch    []PatchingTask
 	Scenario        string
+	RoleName        string
 }
 
 type PatchingTask struct {

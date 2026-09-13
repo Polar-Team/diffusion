@@ -189,11 +189,7 @@ func TestAnalysisSerialization(t *testing.T) {
 	if err != nil || len(yml) == 0 {
 		t.Fatalf("ToYAML: %v", err)
 	}
-	js, err := a.ToJSON()
-	if err != nil || len(js) == 0 {
-		t.Fatalf("ToJSON: %v", err)
-	}
-	if !strings.Contains(string(js), `"1.3.1"`) {
-		t.Errorf("JSON missing leaf 1.3.1: %s", js)
+	if !strings.Contains(string(yml), "1.3.1") {
+		t.Errorf("YAML missing leaf 1.3.1: %s", yml)
 	}
 }

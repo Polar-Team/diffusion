@@ -16,7 +16,6 @@
 package patch
 
 import (
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -71,52 +70,52 @@ var branchPalette = []string{
 // template reference, or a handler notification. Leaves are addressable;
 // artifacts are not (they share the owning leaf's ID).
 type ArtifactLeaf struct {
-	Kind string `yaml:"kind" json:"kind"`
-	Ref  string `yaml:"ref" json:"ref"`
-	Dest string `yaml:"dest,omitempty" json:"dest,omitempty"`
+	Kind string `yaml:"kind"`
+	Ref  string `yaml:"ref"`
+	Dest string `yaml:"dest,omitempty"`
 }
 
 // TaskNode is one patchable leaf task.
 type TaskNode struct {
-	ID        string         `yaml:"id" json:"id"`
-	File      string         `yaml:"file" json:"file"` // role-relative, slash-separated
-	Line      int            `yaml:"line" json:"line"`
-	Name      string         `yaml:"name,omitempty" json:"name,omitempty"`
-	Module    string         `yaml:"module" json:"module"`
-	Src       string         `yaml:"src,omitempty" json:"src,omitempty"`
-	Dest      string         `yaml:"dest,omitempty" json:"dest,omitempty"`
-	Notify    []string       `yaml:"notify,omitempty" json:"notify,omitempty"`
-	Tags      []string       `yaml:"tags,omitempty" json:"tags,omitempty"`
-	Branch    string         `yaml:"branch,omitempty" json:"branch,omitempty"` // enclosing top-level branch ("1"), "" for top-level leaves
-	Artifacts []ArtifactLeaf `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	ID        string         `yaml:"id"`
+	File      string         `yaml:"file"` // role-relative, slash-separated
+	Line      int            `yaml:"line"`
+	Name      string         `yaml:"name,omitempty"`
+	Module    string         `yaml:"module"`
+	Src       string         `yaml:"src,omitempty"`
+	Dest      string         `yaml:"dest,omitempty"`
+	Notify    []string       `yaml:"notify,omitempty"`
+	Tags      []string       `yaml:"tags,omitempty"`
+	Branch    string         `yaml:"branch,omitempty"` // enclosing top-level branch ("1"), "" for top-level leaves
+	Artifacts []ArtifactLeaf `yaml:"artifacts,omitempty"`
 }
 
 // BranchNode is a visual-only include/block grouping. It is never a patch
 // target: patch.go resolves dotted IDs through branches to leaves.
 type BranchNode struct {
-	ID      string   `yaml:"id" json:"id"`
-	File    string   `yaml:"file" json:"file"` // file holding the include/block statement
-	Line    int      `yaml:"line" json:"line"`
-	Name    string   `yaml:"name,omitempty" json:"name,omitempty"`
-	Kind    string   `yaml:"kind" json:"kind"`
-	Target  string   `yaml:"target,omitempty" json:"target,omitempty"` // included file (role-relative) or role name
-	Opaque  bool     `yaml:"opaque,omitempty" json:"opaque,omitempty"` // dynamic/missing/cyclic target: not expanded
-	Tags    []string `yaml:"tags,omitempty" json:"tags,omitempty"`
-	Notify  []string `yaml:"notify,omitempty" json:"notify,omitempty"`
-	Warning string   `yaml:"warning,omitempty" json:"warning,omitempty"`
-	Color   string   `yaml:"-" json:"-"`
+	ID      string   `yaml:"id"`
+	File    string   `yaml:"file"` // file holding the include/block statement
+	Line    int      `yaml:"line"`
+	Name    string   `yaml:"name,omitempty"`
+	Kind    string   `yaml:"kind"`
+	Target  string   `yaml:"target,omitempty"` // included file (role-relative) or role name
+	Opaque  bool     `yaml:"opaque,omitempty"` // dynamic/missing/cyclic target: not expanded
+	Tags    []string `yaml:"tags,omitempty"`
+	Notify  []string `yaml:"notify,omitempty"`
+	Warning string   `yaml:"warning,omitempty"`
+	Color   string   `yaml:"-"`
 }
 
 // RoleAnalysis is the result of analyzing one role's tasks/ tree.
 type RoleAnalysis struct {
-	RolePath  string              `yaml:"role_path" json:"role_path"`
-	Scenario  string              `yaml:"scenario" json:"scenario"`
-	Leaves    []*TaskNode         `yaml:"leaves" json:"leaves"`
-	Branches  []*BranchNode       `yaml:"branches" json:"branches"`
-	Files     map[string][]string `yaml:"files,omitempty" json:"files,omitempty"`
-	Templates map[string][]string `yaml:"templates,omitempty" json:"templates,omitempty"`
-	Handlers  map[string][]string `yaml:"handlers,omitempty" json:"handlers,omitempty"`
-	Warnings  []string            `yaml:"warnings,omitempty" json:"warnings,omitempty"`
+	RolePath  string              `yaml:"role_path"`
+	Scenario  string              `yaml:"scenario"`
+	Leaves    []*TaskNode         `yaml:"leaves"`
+	Branches  []*BranchNode       `yaml:"branches"`
+	Files     map[string][]string `yaml:"files,omitempty"`
+	Templates map[string][]string `yaml:"templates,omitempty"`
+	Handlers  map[string][]string `yaml:"handlers,omitempty"`
+	Warnings  []string            `yaml:"warnings,omitempty"`
 }
 
 // TreeOptions controls PrintTree rendering.
@@ -966,12 +965,4 @@ func (a *RoleAnalysis) ToYAML() ([]byte, error) {
 		return nil, fmt.Errorf("analysis is nil")
 	}
 	return yaml.Marshal(a)
-}
-
-// ToJSON serializes the analysis with indentation.
-func (a *RoleAnalysis) ToJSON() ([]byte, error) {
-	if a == nil {
-		return nil, fmt.Errorf("analysis is nil")
-	}
-	return json.MarshalIndent(a, "", "  ")
 }
