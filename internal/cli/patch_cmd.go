@@ -137,7 +137,22 @@ func describePatchTask(pt *patch.PatchingTask) string {
 		parts = append(parts, "template<="+v)
 	}
 	if len(pt.NewConditions) > 0 {
-		parts = append(parts, fmt.Sprintf("when(%d)", len(pt.NewConditions)))
+		counts := map[string]int{}
+		var order []string
+		for _, c := range pt.NewConditions {
+			key := strings.ToLower(strings.TrimSpace(c.Condition))
+			if key == "" {
+				key = "when"
+			}
+			if _, ok := counts[key]; !ok {
+				order = append(order, key)
+			}
+			counts[key]++
+		}
+		for _, key := range order {
+			short := strings.TrimSuffix(key, "_when")
+			parts = append(parts, fmt.Sprintf("%s(%d)", short, counts[key]))
+		}
 	}
 	if pt.NewBecome != nil {
 		parts = append(parts, "become")

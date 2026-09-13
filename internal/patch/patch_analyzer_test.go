@@ -235,6 +235,109 @@ func TestPrintTreeBranchesColorsAndMarkers(t *testing.T) {
 	}
 }
 
+func TestPrintTreeSubtreeColors(t *testing.T) {
+	a, err := analyzeRoleAtPath(writeFixtureRole(t), "default", "fixture.role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	a.PrintTree(&sb, TreeOptions{NoColor: false})
+	lines := strings.Split(sb.String(), "\n")
+	lineOf := func(id string) string {
+		for _, l := range lines {
+			if strings.Contains(l, "● "+id+" ") || strings.Contains(l, "▶ "+id+" ") {
+				return l
+			}
+		}
+		t.Fatalf("no tree line for %s", id)
+		return ""
+	}
+	c1 := a.FindBranchByID("1").Color
+	if c1 == "" {
+		t.Fatal("branch 1 has no color")
+	}
+	// Every line inside branch 1's subtree shares its color.
+	for _, id := range []string{"1", "1.1", "1.2", "1.3", "1.3.1", "1.4"} {
+		if got := lineOf(id); !strings.HasPrefix(got, c1) {
+			t.Errorf("line %s not in branch color:\n%q", id, got)
+		}
+	}
+	// Top-level leaves and handler roots stay default.
+	for _, id := range []string{"2", "h1", "h2"} {
+		if got := lineOf(id); strings.HasPrefix(got, "\033[") {
+			t.Errorf("top-level line %s should be uncolored:\n%q", id, got)
+		}
+	}
+	// NoColor disables everything.
+	sb.Reset()
+	a.PrintTree(&sb, TreeOptions{NoColor: true})
+	if strings.Contains(sb.String(), "\033[") {
+		t.Error("NoColor output contains ANSI codes")
+	}
+}
+
+func TestPrintTreeNotifyDependencies(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"tasks", "handlers"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(rel, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tasks/main.yml", `---
+- name: First
+  copy:
+    src: a
+    dest: /a
+  notify:
+    - real handler
+    - ghost handler
+- name: Second
+  debug:
+    msg: hi
+  notify: my topic
+`)
+	write("handlers/main.yml", `---
+- name: real handler
+  service:
+    name: app
+    state: restarted
+- name: topic handler
+  debug:
+    msg: reloaded
+  listen: my topic
+`)
+	a, err := analyzeRoleAtPath(root, "default", "notify.role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	a.PrintTree(&sb, TreeOptions{NoColor: true})
+	out := sb.String()
+	for _, want := range []string{
+		"↳ h1 [service] real handler",
+		"↳ ? [handler] ghost handler (undefined)",
+		"↳ h2 [debug] topic handler",
+		`notifies undefined handler "ghost handler"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tree missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "notifies undefined handler \"real handler\"") ||
+		strings.Contains(out, "notifies undefined handler \"my topic\"") {
+		t.Errorf("false unresolved warning:\n%s", out)
+	}
+	if got := a.Handlers["my topic"]; strings.Join(got, ",") != "2,h2" {
+		t.Errorf("handlers[my topic] = %v, want [2 h2] (notifier + listener)", got)
+	}
+}
+
 func TestAnalyzeExternalRoleMissingEntry(t *testing.T) {
 	if _, err := analyzeRoleAtPath(t.TempDir(), "default", "x"); err == nil {
 		t.Fatal("expected error for role without tasks/main.yml")

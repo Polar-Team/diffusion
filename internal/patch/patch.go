@@ -40,15 +40,17 @@ type ApplyOptions struct {
 
 // ApplyResult describes one applied bundle.
 type ApplyResult struct {
-	Bundle        string
-	Role          string
-	Scenario      string
-	BackupPath    string
-	Patched       []string // task/handler IDs with YAML mutations
-	Overlaid      []string // "id <= patch/files|templates/name" entries
-	Files         []string // changed files, role-relative slash paths
-	DryRun        bool
-	staleWarnings []string
+	Bundle     string
+	Role       string
+	Scenario   string
+	BackupPath string
+	Patched    []string // task/handler IDs with YAML mutations
+	Overlaid   []string // "id <= patch/files|templates/name" entries
+	Files      []string // changed files, role-relative slash paths
+	DryRun     bool
+	// Warnings holds non-fatal advisories (analysis drift notes,
+	// static-boolean conditions that may indicate a design problem).
+	Warnings []string
 }
 
 // Summary renders a human-readable change report.
@@ -68,7 +70,7 @@ func (r *ApplyResult) Summary() string {
 	if len(r.Files) > 0 {
 		fmt.Fprintf(&sb, "  files changed: %s\n", strings.Join(r.Files, ", "))
 	}
-	for _, wmsg := range r.staleWarnings {
+	for _, wmsg := range r.Warnings {
 		fmt.Fprintf(&sb, "  warning: %s\n", wmsg)
 	}
 	if r.BackupPath != "" {
@@ -262,36 +264,77 @@ func detectModuleKey(taskNode *yaml.Node) (string, *yaml.Node, error) {
 	return "", nil, fmt.Errorf("no module found")
 }
 
-// buildConditions renders PatchConditions as a when: value node:
-// "Condition Body", or bare Condition when Body is empty.
-func buildConditions(conds []PatchConditions) *yaml.Node {
-	items := make([]string, 0, len(conds))
-	for _, c := range conds {
-		cond, body := strings.TrimSpace(c.Condition), strings.TrimSpace(c.Body)
-		if body == "" {
-			items = append(items, cond)
-		} else {
-			items = append(items, cond+" "+body)
+// buildConditionEntries renders the bodies of one condition key: a single
+// expression as a scalar, several as a sequence. Boolean literals
+// ("true"/"false") render as YAML bool nodes and report a design-problem
+// warning per literal.
+func buildConditionEntries(taskID, key string, bodies []string) (*yaml.Node, []string) {
+	single := len(bodies) == 1
+	var seq *yaml.Node
+	var warnings []string
+	add := func(body string) *yaml.Node {
+		if isBoolString(body) {
+			val := strings.ToLower(strings.TrimSpace(body))
+			warnings = append(warnings, boolConditionWarning(taskID, key, val))
+			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: val}
 		}
+		return scalarNode(strings.TrimSpace(body))
 	}
-	if len(items) == 1 {
-		return scalarNode(items[0])
+	if single {
+		return add(bodies[0]), warnings
 	}
-	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, it := range items {
-		seq.Content = append(seq.Content, scalarNode(it))
+	seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, body := range bodies {
+		seq.Content = append(seq.Content, add(body))
 	}
-	return seq
+	return seq, warnings
+}
+
+// boolConditionWarning explains why a static boolean condition is
+// suspicious: it freezes task behaviour regardless of facts.
+func boolConditionWarning(taskID, key, val string) string {
+	effect := map[string]map[string]string{
+		"when":         {"true": "task always runs", "false": "task never runs"},
+		"changed_when": {"true": "task always reports changed", "false": "change detection is masked"},
+		"failed_when":  {"true": "task always fails", "false": "failures are masked"},
+	}[key][val]
+	return fmt.Sprintf("task %s: static %s %s (%s) — possible design problem, verify intent", taskID, key, val, effect)
+}
+
+// applyConditions groups NewConditions by key (rendered in fixed
+// when/changed_when/failed_when order) and sets each task key. It returns
+// a short summary and any design-problem warnings.
+func applyConditions(taskID string, taskNode *yaml.Node, conds []PatchConditions) (string, []string) {
+	byKey := map[string][]string{}
+	for _, c := range conds {
+		key, err := canonicalConditionKey(c.Condition)
+		if err != nil {
+			continue // guarded by validate; kept for safety
+		}
+		byKey[key] = append(byKey[key], c.Body)
+	}
+	var changes, warnings []string
+	for _, key := range conditionKeys {
+		bodies, ok := byKey[key]
+		if !ok {
+			continue
+		}
+		node, warns := buildConditionEntries(taskID, key, bodies)
+		setMappingKey(taskNode, key, node)
+		warnings = append(warnings, warns...)
+		changes = append(changes, fmt.Sprintf("%s set (%d)", key, len(bodies)))
+	}
+	return strings.Join(changes, "; "), warnings
 }
 
 // applyTaskMutation mutates one task mapping in place. Returns a short
-// summary of what changed.
-func applyTaskMutation(taskNode *yaml.Node, pt *PatchingTask) (string, error) {
-	var changes []string
+// summary of what changed plus non-fatal warnings.
+func applyTaskMutation(taskID string, taskNode *yaml.Node, pt *PatchingTask) (string, []string, error) {
+	var changes, warnings []string
 	if strings.TrimSpace(pt.NewModule) != "" || len(pt.NewModuleSetup) > 0 {
 		modKey, modVal, err := detectModuleKey(taskNode)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if strings.TrimSpace(pt.NewModule) != "" {
 			for i := 0; i+1 < len(taskNode.Content); i += 2 {
@@ -318,7 +361,7 @@ func applyTaskMutation(taskNode *yaml.Node, pt *PatchingTask) (string, error) {
 				changes = append(changes, "module args replaced")
 			} else {
 				if modVal == nil || modVal.Kind != yaml.MappingNode {
-					return "", fmt.Errorf("module args are not a mapping: use new_module to replace")
+					return "", nil, fmt.Errorf("module args are not a mapping: use new_module to replace")
 				}
 				for _, kv := range pt.NewModuleSetup {
 					setMappingKey(modVal, keyString(kv.Key), encodeValue(kv.Value))
@@ -329,8 +372,9 @@ func applyTaskMutation(taskNode *yaml.Node, pt *PatchingTask) (string, error) {
 		_ = modVal
 	}
 	if len(pt.NewConditions) > 0 {
-		setMappingKey(taskNode, "when", buildConditions(pt.NewConditions))
-		changes = append(changes, fmt.Sprintf("when set (%d)", len(pt.NewConditions)))
+		summary, warns := applyConditions(taskID, taskNode, pt.NewConditions)
+		changes = append(changes, summary)
+		warnings = append(warnings, warns...)
 	}
 	if pt.NewBecome != nil {
 		if strings.TrimSpace(pt.NewBecome.User) != "" {
@@ -351,9 +395,9 @@ func applyTaskMutation(taskNode *yaml.Node, pt *PatchingTask) (string, error) {
 		changes = append(changes, "environment set")
 	}
 	if len(pt.NewBlock) > 0 {
-		return "", fmt.Errorf("new_block apply is not supported in v1")
+		return "", nil, fmt.Errorf("new_block apply is not supported in v1")
 	}
-	return strings.Join(changes, "; "), nil
+	return strings.Join(changes, "; "), warnings, nil
 }
 
 // keyString stringifies a module/environment key (validated non-nil).
@@ -596,14 +640,24 @@ func ApplyBundle(bundle *PatchBundle, analysis *RoleAnalysis, opts ApplyOptions)
 				return nil, fmt.Errorf("task %s: %w", canon, err)
 			}
 			if opts.DryRun {
+				// Report what a real apply would do: surface block
+				// limitations and condition warnings without mutating
+				// the located node (scratch node only).
+				if len(pt.NewBlock) > 0 {
+					return nil, fmt.Errorf("task %s: new_block apply is not supported in v1", canon)
+				}
+				scratch := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				_, warns := applyConditions(canon, scratch, pt.NewConditions)
+				res.Warnings = append(res.Warnings, warns...)
 				res.Patched = append(res.Patched, canon)
 				changed[finalFile] = true
 				continue
 			}
-			summary, err := applyTaskMutation(node, pt)
+			summary, warns, err := applyTaskMutation(canon, node, pt)
 			if err != nil {
 				return nil, fmt.Errorf("task %s: %w", canon, err)
 			}
+			res.Warnings = append(res.Warnings, warns...)
 			if summary == "" {
 				summary = "patched"
 			}

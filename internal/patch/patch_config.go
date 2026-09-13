@@ -16,10 +16,10 @@ type PatchesConfig struct {
 }
 
 type PatchBundle struct {
-	PatchBundleName string
-	TasksToPatch    []PatchingTask
-	Scenario        string
-	RoleName        string
+	PatchBundleName string         `yaml:"patch_bundle_name"`
+	TasksToPatch    []PatchingTask `yaml:"tasks_to_patch"`
+	Scenario        string         `yaml:"scenario"`
+	RoleName        string         `yaml:"role_name"`
 }
 
 type PatchingTask struct {
@@ -41,13 +41,46 @@ type PatchingTask struct {
 }
 
 type PatchConditions struct {
+	// Condition selects the task key: when, changed_when or failed_when
+	// (case-insensitive, canonicalized to lowercase).
 	Condition string `yaml:"condition,omitempty"`
-	Body      string `yaml:"body,omitempty"`
+	// Body is the expression, or "true"/"false" for a boolean literal
+	// (which raises a design-problem warning at apply time).
+	Body string `yaml:"body,omitempty"`
 }
 
 type PatchModuleSetup struct {
 	Key   any `yaml:"key"`
 	Value any `yaml:"value"`
+}
+
+// conditionKeys are the task keys a PatchConditions entry may target,
+// rendered in this fixed order.
+var conditionKeys = []string{"when", "changed_when", "failed_when"}
+
+// canonicalConditionKey validates a condition key selector and returns its
+// canonical lowercase form.
+func canonicalConditionKey(key string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "when":
+		return "when", nil
+	case "changed_when":
+		return "changed_when", nil
+	case "failed_when":
+		return "failed_when", nil
+	default:
+		return "", fmt.Errorf(config.ColorRed + "condition key must be one of when, changed_when, failed_when (migrate: put the key in condition: and the expression in body:)" + config.ColorReset)
+	}
+}
+
+// isBoolString reports whether s is a boolean literal ("true"/"false").
+func isBoolString(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "false":
+		return true
+	default:
+		return false
+	}
 }
 
 type PatchBecomeSetup struct {
@@ -288,8 +321,11 @@ func (t *PatchingTask) validate(scenario string) error {
 	}
 	for i := range t.NewConditions {
 		c := &t.NewConditions[i]
-		if strings.TrimSpace(c.Condition) == "" {
-			return fmt.Errorf(config.ColorRed+"patching task %q: condition %d has empty condition"+config.ColorReset, t.TaskId, i)
+		if _, err := canonicalConditionKey(c.Condition); err != nil {
+			return fmt.Errorf(config.ColorRed+"patching task %q: condition %d: %w"+config.ColorReset, t.TaskId, i, err)
+		}
+		if strings.TrimSpace(c.Body) == "" {
+			return fmt.Errorf(config.ColorRed+"patching task %q: condition %d has empty body"+config.ColorReset, t.TaskId, i)
 		}
 	}
 	for i := range t.NewModuleSetup {

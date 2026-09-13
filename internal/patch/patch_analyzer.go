@@ -96,6 +96,8 @@ type TaskNode struct {
 	Src       string         `yaml:"src,omitempty"`
 	Dest      string         `yaml:"dest,omitempty"`
 	Notify    []string       `yaml:"notify,omitempty"`
+	// Listen topics this handler responds to (handlers only).
+	Listen    []string       `yaml:"listen,omitempty"`
 	Tags      []string       `yaml:"tags,omitempty"`
 	Branch    string         `yaml:"branch,omitempty"` // enclosing top-level branch ("1"), "" for top-level leaves
 	Artifacts []ArtifactLeaf `yaml:"artifacts,omitempty"`
@@ -562,6 +564,37 @@ func mustParseParts(id string) []int {
 	return parts
 }
 
+// checkNotifies warns about notify targets with no handler definition
+// (neither a matching handler name nor a listen topic).
+func (w *walker) checkNotifies() {
+	for _, l := range w.leaves {
+		for _, n := range l.Notify {
+			if len(handlerDefIDs(w.handlers, n)) == 0 {
+				w.warn("%s:%d (%s): notifies undefined handler %q", l.File, l.Line, l.ID, n)
+			}
+		}
+	}
+	for _, b := range w.branches {
+		for _, n := range b.Notify {
+			if len(handlerDefIDs(w.handlers, n)) == 0 {
+				w.warn("%s:%d (%s): notifies undefined handler %q", b.File, b.Line, b.ID, n)
+			}
+		}
+	}
+}
+
+// handlerDefIDs returns handler definition leaf IDs (h-prefix) indexed
+// under name (handler name or listen topic).
+func handlerDefIDs(index map[string][]string, name string) []string {
+	var out []string
+	for _, id := range index[name] {
+		if handler, _, _ := splitTaskID(id); handler {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // addBranch registers a visual-only branch node.
 func (w *walker) addBranch(b *BranchNode) {
 	w.branches = append(w.branches, b)
@@ -595,6 +628,7 @@ func (w *walker) addLeaf(id string, level []int, hop []FileIndex, fileRel string
 	leaf := &TaskNode{
 		ID: id, File: fileRel, Line: item.Line, Name: name,
 		Module: module, Notify: notify, Tags: tags, Path: hop,
+		Listen: parseNotify(vals["listen"]),
 	}
 	if len(level) > 1 {
 		leaf.Branch = strconv.Itoa(level[0])
@@ -628,6 +662,21 @@ func (w *walker) addLeaf(id string, level []int, hop []FileIndex, fileRel string
 		// Handler definition site: visible next to notifier IDs so the
 		// Handlers map shows both who notifies and where it is defined.
 		w.handlers[name] = append(w.handlers[name], id)
+	}
+	if w.idPrefix == "h" {
+		// Handler listen topics answer notifies addressed at the topic.
+		for _, topic := range leaf.Listen {
+			duplicate := false
+			for _, existing := range w.handlers[topic] {
+				if existing == id {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				w.handlers[topic] = append(w.handlers[topic], id)
+			}
+		}
 	}
 	w.leaves = append(w.leaves, leaf)
 }
@@ -690,6 +739,7 @@ func analyzeRoleAtPath(rolePath, scenario, roleName string) (*RoleAnalysis, erro
 		w.walkFile(filepath.ToSlash("handlers/main.yml"), nil, nil)
 		w.idPrefix = ""
 	}
+	w.checkNotifies()
 	a := &RoleAnalysis{
 		RoleName: strings.TrimSpace(roleName), RolePath: root, Scenario: scenario,
 		Leaves: w.leaves, Branches: w.branches,
@@ -900,6 +950,21 @@ func (a *RoleAnalysis) FindLeafByID(id string) *TaskNode {
 	return nil
 }
 
+// handlerDefs returns the handler definition leaves answering a notify
+// name (handler name or listen topic).
+func (a *RoleAnalysis) handlerDefs(name string) []*TaskNode {
+	if a == nil {
+		return nil
+	}
+	var out []*TaskNode
+	for _, id := range handlerDefIDs(a.Handlers, name) {
+		if l := a.FindLeafByID(id); l != nil {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // FindBranchByID returns the visual branch node with the given ID or nil.
 func (a *RoleAnalysis) FindBranchByID(id string) *BranchNode {
 	if a == nil {
@@ -1025,6 +1090,26 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 	}
 	// Overlay annotations keyed by canonical leaf ID.
 	overlays := map[string]string{}
+	// subtreeColor returns the top-branch color enclosing id, so every line
+	// inside a branch subtree (nested branches and leaves) renders in the
+	// branch color. Top-level leaves and invalid IDs get "" (default).
+	subtreeColor := func(id string) string {
+		if opts.NoColor {
+			return ""
+		}
+		handler, parts, err := splitTaskID(id)
+		if err != nil || len(parts) <= 1 {
+			return ""
+		}
+		top := dottedID(parts[:1])
+		if handler {
+			top = "h" + top
+		}
+		if b := a.FindBranchByID(top); b != nil {
+			return b.Color
+		}
+		return ""
+	}
 	for id, ref := range opts.Overlays {
 		if canon, err := canonicalAnyID(id); err == nil {
 			overlays[canon] = ref
@@ -1094,9 +1179,39 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 		return false
 	}
 
+	// renderNotifyDeps prints handler dependency lines for notify names
+	// under the owner's line. childPrefix is the indentation for the dep
+	// lines, ownerColor tints them like the rest of the subtree.
+	renderNotifyDeps := func(childPrefix, ownerColor string, notify []string) {
+		var deps []string
+		for _, n := range notify {
+			defs := a.handlerDefs(n)
+			if len(defs) == 0 {
+				deps = append(deps, fmt.Sprintf("↳ ? [handler] %s (undefined)", n))
+				continue
+			}
+			for _, h := range defs {
+				s := fmt.Sprintf("↳ %s [%s] %s", h.ID, h.Module, h.Name)
+				if showTags && len(h.Tags) > 0 {
+					s += tagMarker(h.Tags, nil)
+				}
+				deps = append(deps, s)
+			}
+		}
+		for di, d := range deps {
+			g := "├── "
+			if di == len(deps)-1 {
+				g = "└── "
+			}
+			_, err := fmt.Fprintln(w, colorize(childPrefix+g+d, ownerColor, opts.NoColor))
+			if err != nil {
+				fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
+			}
+		}
+	}
+
 	var render func(parent, prefix string)
-	render = func(parent, prefix string) {
-		sibs := children[parent]
+	render = func(parent, prefix string) {		sibs := children[parent]
 		for i, it := range sibs {
 			last := i == len(sibs)-1
 			glyph, cont := "├── ", "│   "
@@ -1129,6 +1244,9 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 				if err != nil {
 					fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
 				}
+				if len(b.Notify) > 0 {
+					renderNotifyDeps(prefix+cont, b.Color, b.Notify)
+				}
 				render(it.id, prefix+cont)
 				continue
 			}
@@ -1155,9 +1273,12 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 			if len(filter) > 0 && matches(l.Tags) {
 				line += colorize(" ★", "\033[32m", opts.NoColor)
 			}
-			_, err := fmt.Fprintln(w, line)
+			_, err := fmt.Fprintln(w, colorize(line, subtreeColor(l.ID), opts.NoColor))
 			if err != nil {
 				fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
+			}
+			if len(l.Notify) > 0 {
+				renderNotifyDeps(prefix+cont, subtreeColor(l.ID), l.Notify)
 			}
 		}
 	}

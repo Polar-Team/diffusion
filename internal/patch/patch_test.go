@@ -59,12 +59,12 @@ func writePatchProject(t *testing.T) (root, installed string) {
     name: app
     state: restarted
 `,
-		"installed/geerlingguy.docker/templates/app.j2":    "v1\n",
-		"installed/geerlingguy.docker/templates/extra.j2":  "e1\n",
-		"installed/geerlingguy.docker/files/banner":        "old\n",
-		"installed/geerlingguy.docker/files/more.txt":      "m\n",
-		"scenarios/sc/patch/files/banner.custom":           "new\n",
-		"scenarios/sc/patch/templates/extra.custom.j2":     "custom-e\n",
+		"installed/geerlingguy.docker/templates/app.j2":   "v1\n",
+		"installed/geerlingguy.docker/templates/extra.j2": "e1\n",
+		"installed/geerlingguy.docker/files/banner":       "old\n",
+		"installed/geerlingguy.docker/files/more.txt":     "m\n",
+		"scenarios/sc/patch/files/banner.custom":          "new\n",
+		"scenarios/sc/patch/templates/extra.custom.j2":    "custom-e\n",
 	}
 	for rel, content := range files {
 		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(content), 0o644); err != nil {
@@ -117,12 +117,17 @@ func mainBundle() *PatchBundle {
 		TasksToPatch: []PatchingTask{
 			{TaskId: "1",
 				NewModuleSetup: []PatchModuleSetup{{Key: "mode", Value: "0644"}},
-				NewConditions:  []PatchConditions{{Condition: "ansible_os_family == 'Debian'"}},
-				NewBecome:      &PatchBecomeSetup{User: "deploy"}},
+				NewConditions: []PatchConditions{
+					{Condition: "when", Body: "ansible_os_family == 'Debian'"},
+					{Condition: "changed_when", Body: "result is changed"},
+				},
+				NewBecome: &PatchBecomeSetup{User: "deploy"}},
 			{TaskId: "2", NewFileSrc: "banner.custom"},
 			{TaskId: "3", NewTemplateSrc: "extra.custom.j2"},
-			{TaskId: "4.1", NewConditions: []PatchConditions{{Condition: "x == 'y'"}}},
-			{TaskId: "h1", NewModuleSetup: []PatchModuleSetup{{Key: "state", Value: "reloaded"}}},
+			{TaskId: "4.1", NewConditions: []PatchConditions{{Condition: "when", Body: "x == 'y'"}}},
+			{TaskId: "h1",
+				NewModuleSetup: []PatchModuleSetup{{Key: "state", Value: "reloaded"}},
+				NewConditions:  []PatchConditions{{Condition: "failed_when", Body: "false"}}},
 		},
 	}
 }
@@ -174,6 +179,9 @@ func TestApplyBundleOverlaysAndMutations(t *testing.T) {
 	if w := taskValue(tasks[0], "when"); w == nil || w.Value != "ansible_os_family == 'Debian'" {
 		t.Errorf("task 1 when not set: %v", w)
 	}
+	if cw := taskValue(tasks[0], "changed_when"); cw == nil || cw.Value != "result is changed" {
+		t.Errorf("task 1 changed_when not set: %v", cw)
+	}
 	if bu := taskValue(tasks[0], "become_user"); bu == nil || bu.Value != "deploy" {
 		t.Errorf("task 1 become_user not set: %v", bu)
 	}
@@ -186,12 +194,92 @@ func TestApplyBundleOverlaysAndMutations(t *testing.T) {
 	if svc == nil || taskValue(svc, "state") == nil || taskValue(svc, "state").Value != "reloaded" {
 		t.Errorf("handler h1 service state not merged: %v", svc)
 	}
+	if fw := taskValue(handlers[0], "failed_when"); fw == nil || fw.Tag != "!!bool" || fw.Value != "false" {
+		t.Errorf("handler h1 failed_when bool not set: %v", fw)
+	}
+	foundWarning := false
+	for _, warn := range res.Warnings {
+		if strings.Contains(warn, "h1") && strings.Contains(warn, "failed_when") {
+			foundWarning = true
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected static-bool warning for h1, got %v", res.Warnings)
+	}
 
 	if len(res.Files) == 0 {
 		t.Error("expected changed files")
 	}
 	if s := res.Summary(); !strings.Contains(s, "bundle \"b\"") || !strings.Contains(s, "backup:") {
 		t.Errorf("summary missing parts:\n%s", s)
+	}
+}
+
+func TestApplyConditionsMergeAndBool(t *testing.T) {
+	mkdoc := func() *yaml.Node {
+		return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	}
+	// Two entries for one key merge into a sequence.
+	node := mkdoc()
+	summary, warns := applyConditions("1", node, []PatchConditions{
+		{Condition: "when", Body: "a == 1"},
+		{Condition: "WHEN", Body: "b == 2"},
+	})
+	if len(warns) != 0 {
+		t.Fatalf("unexpected warnings: %v", warns)
+	}
+	if !strings.Contains(summary, "when set (2)") {
+		t.Fatalf("summary = %q", summary)
+	}
+	when := taskValue(node, "when")
+	if when == nil || when.Kind != yaml.SequenceNode || len(when.Content) != 2 {
+		t.Fatalf("when not a 2-sequence: %v", when)
+	}
+	// Boolean literal renders a bool node plus a design warning.
+	node = mkdoc()
+	summary, warns = applyConditions("h1", node, []PatchConditions{
+		{Condition: "changed_when", Body: "False"},
+	})
+	fw := taskValue(node, "changed_when")
+	if fw == nil || fw.Tag != "!!bool" || fw.Value != "false" {
+		t.Fatalf("changed_when bool not rendered: %v", fw)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "h1") || !strings.Contains(warns[0], "design problem") {
+		t.Fatalf("warnings = %v", warns)
+	}
+	// Fixed key order regardless of input order.
+	node = mkdoc()
+	summary, _ = applyConditions("1", node, []PatchConditions{
+		{Condition: "failed_when", Body: "rc != 0"},
+		{Condition: "when", Body: "x"},
+	})
+	if !strings.HasPrefix(summary, "when set (1); failed_when set (1)") {
+		t.Fatalf("key order wrong: %q", summary)
+	}
+}
+
+func TestPatchConditionsValidate(t *testing.T) {
+	root, _ := writePatchProject(t)
+	chdirRoot(t, root)
+	mk := func(conds ...PatchConditions) error {
+		return (&PatchBundle{PatchBundleName: "b", Scenario: "sc", RoleName: "docker",
+			TasksToPatch: []PatchingTask{{TaskId: "1", NewConditions: conds}}}).validate()
+	}
+	if err := mk(PatchConditions{Condition: "WHEN", Body: "x"}); err != nil {
+		t.Errorf("case-insensitive key rejected: %v", err)
+	}
+	if err := mk(PatchConditions{Condition: "sometimes", Body: "x"}); err == nil ||
+		!strings.Contains(err.Error(), "when, changed_when, failed_when") {
+		t.Errorf("bad key not rejected with hint: %v", err)
+	}
+	if err := mk(PatchConditions{Condition: "when", Body: "  "}); err == nil {
+		t.Error("empty body not rejected")
+	}
+	if err := mk(PatchConditions{Condition: "x == 'y'"}); err == nil {
+		t.Error("legacy expression-as-key not rejected")
+	}
+	if err := mk(PatchConditions{Condition: "failed_when", Body: "True"}); err != nil {
+		t.Errorf("bool body rejected at validate: %v", err)
 	}
 }
 
