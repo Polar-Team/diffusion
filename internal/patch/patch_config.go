@@ -119,6 +119,80 @@ func canonicalTaskID(taskID string) (string, error) {
 	return strings.Join(str, "."), nil
 }
 
+// roleNameMatches reports whether a bundle role reference identifies the
+// same role as a diffusion.toml dependency entry (reconstructed as
+// "namespace.rolename" or plain "rolename"). Comparison is
+// case-insensitive. A short bundle name ("docker") matches a namespaced
+// entry ("geerlingguy.docker"); a namespaced bundle name must match in
+// full.
+func roleNameMatches(bundleRole, requirementRole string) bool {
+	b := strings.TrimSpace(bundleRole)
+	r := strings.TrimSpace(requirementRole)
+	if b == "" || r == "" {
+		return false
+	}
+	if strings.EqualFold(b, r) {
+		return true
+	}
+	if strings.Contains(b, ".") {
+		return false
+	}
+	short := r
+	if idx := strings.LastIndex(r, "."); idx != -1 {
+		short = r[idx+1:]
+	}
+	return strings.EqualFold(b, short)
+}
+
+// validateRoleName checks that the bundle's RoleName identifies a role
+// actually declared in diffusion.toml under [dependencies] for the
+// bundle's scenario. Dependency entries are keyed "scenario.rolename",
+// so the scenario prefix is stripped before matching.
+func (b *PatchBundle) validateRoleName() error {
+	roleName := strings.TrimSpace(b.RoleName)
+	if roleName == "" {
+		return fmt.Errorf(config.ColorRed+"patch bundle %q: role name is required"+config.ColorReset, b.PatchBundleName)
+	}
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf(config.ColorRed+"patch bundle %q: cannot load diffusion.toml: %v"+config.ColorReset, b.PatchBundleName, err)
+	}
+	if cfg == nil || cfg.DependencyConfig == nil || len(cfg.DependencyConfig.Roles) == 0 {
+		return fmt.Errorf(config.ColorRed+"patch bundle %q: no roles declared in diffusion.toml [dependencies]"+config.ColorReset, b.PatchBundleName)
+	}
+	scenario := strings.TrimSpace(b.Scenario)
+	var available []string
+	for i := range cfg.DependencyConfig.Roles {
+		entry := &cfg.DependencyConfig.Roles[i]
+		short := strings.TrimSpace(entry.Name)
+		if scenario != "" {
+			prefix := scenario + "."
+			if !strings.HasPrefix(short, prefix) {
+				continue
+			}
+			short = strings.TrimPrefix(short, prefix)
+		} else if idx := strings.Index(short, "."); idx != -1 {
+			// Unscoped bundle: accept entries from any scenario by
+			// stripping the "scenario." prefix when present.
+			short = short[idx+1:]
+		}
+		full := short
+		if ns := strings.TrimSpace(entry.Namespace); ns != "" {
+			full = ns + "." + short
+		}
+		available = append(available, full)
+		if roleNameMatches(roleName, full) {
+			return nil
+		}
+	}
+	if len(available) == 0 {
+		return fmt.Errorf(config.ColorRed+"patch bundle %q: no roles declared for scenario %q in diffusion.toml [dependencies]"+config.ColorReset,
+			b.PatchBundleName, scenario)
+	}
+	return fmt.Errorf(config.ColorRed+"patch bundle %q: role %q not found in diffusion.toml [dependencies] for scenario %q (available roles: %s)"+config.ColorReset,
+		b.PatchBundleName, roleName, scenario, strings.Join(available, ", "))
+}
+
 // validate implements Validate. allowEmptyID is true for entries nested
 // under NewBlock, which describe fresh tasks and therefore carry no
 // target task_id of their own.
@@ -178,6 +252,9 @@ func (b *PatchBundle) validate() error {
 	if strings.TrimSpace(b.PatchBundleName) == "" {
 		return fmt.Errorf(config.ColorRed + "patch bundle: bundle name is required" + config.ColorReset)
 	}
+	if err := b.validateRoleName(); err != nil {
+		return err
+	}
 	if len(b.TasksToPatch) == 0 {
 		return fmt.Errorf(config.ColorRed+"patch bundle %q: no tasks to patch"+config.ColorReset, b.PatchBundleName)
 	}
@@ -233,7 +310,7 @@ func (p *PatchesConfig) LoadPatchConfigFrom(scenarioName string) (*PatchesConfig
 	if err := yaml.Unmarshal(data, &configMap); err != nil {
 		return nil, fmt.Errorf(config.ColorRed+"failed to unmarshal patch config: %v"+config.ColorReset, err)
 	}
-	if err := p.validate(); err != nil {
+	if err := configMap.validate(); err != nil {
 		return nil, fmt.Errorf(config.ColorRed+"invalid patch config: %v"+config.ColorReset, err)
 	}
 	return configMap, nil

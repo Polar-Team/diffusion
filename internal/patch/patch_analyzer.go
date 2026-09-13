@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -298,12 +299,7 @@ func (w *walker) warn(format string, args ...any) {
 
 // onStack reports whether rel is currently being expanded.
 func (w *walker) onStack(rel string) bool {
-	for _, s := range w.stack {
-		if s == rel {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(w.stack, rel)
 }
 
 // insideRoot reports whether target (joined to roleRoot) stays inside roleRoot.
@@ -441,7 +437,7 @@ func (w *walker) walkInclude(id, fileRel string, line int, name, mod string, val
 	if !ok || strings.TrimSpace(target) == "" {
 		branch.Opaque = true
 		branch.Warning = "cannot determine include target"
-		w.warn("%s:%d (%s): cannot determine include target", fileRel, line, id)
+		w.warn(config.ColorYellow+"%s:%d (%s): cannot determine include target"+config.ColorReset, fileRel, line, id)
 		w.addBranch(branch)
 		return
 	}
