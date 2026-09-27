@@ -3,6 +3,7 @@ package utils
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -19,6 +20,20 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// generateSessionID returns a random UUIDv4 string for unique container naming.
+func GenerateSessionID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use timestamp-based ID if crypto/rand fails (should never happen).
+		return fmt.Sprintf("%x", b)
+	}
+	// Set version (4) and variant (RFC 4122) bits.
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
 
 // exists checks if a file or directory exists
 // Exists checks if a file or directory exists
@@ -486,6 +501,141 @@ func DockerRunDeployContainer(sessionID string, args []string) error {
 		return fmt.Errorf("deploy container %s exited with error: %w", containerName, err)
 	}
 	return nil
+}
+
+// DockerRunRoleDownloadingContainer downloads Ansible roles for patch analysis
+// in a short-lived, separately mounted container.
+//
+// Mounts (all host paths are resolved to absolute before passing to docker):
+//   - <patchDir>/.ansible/roles -> /root/.ansible/roles (rw, install target)
+//   - <cwd>/scenarios/<scenario> -> /opt/req:ro (galaxy manifest source)
+//
+// then runs ansible-galaxy role install from /opt/req/requirements.yml
+// inside the molecule container image and exits (--rm).
+func DockerRunRoleDownloadingContainer(sessionID, patchDir, scenario string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("sessionID cannot be empty")
+	}
+	if err := ValidateCLIArgument("session", sessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(patchDir) == "" {
+		return fmt.Errorf("patchDir cannot be empty")
+	}
+	if strings.TrimSpace(scenario) == "" {
+		return fmt.Errorf("scenario cannot be empty")
+	}
+	if err := ValidateCLIArgument("scenario", scenario); err != nil {
+		return err
+	}
+	if strings.Contains(scenario, "/") || strings.Contains(scenario, "\\") || strings.Contains(scenario, "..") {
+		return fmt.Errorf("invalid scenario %q: must be a plain scenario name", scenario)
+	}
+
+	patchAbs, err := filepath.Abs(patchDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve patchDir %q: %w", patchDir, err)
+	}
+	// Layout must match resolveRoleCandidates: home/.ansible/roles.
+	rolesDest := filepath.Join(patchAbs, ".ansible", "roles")
+	if err := EnsureDir(rolesDest); err != nil {
+		return fmt.Errorf("failed to create roles dest %q: %w", rolesDest, err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+	reqSrc, err := filepath.Abs(filepath.Join(cwd, config.ScenariosDir, scenario))
+	if err != nil {
+		return fmt.Errorf("failed to resolve scenario dir: %w", err)
+	}
+	if st, err := os.Stat(reqSrc); err != nil || !st.IsDir() {
+		return fmt.Errorf("scenario %q not found at %s: run from a role root containing scenarios/<name>", scenario, reqSrc)
+	}
+	if _, err := os.Stat(filepath.Join(reqSrc, config.RequirementsFileName)); err != nil {
+		return fmt.Errorf("requirements file not found at %s: nothing to download", filepath.Join(reqSrc, config.RequirementsFileName))
+	}
+
+	image := resolveDownloaderImage()
+	if err := ValidateCLIArgument("image", image); err != nil {
+		return err
+	}
+
+	containerName := fmt.Sprintf("diffusion-role-downloader-%s-", sessionID)
+
+	// All `docker run` flags must precede the image; the container command
+	// follows it as `sh -c "..."`.
+	fullArgs := []string{"run", "--rm", "--name", containerName}
+	fullArgs = append(fullArgs, "-v", fmt.Sprintf("%s:%s", rolesDest, config.ContainerRolesCachePath))
+	fullArgs = append(fullArgs, "-v", fmt.Sprintf("%s:/opt/req:ro", reqSrc))
+
+	// Forward private artifact credentials so galaxy/git inside the
+	// container can access private role sources.
+	for i := 1; i <= config.MaxArtifactSources; i++ {
+		u := os.Getenv(fmt.Sprintf("%s%d", config.EnvGitUserPrefix, i))
+		p := os.Getenv(fmt.Sprintf("%s%d", config.EnvGitPassPrefix, i))
+		gurl := os.Getenv(fmt.Sprintf("%s%d", config.EnvGitURLPrefix, i))
+		if u == "" && p == "" && gurl == "" {
+			continue
+		}
+		fullArgs = append(fullArgs,
+			"-e", fmt.Sprintf("%s%d=%s", config.EnvGitUserPrefix, i, u),
+			"-e", fmt.Sprintf("%s%d=%s", config.EnvGitPassPrefix, i, p),
+			"-e", fmt.Sprintf("%s%d=%s", config.EnvGitURLPrefix, i, gurl),
+		)
+	}
+
+	fullArgs = append(fullArgs, image)
+	// Fixed container-internal paths only — no host input interpolated.
+	shell := fmt.Sprintf(
+		`set -e && mkdir -p %s && ansible-galaxy role install -r /opt/req/%s -p %s`,
+		config.ContainerRolesCachePath,
+		config.RequirementsFileName,
+		config.ContainerRolesCachePath,
+	)
+	fullArgs = append(fullArgs, "sh", "-c", shell)
+
+	// Ensure the container is removed on failure or interruption.
+	// --rm handles the normal exit case, but if the process is killed or
+	// Docker fails to clean up, this defer guarantees removal.
+	defer func() {
+		rmCmd := exec.Command("docker", "rm", "-f", containerName)
+		rmCmd.Stdout = nil
+		rmCmd.Stderr = nil
+		_ = rmCmd.Run()
+	}()
+
+	cmd := exec.Command("docker", fullArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("role downloader container %s exited with error: %w", containerName, err)
+	}
+	return nil
+
+}
+
+func resolveDownloaderImage() string {
+	registry := &config.ContainerRegistry{
+		RegistryServer:        config.DefaultRegistryServer,
+		MoleculeContainerName: config.DefaultMoleculeContainerName,
+		MoleculeContainerTag:  GetDefaultMoleculeTag(),
+	}
+	if cfg, err := config.LoadConfig(); err == nil && cfg != nil && cfg.ContainerRegistry != nil {
+		r := cfg.ContainerRegistry
+		if strings.TrimSpace(r.RegistryServer) != "" {
+			registry.RegistryServer = strings.TrimSpace(r.RegistryServer)
+		}
+		if strings.TrimSpace(r.MoleculeContainerName) != "" {
+			registry.MoleculeContainerName = strings.TrimSpace(r.MoleculeContainerName)
+		}
+		if strings.TrimSpace(r.MoleculeContainerTag) != "" {
+			registry.MoleculeContainerTag = strings.TrimSpace(r.MoleculeContainerTag)
+		}
+	}
+	return GetImageURL(registry)
 }
 
 // CopyIfExists copies file/directory if it exists (recursively when directory)

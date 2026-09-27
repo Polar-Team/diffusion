@@ -88,14 +88,14 @@ type ArtifactLeaf struct {
 
 // TaskNode is one patchable leaf task.
 type TaskNode struct {
-	ID        string         `yaml:"id"`
-	File      string         `yaml:"file"` // role-relative, slash-separated
-	Line      int            `yaml:"line"`
-	Name      string         `yaml:"name,omitempty"`
-	Module    string         `yaml:"module"`
-	Src       string         `yaml:"src,omitempty"`
-	Dest      string         `yaml:"dest,omitempty"`
-	Notify    []string       `yaml:"notify,omitempty"`
+	ID     string   `yaml:"id"`
+	File   string   `yaml:"file"` // role-relative, slash-separated
+	Line   int      `yaml:"line"`
+	Name   string   `yaml:"name,omitempty"`
+	Module string   `yaml:"module"`
+	Src    string   `yaml:"src,omitempty"`
+	Dest   string   `yaml:"dest,omitempty"`
+	Notify []string `yaml:"notify,omitempty"`
 	// Listen topics this handler responds to (handlers only).
 	Listen    []string       `yaml:"listen,omitempty"`
 	Tags      []string       `yaml:"tags,omitempty"`
@@ -107,17 +107,17 @@ type TaskNode struct {
 // BranchNode is a visual-only include/block grouping. It is never a patch
 // target: patch.go resolves dotted IDs through branches to leaves.
 type BranchNode struct {
-	ID      string   `yaml:"id"`
-	File    string   `yaml:"file"` // file holding the include/block statement
-	Line    int      `yaml:"line"`
-	Name    string   `yaml:"name,omitempty"`
-	Kind    string   `yaml:"kind"`
-	Target  string   `yaml:"target,omitempty"` // included file (role-relative) or role name
-	Opaque  bool     `yaml:"opaque,omitempty"` // dynamic/missing/cyclic target: not expanded
-	Tags    []string `yaml:"tags,omitempty"`
-	Notify  []string `yaml:"notify,omitempty"`
-	Warning string   `yaml:"warning,omitempty"`
-	Color   string   `yaml:"-"`
+	ID      string      `yaml:"id"`
+	File    string      `yaml:"file"` // file holding the include/block statement
+	Line    int         `yaml:"line"`
+	Name    string      `yaml:"name,omitempty"`
+	Kind    string      `yaml:"kind"`
+	Target  string      `yaml:"target,omitempty"` // included file (role-relative) or role name
+	Opaque  bool        `yaml:"opaque,omitempty"` // dynamic/missing/cyclic target: not expanded
+	Tags    []string    `yaml:"tags,omitempty"`
+	Notify  []string    `yaml:"notify,omitempty"`
+	Warning string      `yaml:"warning,omitempty"`
+	Color   string      `yaml:"-"`
 	Path    []FileIndex `yaml:"path,omitempty"` // hop chain from the entry file to this statement
 }
 
@@ -146,6 +146,10 @@ type TreeOptions struct {
 	// -> display path (e.g. "patch/files/banner.custom"), rendered as
 	// "<= <path>" on the leaf line.
 	Overlays map[string]string
+}
+
+type RoleDownloaderContainerConfig struct {
+	ContainerRegistry *config.ContainerRegistry
 }
 
 // reservedTaskKeys are task mapping keys that never denote a module.
@@ -226,7 +230,7 @@ func parseTags(n *yaml.Node) []string {
 // splitTagString splits "a, b" or "a" into tags.
 func splitTagString(s string) []string {
 	var out []string
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		if t := strings.TrimSpace(p); t != "" {
 			out = append(out, t)
 		}
@@ -272,7 +276,7 @@ func moduleArgs(n *yaml.Node) map[string]any {
 	}
 	if n.Kind == yaml.ScalarNode {
 		out := map[string]any{}
-		for _, field := range strings.Fields(n.Value) {
+		for field := range strings.FieldsSeq(n.Value) {
 			k, v, ok := strings.Cut(field, "=")
 			if !ok || k == "" {
 				continue
@@ -667,12 +671,7 @@ func (w *walker) addLeaf(id string, level []int, hop []FileIndex, fileRel string
 		// Handler listen topics answer notifies addressed at the topic.
 		for _, topic := range leaf.Listen {
 			duplicate := false
-			for _, existing := range w.handlers[topic] {
-				if existing == id {
-					duplicate = true
-					break
-				}
-			}
+			duplicate = slices.ContainsFunc(w.handlers[topic], func(existing string) bool { return existing == id })
 			if !duplicate {
 				w.handlers[topic] = append(w.handlers[topic], id)
 			}
@@ -759,7 +758,7 @@ func AnalyzeExternalRole(scenario, roleName string) (*RoleAnalysis, error) {
 	if err := utils.ValidateCLIArgument("role", roleName); err != nil {
 		return nil, err
 	}
-	if path, err := ResolveInstalledRolePath(roleName); err == nil {
+	if path, err := ResolveInstalledRolePath(roleName, scenario); err == nil {
 		return analyzeRoleAtPath(path, scenario, roleName)
 	}
 	path, cleanup, err := ensureRoleViaContainer(roleName)
@@ -769,6 +768,11 @@ func AnalyzeExternalRole(scenario, roleName string) (*RoleAnalysis, error) {
 	defer cleanup()
 	return analyzeRoleAtPath(path, scenario, roleName)
 }
+
+// dockerRoleDownloader downloads scenario roles into patchDir via a
+// separately mounted container. It is a variable so tests can stub it
+// without requiring a real docker daemon.
+var dockerRoleDownloader = utils.DockerRunRoleDownloadingContainer
 
 // resolveRoleCandidates lists installed-role search paths in priority
 // order. Empty base dirs are skipped. Pure function for testability.
@@ -792,11 +796,65 @@ func resolveRoleCandidates(cacheDir, cwd, home, roleName string) []string {
 	return out
 }
 
-// ResolveInstalledRolePath returns the installed directory of roleName,
-// searching the diffusion cache, molecule working copies and the user
-// Galaxy roles path. It never installs anything; see
-// AnalyzeExternalRole for the installing entry point.
-func ResolveInstalledRolePath(roleName string) (string, error) {
+// shortRoleBases lists base dirs for short-name ("docker" -> "ns.docker")
+// directory scans. Pure function for testability.
+func shortRoleBases(cacheDir, cwd, home string) []string {
+	var bases []string
+	if cacheDir != "" {
+		bases = append(bases, filepath.Join(cacheDir, config.CacheRolesDir))
+	}
+	if cwd != "" {
+		bases = append(bases, filepath.Join(cwd, config.MoleculeDir))
+	}
+	if home != "" {
+		bases = append(bases, filepath.Join(home, ".ansible", "roles"))
+	}
+	return bases
+}
+
+// findInstalledRole returns the first candidate holding a tasks/ dir,
+// falling back to short-name directory scans. It returns the hit and the
+// full tried list for error reporting.
+func findInstalledRole(candidates, bases []string, roleName string) (string, []string) {
+	tried := append([]string{}, candidates...)
+	for _, p := range candidates {
+		if st, err := os.Stat(filepath.Join(p, "tasks")); err == nil && st.IsDir() {
+			return p, tried
+		}
+	}
+	// Short names ("docker") also match namespaced install dirs
+	// ("geerlingguy.docker") via directory scan.
+	if !strings.Contains(roleName, ".") {
+		short := strings.TrimSpace(roleName)
+		for _, base := range bases {
+			if p, ok := matchShortRoleDir(base, short); ok {
+				tried = append(tried, p)
+				return p, tried
+			}
+		}
+	}
+	return "", tried
+}
+
+// ResolveInstalledRolePath returns the installed directory of roleName.
+//
+// It first searches already-installed locations (diffusion cache, cwd
+// molecule working copies, user Galaxy roles path) without side effects.
+// Only when nothing is found locally does it download scenario roles into
+// a fresh temp dir via a separately mounted container and search there.
+// The temp dir persists on success because callers patch/analyze from it;
+// it is removed when the download yields nothing usable.
+func ResolveInstalledRolePath(roleName, scenario string) (string, error) {
+	if err := utils.ValidateCLIArgument("role", roleName); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(roleName) == "" {
+		return "", fmt.Errorf("role name cannot be empty")
+	}
+	if err := utils.ValidateCLIArgument("scenario", scenario); err != nil {
+		return "", err
+	}
+
 	var cacheDir, cwd, home string
 	if cfg, err := config.LoadConfig(); err == nil && cfg != nil &&
 		cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
@@ -804,37 +862,52 @@ func ResolveInstalledRolePath(roleName string) (string, error) {
 	}
 	cwd, _ = os.Getwd()
 	home, _ = os.UserHomeDir()
-	tried := resolveRoleCandidates(cacheDir, cwd, home, roleName)
-	for _, p := range tried {
-		if st, err := os.Stat(filepath.Join(p, "tasks")); err == nil && st.IsDir() {
-			return p, nil
-		}
+
+	candidates := resolveRoleCandidates(cacheDir, cwd, home, roleName)
+	bases := shortRoleBases(cacheDir, cwd, home)
+	if hit, _ := findInstalledRole(candidates, bases, roleName); hit != "" {
+		return hit, nil
 	}
-	// Short names ("docker") also match namespaced install dirs
-	// ("geerlingguy.docker") via directory scan.
-	if !strings.Contains(roleName, ".") {
-		short := strings.TrimSpace(roleName)
-		var bases []string
-		if cacheDir != "" {
-			bases = append(bases, filepath.Join(cacheDir, config.CacheRolesDir))
-		}
-		if cwd != "" {
-			bases = append(bases, filepath.Join(cwd, config.MoleculeDir))
-		}
-		if home != "" {
-			bases = append(bases, filepath.Join(home, ".ansible", "roles"))
-		}
-		for _, base := range bases {
-			if p, ok := matchShortRoleDir(base, short); ok {
-				tried = append(tried, p)
-				return p, nil
-			}
-		}
+
+	// Nothing installed locally — fall back to downloading scenario roles
+	// into a temp dir. Skip docker entirely when there is no manifest to
+	// install from so unit tests and offline flows fail fast with the
+	// local tried list instead of a docker error.
+	scenario = strings.TrimSpace(scenario)
+	if scenario == "" {
+		scenario = config.DefaultScenario
 	}
-	if len(tried) == 0 {
-		return "", fmt.Errorf("role %q not found: no roles paths to search", roleName)
+	if strings.Contains(scenario, "/") || strings.Contains(scenario, "\\") || strings.Contains(scenario, "..") {
+		return "", fmt.Errorf("invalid scenario %q: must be a plain scenario name", scenario)
 	}
-	return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(tried, ", "))
+	reqFile := filepath.Join(cwd, config.ScenariosDir, scenario, config.RequirementsFileName)
+	if _, err := os.Stat(reqFile); err != nil {
+		tried := append([]string{}, candidates...)
+		return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(tried, ", "))
+	}
+
+	tmpHome, err := os.MkdirTemp("", "diffusion-patch-"+strings.ReplaceAll(roleName, ".", "-"))
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp dir for role resolution: %v", err)
+	}
+	if err := dockerRoleDownloader(utils.GenerateSessionID(), tmpHome, scenario); err != nil {
+		_ = os.RemoveAll(tmpHome)
+		return "", fmt.Errorf("failed to run role-downloading container: %v", err)
+	}
+	// Temp-only search: tmpHome/.ansible/roles/<variants>, matching the
+	// downloader container mount in utils.DockerRunRoleDownloadingContainer.
+	tmpCandidates := []string{}
+	for _, v := range roleDirVariants(roleName) {
+		tmpCandidates = append(tmpCandidates, filepath.Join(tmpHome, ".ansible", "roles", v))
+	}
+	tmpBases := []string{filepath.Join(tmpHome, ".ansible", "roles")}
+	if hit, triedTmp := findInstalledRole(tmpCandidates, tmpBases, roleName); hit != "" {
+		return hit, nil
+	} else {
+		_ = os.RemoveAll(tmpHome)
+		allTried := append(append([]string{}, candidates...), triedTmp...)
+		return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(allTried, ", "))
+	}
 }
 
 // matchShortRoleDir finds an installed dir for a short role name inside
@@ -871,7 +944,7 @@ func ensureRoleViaContainer(roleName string) (string, func(), error) {
 		return "", noop, fmt.Errorf("role %q is not installed and docker is unavailable: %v", roleName, err)
 	}
 	container := ""
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if name := strings.TrimSpace(line); strings.HasPrefix(name, config.MoleculeContainerPrefix) {
 			container = name
 			break
@@ -1211,7 +1284,8 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 	}
 
 	var render func(parent, prefix string)
-	render = func(parent, prefix string) {		sibs := children[parent]
+	render = func(parent, prefix string) {
+		sibs := children[parent]
 		for i, it := range sibs {
 			last := i == len(sibs)-1
 			glyph, cont := "├── ", "│   "

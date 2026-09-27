@@ -550,7 +550,7 @@ func ApplyBundle(bundle *PatchBundle, analysis *RoleAnalysis, opts ApplyOptions)
 	rolePath := strings.TrimSpace(opts.RolePath)
 	if rolePath == "" {
 		var err error
-		rolePath, err = ResolveInstalledRolePath(bundle.RoleName)
+		rolePath, err = ResolveInstalledRolePath(bundle.RoleName, bundle.Scenario)
 		if err != nil {
 			return nil, err
 		}

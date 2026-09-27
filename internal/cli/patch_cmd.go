@@ -266,7 +266,7 @@ func runPatchBundles(scenario, bundleName, targetPath string, dryRun, force bool
 		}
 		target := strings.TrimSpace(targetPath)
 		if target == "" {
-			target, err = patch.ResolveInstalledRolePath(b.RoleName)
+			target, err = patch.ResolveInstalledRolePath(b.RoleName, b.Scenario)
 			if err != nil {
 				fmt.Printf("\033[31mFAIL %s: %v\033[0m\n", b.PatchBundleName, err)
 				failed = true
