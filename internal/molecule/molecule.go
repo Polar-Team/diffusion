@@ -15,6 +15,7 @@ import (
 	"diffusion/internal/cache"
 	"diffusion/internal/config"
 	"diffusion/internal/dependency"
+	"diffusion/internal/patch"
 	"diffusion/internal/registry"
 	"diffusion/internal/secrets"
 	"diffusion/internal/utils"
@@ -162,7 +163,7 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	log.Printf("Default tests dir: %s", defaultTestsDir)
 
 	if opts.ConvergeFlag {
-		return runConverge(opts, roleDirName)
+		return runConverge(opts, cfg, roleDirName)
 	}
 	if opts.LintFlag {
 		return runLint(opts, roleDirName)
@@ -180,8 +181,71 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	return nil
 }
 
+// patchedRolesContainerDir is the in-container directory holding patched
+// external roles. It sorts before the default roles path so patched content
+// wins without touching the pristine cache mount at /root/.ansible/roles.
+const patchedRolesContainerDir = "/tmp/diffusion-patched-roles"
+
+// ensurePatchedRolesForMolecule auto-applies scenarios/<scenario>/patch.yml
+// bundles host-side (no-op when no patch.yml) and copies the patched roles
+// into the running molecule container. It returns the applied patches.
+// A patch error fails the run: silently testing pristine roles would give
+// false confidence.
+func ensurePatchedRolesForMolecule(opts *MoleculeOptions, scenario string) ([]patch.AppliedPatch, error) {
+	if strings.TrimSpace(scenario) == "" {
+		scenario = config.DefaultScenario
+	}
+	applied, err := patch.ApplyScenarioPatches(scenario)
+	if err != nil {
+		return nil, err
+	}
+	if len(applied) == 0 {
+		return nil, nil
+	}
+	copyPatchedRolesIntoContainer(opts, applied)
+	return applied, nil
+}
+
+// patchedRolesEnvPrefix returns an ANSIBLE_ROLES_PATH prefix directing
+// Ansible at the patched roles first, falling back to the default cache
+// path. Empty when nothing was patched (callers keep prior behavior).
+func patchedRolesEnvPrefix(applied []patch.AppliedPatch) string {
+	if len(applied) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("ANSIBLE_ROLES_PATH=%s ",
+		config.ContainerRolesCachePath)
+}
+
+// copyPatchedRolesIntoContainer copies each patched host-side role into the
+// running molecule container under patchedRolesContainerDir. Failures are
+// warnings; the run continues so a best-effort subset still applies.
+func copyPatchedRolesIntoContainer(opts *MoleculeOptions, applied []patch.AppliedPatch) {
+	if len(applied) == 0 {
+		return
+	}
+	containerName := fmt.Sprintf("molecule-%s", opts.RoleFlag)
+	mkdirCmd := fmt.Sprintf("mkdir -p %s", patchedRolesContainerDir)
+	// Best-effort: mkdir -p never fails on a running container.
+	_ = utils.DockerExecInteractiveHide(opts.RoleFlag, "sh", opts.CIMode, "-c", mkdirCmd)
+	for _, p := range applied {
+		base := filepath.Base(filepath.Clean(p.Path))
+		if base == "" || base == "." || base == string(filepath.Separator) {
+			continue
+		}
+		log.Printf("Copying patched role %s into container %s:%s", base, containerName, patchedRolesContainerDir)
+		src := p.Path + string(os.PathSeparator) + "."
+		dst := containerName + ":" + patchedRolesContainerDir + "/" + base
+		if err := exec.Command("docker", "cp", src, dst).Run(); err != nil {
+			log.Printf(config.ColorYellow+"warning: failed to copy patched role %s into container: %v"+config.ColorReset, base, err)
+		} else {
+			log.Printf(config.ColorGreen+"patch: synced %s into container"+config.ColorReset, base)
+		}
+	}
+}
+
 // runConverge runs molecule converge inside the container.
-func runConverge(opts *MoleculeOptions, roleDirName string) error {
+func runConverge(opts *MoleculeOptions, cfg *config.Config, roleDirName string) error {
 	// Verify molecule.yml exists inside container before running
 	if opts.CIMode {
 		checkCmd := fmt.Sprintf("ls -la /opt/molecule/%s/molecule/default/molecule.yml", roleDirName)
@@ -203,11 +267,23 @@ func runConverge(opts *MoleculeOptions, roleDirName string) error {
 	if opts.RoleScenario != "" {
 		scenario = opts.RoleScenario
 	}
-	galaxyInstall := ""
+	// Pristine reinstall first (best-effort, as before): patched roles are
+	// copied afterwards so --force cannot wipe them.
 	if opts.ForceFlag {
-		galaxyInstall = fmt.Sprintf("ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && ", scenario)
+		galaxyCmd := fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true", roleDirName, scenario)
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", galaxyCmd); err != nil {
+			log.Printf(config.ColorYellow+"warning: galaxy reinstall failed: %v"+config.ColorReset, err)
+		}
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule converge%s", roleDirName, galaxyInstall, tagEnv, scenarioFlag(opts))
+	// Auto-apply scenario patches (no-op without patch.yml) and sync the
+	// patched roles into the container where Ansible looks first.
+	patched, err := ensurePatchedRolesForMolecule(opts, scenario)
+	if err != nil {
+		log.Printf(config.ColorRed+"patch apply failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("patch apply failed: %w", err)
+	}
+	rolesPrefix := patchedRolesEnvPrefix(patched)
+	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule converge%s", roleDirName, rolesPrefix, tagEnv, scenarioFlag(opts))
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf(config.ColorRed+"Converge failed: %v"+config.ColorReset, err)
 		return fmt.Errorf("converge failed: %w", err)
@@ -261,12 +337,21 @@ func runVerify(opts *MoleculeOptions, cfg *config.Config, path, roleDirName, rol
 		return fmt.Errorf("unknown tests type: %s", cfg.TestsConfig.Type)
 	}
 
+	// run molecule verify (patches first so verify tests the patched roles,
+	// e.g. when run without a prior converge).
+	patched, err := ensurePatchedRolesForMolecule(opts, scenario)
+	if err != nil {
+		log.Printf(config.ColorRed+"patch apply failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("patch apply failed: %w", err)
+	}
+	rolesPrefix := patchedRolesEnvPrefix(patched)
+
 	// run molecule verify
 	tagEnv := ""
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
-	cmdStr := fmt.Sprintf("cd ./%s && %smolecule verify%s", roleDirName, tagEnv, scenarioFlag(opts))
+	cmdStr := fmt.Sprintf("cd ./%s && %s%smolecule verify%s", roleDirName, rolesPrefix, tagEnv, scenarioFlag(opts))
 	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf(config.ColorRed+"Verify failed: %v"+config.ColorReset, err)
 		return fmt.Errorf("verify failed: %w", err)
@@ -504,17 +589,31 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 	if opts.RoleScenario != "" {
 		scenario = opts.RoleScenario
 	}
-	galaxyInstall := ""
+	// Pristine reinstall first (best-effort, as before): patched roles are
+	// copied afterwards so --force cannot wipe them.
 	if opts.ForceFlag {
-		galaxyInstall = fmt.Sprintf("ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true && ", scenario)
+		galaxyCmd := fmt.Sprintf("cd ./%s && ansible-galaxy install --force -r molecule/%s/requirements.yml 2>/dev/null || true", roleDirName, scenario)
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", galaxyCmd); err != nil {
+			log.Printf(config.ColorYellow+"warning: galaxy reinstall failed: %v"+config.ColorReset, err)
+		}
 	}
+	// Auto-apply scenario patches (no-op without patch.yml) and sync the
+	// patched roles into the container where Ansible looks first. A patch
+	// error fails the run: silently testing pristine roles would give
+	// false confidence.
+	patched, patchErr := ensurePatchedRolesForMolecule(opts, scenario)
+	if patchErr != nil {
+		log.Printf(config.ColorRed+"patch apply failed: %v"+config.ColorReset, patchErr)
+		return fmt.Errorf("patch apply failed: %w", patchErr)
+	}
+	rolesPrefix := patchedRolesEnvPrefix(patched)
 	err = exec.Command("docker", "inspect", fmt.Sprintf("molecule-%s", opts.RoleFlag)).Run()
 	if err == nil {
 		// container exists — best-effort uv-sync, then converge
 		if err := utils.DockerExecInteractiveHide(opts.RoleFlag, "uv-sync", opts.CIMode); err != nil {
 			log.Printf(config.ColorYellow+"warning: uv-sync failed (container-exists path): %v"+config.ColorReset, err)
 		}
-		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge%s", roleDirName, galaxyInstall, scenarioFlag(opts))); err != nil {
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge%s", roleDirName, rolesPrefix, scenarioFlag(opts))); err != nil {
 			log.Printf(config.ColorYellow+"warning: converge failed (container-exists path): %v"+config.ColorReset, err)
 		}
 	} else {
@@ -526,7 +625,7 @@ func handleDefaultFlow(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && molecule create%s", roleDirName, scenarioFlag(opts))); err != nil {
 			log.Printf(config.ColorYellow+"warning: molecule create failed: %v"+config.ColorReset, err)
 		}
-		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge%s", roleDirName, galaxyInstall, scenarioFlag(opts))); err != nil {
+		if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", fmt.Sprintf("cd ./%s && %smolecule converge%s", roleDirName, rolesPrefix, scenarioFlag(opts))); err != nil {
 			log.Printf(config.ColorYellow+"warning: converge failed: %v"+config.ColorReset, err)
 		}
 	}
