@@ -1,7 +1,6 @@
 package deploy
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -13,20 +12,6 @@ import (
 	"diffusion/internal/dependency"
 	"diffusion/internal/utils"
 )
-
-// generateSessionID returns a random UUIDv4 string for unique container naming.
-func generateSessionID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback: use timestamp-based ID if crypto/rand fails (should never happen).
-		return fmt.Sprintf("%x", b)
-	}
-	// Set version (4) and variant (RFC 4122) bits.
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
 
 // ResolvedCredential is a flattened artifact credential ready to be injected
 // into the container environment.
@@ -100,7 +85,7 @@ func RunDeployContainer(cfg DeployContainerConfig) error {
 	image := utils.GetImageURL(cfg.ContainerRegistry)
 	log.Printf(config.ColorGreen+"Using container image: %s"+config.ColorReset, image)
 
-	sessionID := generateSessionID()
+	sessionID := utils.GenerateSessionID()
 
 	args, err := buildDeployDockerArgs(cfg, image)
 	if err != nil {
