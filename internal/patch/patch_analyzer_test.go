@@ -438,6 +438,63 @@ func TestResolveInstalledRolePathDockerFallback(t *testing.T) {
 	}
 }
 
+func TestResolveInstalledRolePathStaticCacheDir(t *testing.T) {
+	root := t.TempDir()
+	cacheBase := t.TempDir()
+	scenarioDir := filepath.Join(root, "scenarios", "default")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scenarioDir, "requirements.yml"), []byte("---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// diffusion.toml with cache_id so the download target is static and
+	// carries the role_<cache_id> suffix.
+	toml := "[cache]\nenabled = true\ncache_id = \"testcache123\"\ncache_path = \"" + filepath.ToSlash(cacheBase) + "\"\n"
+	if err := os.WriteFile(filepath.Join(root, "diffusion.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	var seenPatchDir string
+	origDownloader := dockerRoleDownloader
+	dockerRoleDownloader = func(sessionID, patchDir, scenario string) error {
+		seenPatchDir = patchDir
+		dest := filepath.Join(patchDir, ".ansible", "roles", "geerlingguy.docker", "tasks")
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dest, "main.yml"), []byte("---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return nil
+	}
+	defer func() { dockerRoleDownloader = origDownloader }()
+
+	got, err := ResolveInstalledRolePath("geerlingguy.docker", "default")
+	if err != nil {
+		t.Fatalf("static cache fallback not resolved: %v", err)
+	}
+	if !strings.Contains(filepath.ToSlash(got), "role_testcache123") {
+		t.Fatalf("resolved path %q missing role_<cache_id> suffix", got)
+	}
+	if !strings.Contains(filepath.ToSlash(seenPatchDir), "role_testcache123") {
+		t.Fatalf("patch dir %q missing role_<cache_id> suffix", seenPatchDir)
+	}
+	// Second call must resolve to the same static path (launchable).
+	got2, err := ResolveInstalledRolePath("geerlingguy.docker", "default")
+	if err != nil {
+		t.Fatalf("second resolve failed: %v", err)
+	}
+	if got2 != got {
+		t.Fatalf("static path not stable: first %q second %q", got, got2)
+	}
+}
+
 func TestAnalysisSerialization(t *testing.T) {
 	a, err := analyzeRoleAtPath(writeFixtureRole(t), "default", "fixture.role")
 	if err != nil {

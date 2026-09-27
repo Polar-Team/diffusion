@@ -836,14 +836,39 @@ func findInstalledRole(candidates, bases []string, roleName string) (string, []s
 	return "", tried
 }
 
+// patchDownloadHomeDir returns the home dir used as patchDir for the
+// role-downloading container. When diffusion.toml configures a cache ID it
+// is static — <cacheDir>/patch/<scenario> — so the resolved role path
+// carries the role_<cache_id> suffix and stays launchable across runs
+// (e.g. ~/.diffusion/cache/role_<cache_id>/patch/default/.ansible/roles).
+// Otherwise it falls back to a fresh temp dir. It returns the dir and
+// whether it is ephemeral (temp dirs are removed on failure, static dirs
+// are kept).
+func patchDownloadHomeDir(cfg *config.Config, cacheDir, scenario string) (string, bool, error) {
+	if cfg != nil && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled &&
+		strings.TrimSpace(cfg.CacheConfig.CacheID) != "" && strings.TrimSpace(cacheDir) != "" {
+		dir := filepath.Join(cacheDir, "patch", scenario)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", false, fmt.Errorf("failed to create static patch dir %q: %w", dir, err)
+		}
+		return dir, false, nil
+	}
+	tmp, err := os.MkdirTemp("", "diffusion-patch-"+scenario+"-")
+	if err != nil {
+		return "", true, fmt.Errorf("failed to create temp dir for role resolution: %w", err)
+	}
+	return tmp, true, nil
+}
+
 // ResolveInstalledRolePath returns the installed directory of roleName.
 //
 // It first searches already-installed locations (diffusion cache, cwd
 // molecule working copies, user Galaxy roles path) without side effects.
-// Only when nothing is found locally does it download scenario roles into
-// a fresh temp dir via a separately mounted container and search there.
-// The temp dir persists on success because callers patch/analyze from it;
-// it is removed when the download yields nothing usable.
+// Only when nothing is found locally does it download scenario roles via a
+// separately mounted container and search there. The download target is
+// static (<cacheDir>/patch/<scenario>, carrying the role_<cache_id>
+// suffix) when caching is configured so ApplyBundle patches a stable,
+// launchable folder; otherwise a temp dir is used.
 func ResolveInstalledRolePath(roleName, scenario string) (string, error) {
 	if err := utils.ValidateCLIArgument("role", roleName); err != nil {
 		return "", err
@@ -855,9 +880,12 @@ func ResolveInstalledRolePath(roleName, scenario string) (string, error) {
 		return "", err
 	}
 
+	var cfg *config.Config
+	if loaded, err := config.LoadConfig(); err == nil && loaded != nil {
+		cfg = loaded
+	}
 	var cacheDir, cwd, home string
-	if cfg, err := config.LoadConfig(); err == nil && cfg != nil &&
-		cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
+	if cfg != nil && cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
 		cacheDir, _ = cache.GetCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 	}
 	cwd, _ = os.Getwd()
@@ -869,10 +897,10 @@ func ResolveInstalledRolePath(roleName, scenario string) (string, error) {
 		return hit, nil
 	}
 
-	// Nothing installed locally — fall back to downloading scenario roles
-	// into a temp dir. Skip docker entirely when there is no manifest to
-	// install from so unit tests and offline flows fail fast with the
-	// local tried list instead of a docker error.
+	// Nothing installed locally — fall back to downloading scenario roles.
+	// Skip docker entirely when there is no manifest to install from so
+	// unit tests and offline flows fail fast with the local tried list
+	// instead of a docker error.
 	scenario = strings.TrimSpace(scenario)
 	if scenario == "" {
 		scenario = config.DefaultScenario
@@ -886,26 +914,43 @@ func ResolveInstalledRolePath(roleName, scenario string) (string, error) {
 		return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(tried, ", "))
 	}
 
-	tmpHome, err := os.MkdirTemp("", "diffusion-patch-"+strings.ReplaceAll(roleName, ".", "-"))
+	patchHome, isTemp, err := patchDownloadHomeDir(cfg, cacheDir, scenario)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp dir for role resolution: %v", err)
+		return "", err
 	}
-	if err := dockerRoleDownloader(utils.GenerateSessionID(), tmpHome, scenario); err != nil {
-		_ = os.RemoveAll(tmpHome)
+	// Static cache hit: role already downloaded in a previous run —
+	// return it without invoking docker again so the patched folder stays
+	// stable and launchable.
+	if !isTemp {
+		reuseCandidates := []string{}
+		for _, v := range roleDirVariants(roleName) {
+			reuseCandidates = append(reuseCandidates, filepath.Join(patchHome, ".ansible", "roles", v))
+		}
+		reuseBases := []string{filepath.Join(patchHome, ".ansible", "roles")}
+		if hit, _ := findInstalledRole(reuseCandidates, reuseBases, roleName); hit != "" {
+			return hit, nil
+		}
+	}
+	if err := dockerRoleDownloader(utils.GenerateSessionID(), patchHome, scenario); err != nil {
+		if isTemp {
+			_ = os.RemoveAll(patchHome)
+		}
 		return "", fmt.Errorf("failed to run role-downloading container: %v", err)
 	}
-	// Temp-only search: tmpHome/.ansible/roles/<variants>, matching the
+	// Search: patchHome/.ansible/roles/<variants>, matching the
 	// downloader container mount in utils.DockerRunRoleDownloadingContainer.
-	tmpCandidates := []string{}
+	patchCandidates := []string{}
 	for _, v := range roleDirVariants(roleName) {
-		tmpCandidates = append(tmpCandidates, filepath.Join(tmpHome, ".ansible", "roles", v))
+		patchCandidates = append(patchCandidates, filepath.Join(patchHome, ".ansible", "roles", v))
 	}
-	tmpBases := []string{filepath.Join(tmpHome, ".ansible", "roles")}
-	if hit, triedTmp := findInstalledRole(tmpCandidates, tmpBases, roleName); hit != "" {
+	patchBases := []string{filepath.Join(patchHome, ".ansible", "roles")}
+	if hit, triedPatch := findInstalledRole(patchCandidates, patchBases, roleName); hit != "" {
 		return hit, nil
 	} else {
-		_ = os.RemoveAll(tmpHome)
-		allTried := append(append([]string{}, candidates...), triedTmp...)
+		if isTemp {
+			_ = os.RemoveAll(patchHome)
+		}
+		allTried := append(append([]string{}, candidates...), triedPatch...)
 		return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(allTried, ", "))
 	}
 }
