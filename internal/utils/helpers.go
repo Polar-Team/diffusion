@@ -707,6 +707,9 @@ func CopyDir(src, dst string) error {
 		if err != nil {
 			return err
 		}
+		if d.IsDir() && path != src && strings.HasPrefix(d.Name(), ".") {
+			return fs.SkipDir
+		}
 		rel, _ := filepath.Rel(src, path)
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
