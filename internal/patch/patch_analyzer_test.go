@@ -342,12 +342,18 @@ func TestAnalyzeExternalRoleMissingEntry(t *testing.T) {
 	if _, err := analyzeRoleAtPath(t.TempDir(), "default", "x"); err == nil {
 		t.Fatal("expected error for role without tasks/main.yml")
 	}
-	// Unknown role that is nowhere installed must error, never hang.
+	// Unknown role that is nowhere installed must error, never hang. With
+	// no running molecule container there is nothing to copy out either.
+	origPS := dockerPS
+	dockerPS = func() ([]byte, error) { return []byte(""), nil }
+	defer func() { dockerPS = origPS }()
 	if _, err := AnalyzeExternalRole("default", "no.such.role"); err == nil {
 		t.Fatal("expected error for uninstalled role")
 	}
 }
 
+// TestResolveInstalledRolePath covers the pure host search: no docker is
+// ever involved, and a role missing everywhere fails fast.
 func TestResolveInstalledRolePath(t *testing.T) {
 	root := t.TempDir()
 	// Local install so resolution succeeds without docker.
@@ -358,27 +364,11 @@ func TestResolveInstalledRolePath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(localTasks, "main.yml"), []byte("---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Scenario manifest present so the docker fallback has something to
-	// install from when local lookup misses (missing.role case).
-	scenarioDir := filepath.Join(root, "scenarios", "default")
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(scenarioDir, "requirements.yml"), []byte("---\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	cwd, _ := os.Getwd()
 	if err := os.Chdir(root); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(cwd) }()
-
-	// Stub the downloader: offline test must never invoke real docker.
-	origDownloader := dockerRoleDownloader
-	dockerRoleDownloader = func(sessionID, patchDir, scenario string) error {
-		return nil
-	}
-	defer func() { dockerRoleDownloader = origDownloader }()
 
 	got, err := ResolveInstalledRolePath("geerlingguy.docker", "default")
 	if err != nil {
@@ -393,48 +383,6 @@ func TestResolveInstalledRolePath(t *testing.T) {
 	}
 	if _, err := ResolveInstalledRolePath("missing.role", "default"); err == nil {
 		t.Fatal("expected error for missing role")
-	}
-}
-
-func TestResolveInstalledRolePathDockerFallback(t *testing.T) {
-	root := t.TempDir()
-	scenarioDir := filepath.Join(root, "scenarios", "default")
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(scenarioDir, "requirements.yml"), []byte("---\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cwd, _ := os.Getwd()
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(cwd) }()
-
-	// Stub docker: populate the temp .ansible/roles layout the real
-	// downloader container would produce via its mount.
-	origDownloader := dockerRoleDownloader
-	dockerRoleDownloader = func(sessionID, patchDir, scenario string) error {
-		if scenario != "default" {
-			t.Errorf("downloader scenario = %q, want default", scenario)
-		}
-		dest := filepath.Join(patchDir, ".ansible", "roles", "geerlingguy.docker", "tasks")
-		if err := os.MkdirAll(dest, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dest, "main.yml"), []byte("---\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return nil
-	}
-	defer func() { dockerRoleDownloader = origDownloader }()
-
-	got, err := ResolveInstalledRolePath("geerlingguy.docker", "default")
-	if err != nil {
-		t.Fatalf("docker fallback not resolved: %v", err)
-	}
-	if filepath.Base(got) != "geerlingguy.docker" {
-		t.Fatalf("resolved to %s", got)
 	}
 }
 
