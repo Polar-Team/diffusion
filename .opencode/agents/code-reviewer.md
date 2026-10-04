@@ -1,7 +1,7 @@
 ---
 description: Senior code reviewer specialized in Go code quality, security analysis, best practices enforcement. Reviews code inside dev-new-features/.
 mode: subagent
-model: Yandex/deepseek-v4.1-flash
+model: yandex/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   edit: deny
@@ -10,6 +10,7 @@ permission:
     "*": ask
     "sed*": allow
     "grep*": allow
+    "rg*": allow
     "echo*": allow
     "head*": allow
     "powershell *": allow

@@ -5,6 +5,17 @@ All notable changes to the Diffusion project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`diffusion patch` Command**: Inspect and patch external Ansible roles per scenario without forking them
+  - Subcommands: `analyze <role>` (task/branch tree with dotted leaf IDs; `--format tree|yaml`, `--tag`, `--no-color`), `list`, `check` (validate bundles and resolve task IDs against the installed role, exit 1 on failure), `diff` (dry-run), `apply` (`--dry-run`, `--force`)
+  - Common flags: `--scenario` / `-s` (default `default`); `diff` / `apply` also take `--role` / `-r` (container `molecule-<role>`, default: first running molecule container) and `--bundle <name>`
+  - Bundles live in `scenarios/<scenario>/patch.yml` under a case-sensitive top-level `Bundles:` key; each bundle has `patch_bundle_name`, `role_name` (must be declared in `diffusion.toml` `[dependencies]`), optional `scenario` and `tasks_to_patch`
+  - Task actions: `new_module`, `new_module_setup` (replace with `new_module`, otherwise merge), `new_conditions` (`when` / `changed_when` / `failed_when` + `body`; literal `true`/`false` emits a design-problem warning), `new_become_user`, `new_environment`, `new_file_src` / `new_template_src` (overlay files from `scenarios/<scenario>/patch/files|templates/`)
+  - Task IDs: `1`, `1.3.1` for tasks, `h1` for handlers; includes and blocks are visual-only branches and cannot be patched; `include_role` / dynamic includes are opaque
+  - Ephemeral and host-safe: the role is copied inside the container to `/var/lib/diffusion-patch/<scenario>/work/<role>` (pristine copy in `backup/`), patched through a throwaway host temp dir and bind-mounted over `/root/.ansible/roles/<role>`; stale overlays are self-healed; ambiguous short role names are rejected
+  - Not supported in v1: `new_block` apply and `action:` / `local_action:` tasks
+
+- **Automatic Scenario Patching in `diffusion molecule`**: `converge`, `verify` and the default flow apply the scenario's `patch.yml` bundles inside the container before Molecule runs and remove the overlay afterwards; a patch error fails the run (`patch apply failed: …`). `--destroy` and `--wipe` clear leftover overlays first. Projects without `patch.yml` are unaffected
+
 - **Git-Sourced Collections**: Collections can now be installed from a git repository instead of Ansible Galaxy
   - New `--src` (git URL), `--scm` (default `git`), and `--version` / `-v` flags on `diffusion role add-collection`
   - `--namespace` / `-n` stays required for Galaxy collections but is optional for git collections
@@ -43,8 +54,11 @@ All notable changes to the Diffusion project will be documented in this file.
   - Flags: `--path` / `-p` (role directory), `--dry-run` (preview without writing)
 
 - **MCP Server**: Model Context Protocol server for AI assistant integration
-  - 23 tools for container management, validation, troubleshooting, deploy diagnostics, and CLI / Terraform reference
-  - New tools: `docker_in_docker_in_molecule`, `update_diffusion_docs`, `troubleshoot_deploy`, `check_deploy_cache`, `troubleshoot_ssh_keys` (now validates intended `--ssh-key` names), `get_terraform_provider_reference`, `check_lock_file_scenarios`, `get_troubleshooting_guide`
+  - 26 tools for container management, validation, troubleshooting, deploy and patch diagnostics, and CLI / Terraform reference
+  - New tools: `docker_in_docker_in_molecule`, `update_diffusion_docs`, `troubleshoot_deploy`, `check_deploy_cache`, `troubleshoot_ssh_keys` (now validates intended `--ssh-key` names), `get_terraform_provider_reference`, `check_lock_file_scenarios`, `get_troubleshooting_guide`, `check_patch_config` (static `patch.yml` validation), `inspect_patch_overlays` (live bind mounts and changed files in a molecule container), `check_transitive_dependencies` (`required_by` entries, git collections, missing `SourceURL`, self-identity)
+  - `run_diffusion_command` additionally allows `patch analyze`, `patch list`, `patch check` and `patch diff`; `troubleshoot_molecule_container` reports leftover patch overlays (10-point diagnostic); `list_molecule_scenarios` shows `patch.yml` and overlay sources
+  - Troubleshooting knowledge base covers patch bundles/overlays, transitive dependencies, git collections, argument-injection guards, CI clone retries and the community.postgresql 5.x tests-role change
+  - CLI reference documents `diffusion patch`, `deps lock --no-transitive`, `role add-collection --src/--scm/--version`, the `required_by` lock field and `transitive` setting
   - Built with FastMCP (Python 3.11+), runs via `uv` or Docker container
   - Container image: `ghcr.io/polar-team/diffusion-mcp-server` (multi-arch: amd64, arm64)
   - Tools include: `get_diffusion_config`, `list_molecule_containers`, `inspect_molecule_container`, `docker_exec_in_molecule`, `check_molecule_yml`, `check_verify_yml`, `troubleshoot_molecule_container`, `run_diffusion_command`, and more
@@ -84,15 +98,20 @@ All notable changes to the Diffusion project will be documented in this file.
 - **`deps lock` Fails Loudly On Missing `source_url`**: `deps lock` now fails with a clear error when a non-Galaxy collection has no `source_url` (previously silently skipped)
 - **`--ssh-key` Without `=`**: A value lacking the `=` separator is now a usage error (`expected format "hostname=<base64>"`) instead of being silently ignored
 - **`diffusion-test` Action**: AppArmor `kernel.apparmor_restrict_unprivileged_userns=0` step is now non-fatal; new diagnostic step checks the cgroup v2 `user.slice/user-1000.service` path required for rootless volume mounting on Ubuntu 24.04 runners (warning only)
+- **`molecule --force` Runs As A Separate Step**: The forced `ansible-galaxy install --force` is no longer chained into the converge command; it runs first (best-effort) so scenario patches applied afterwards cannot be wiped
+- **CI Clone Retries**: In `--ci` mode the in-container `git clone` of the repository is retried up to 10 times; after the last attempt it fails with `failed to clone repository —container after 10 attempts`
+- **Hidden Directories Are Skipped When Copying Role Data**: Directory copies (role data copied into the molecule working directory, patch staging/backups) now skip nested directories whose name starts with `.` (e.g. `files/.cache/`)
+- **diffusion-ansible-tests-role**: Postgres tests use `login_db` / `login_port` as required by community.postgresql 5.x (user-facing `postgres_db` / `postgres_port` unchanged); pinned collections updated to community.general 13.4.0, community.postgresql 5.0.0, community.docker 5.3.0, Python deps `docker` 7.2.0 and `psycopg2-binary` 2.9.13
 - **Role Commands Re-Lock Scoped**: `role add-role`, `role remove-role`, `role add-collection`, and `role remove-collection` now re-lock only their `--scenario` instead of regenerating the whole lock file
 - **`diffusion-update` Action**: `scenario` input default changed from `default` to empty (= all scenarios); the scenario name is now validated
 - **Go Version**: Upgraded to Go 1.25.4
 - **Terraform Provider Registry**: Source updated to `Polar-Team/diffusion`
-- **Molecule Container**: Docker DinD base updated to `29.5.3-dind-alpine3.23` (from `29.4.0`)
-- **Molecule Container**: uv package manager updated to `0.11.19` (from `0.9.30`)
-- **Molecule Container**: Alpine packages updated (git 2.52.0, curl 8.19.0, openssl 3.5.7, gcc 15.2.0)
+- **Molecule Container**: Docker DinD base updated to `29.8.1-dind-alpine3.24` (from `29.4.0`)
+- **Molecule Container**: uv package manager updated to `0.11.33` (from `0.9.30`)
+- **Molecule Container**: Python builds 3.13.15 / 3.12.14 / 3.11.16; Alpine packages updated (git 2.54.0, curl 8.22.0, openssl 3.5.8, xz 5.8.4, gcc 15.2.0)
 
 ### Fixed
+- **MCP `check_lock_file_scenarios`**: `diffusion.toml` dependency names are now read case-insensitively (`Name`), so `--scenario` values backed only by `diffusion.toml` prefixes are recognised; the MCP CLI reference now states that `diffusion.lock` is YAML and uses the correct `--tag` flag
 - **Terraform Provider — PEM Keys With Escaped Newlines**: `ssh_private_keys` values containing literal `\n` sequences (e.g. keys interpolated from JSON/tfvars strings) are normalised to real newlines before base64 encoding, so the key decodes to a valid PEM file inside the container
 - **`deps check` / `deps sync` in Repositories Without `scenarios/default/`**: Both commands failed with `open scenarios/default/requirements.yml: no such file or directory` when processing `meta/main.yml`; they now read `meta/main.yml` directly
 

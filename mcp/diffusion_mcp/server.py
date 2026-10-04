@@ -8,8 +8,13 @@ environments, including:
 - Molecule scenario file validation (molecule.yml, verify.yml)
 - Dependency and cache status (incl. per-scenario lock analysis)
 - CLI command reference, Terraform provider reference
-- Troubleshooting knowledge base (deps --scenario, deploy --ssh-key validation,
-  Terraform PEM normalisation, GitHub Actions diagnostics)
+- Ephemeral role patching (`diffusion patch`): static patch.yml validation and
+  in-container overlay inspection
+- Transitive (nested) dependency and git-sourced collection analysis
+- Troubleshooting knowledge base (deps --scenario, transitive deps, git
+  collections, patch bundles/overlays, deploy --ssh-key validation, CLI
+  argument-injection guards, Terraform PEM normalisation, GitHub Actions
+  diagnostics)
 """
 
 from __future__ import annotations
@@ -174,12 +179,12 @@ def _toml_dependency_scenarios(root: Path) -> set[str]:
         data = _load_toml(toml_path)
     except Exception:
         return set()
-    deps = data.get("dependencies", {}) or {}
+    deps = _ci_get(data, "dependencies", {}) or {}
     names: list[str] = []
     for section in ("collections", "roles"):
-        entries = deps.get(section, []) or []
+        entries = _ci_get(deps, section, []) or []
         for e in entries:
-            n = e.get("name", "") if isinstance(e, dict) else str(e)
+            n = _dep_name(e)
             if n:
                 names.append(n)
     return {n.split(".", 1)[0] for n in names if "." in n}
@@ -195,6 +200,545 @@ def _lock_scenarios(lock: dict[str, Any]) -> dict[str, dict[str, int]]:
             out.setdefault(scen, {"collections": 0, "roles": 0})
             out[scen][section] += 1
     return out
+
+
+# --- TOML key helpers ---------------------------------------------------------
+#
+# diffusion writes [dependencies] entries with capitalised keys (Name,
+# Namespace, Version, Source, SourceURL, Src, Scm) while BurntSushi/toml also
+# accepts other casings on read. Always look keys up case-insensitively.
+
+
+def _ci_get(d: Any, key: str, default: Any = None) -> Any:
+    """Case-insensitive dict lookup (mirrors BurntSushi/toml key matching)."""
+    if not isinstance(d, dict):
+        return default
+    if key in d:
+        return d[key]
+    lk = key.lower()
+    for k, v in d.items():
+        if isinstance(k, str) and k.lower() == lk:
+            return v
+    return default
+
+
+def _dep_name(e: Any) -> str:
+    """Return the Name of a [dependencies] collection/role entry."""
+    if isinstance(e, dict):
+        return str(_ci_get(e, "name", "") or "")
+    return str(e)
+
+
+def _load_dependency_config(root: Path) -> dict[str, Any]:
+    """Return the [dependencies] table of diffusion.toml ({} when absent)."""
+    toml_path = root / "diffusion.toml"
+    if not toml_path.exists():
+        return {}
+    try:
+        return _ci_get(_load_toml(toml_path), "dependencies", {}) or {}
+    except Exception:
+        return {}
+
+
+# --- CLI argument guard (mirror internal/utils.ValidateCLIArgument) ----------
+
+
+def _validate_cli_argument(kind: str, value: str) -> str | None:
+    """Reject values git/ansible-galaxy would parse as an option.
+
+    diffusion refuses any URL, ref, version, role, scenario or container name
+    starting with '-' (e.g. '--upload-pack=/bin/sh') before it reaches a
+    git / ansible-galaxy / docker argument vector. Returns the diffusion-style
+    error message, or None when the value is acceptable.
+    """
+    if value.startswith("-"):
+        return f'refusing to use "{value}": {kind} looks like a command line option'
+    return None
+
+
+# --- Git / transitive dependency helpers (mirror internal/dependency) --------
+
+_COLLECTION_URL_PREFIXES = (
+    "ansible-collection-",
+    "ansible_collection_",
+    "ansible-collection_",
+    "ansible_collection-",
+)
+_TRANSITIVE_MAX_DEPTH = 10  # dependency.DefaultMaxTransitiveDepth
+
+
+def _is_git_url(s: str) -> bool:
+    """utils.IsGitURL: '://' anywhere or an scp-style 'git@' prefix."""
+    s = (s or "").strip()
+    return bool(s) and ("://" in s or s.startswith("git@"))
+
+
+def _derive_collection_short_name(git_url: str) -> str:
+    """utils.DeriveCollectionShortName: repo basename used as diffusion.toml key.
+
+    https://github.com/org/ansible-collection-foo.git -> foo
+    git@github.com:org/my.repo.git                    -> my_repo
+    """
+    name = (git_url or "").strip().rstrip("/")
+    idx = max(name.rfind("/"), name.rfind(":"))
+    if idx != -1:
+        name = name[idx + 1 :]
+    if name.endswith(".git"):
+        name = name[: -len(".git")]
+    for prefix in _COLLECTION_URL_PREFIXES:
+        if len(name) > len(prefix) and name.lower().startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return name.replace(".", "_")
+
+
+def _normalize_identity(identity: str) -> str:
+    """dependency.normalizeIdentity: stable comparison key for URLs / names.
+
+    https://GitHub.com/Org/Repo.git/ -> github.com/org/repo
+    git@github.com:org/repo          -> github.com/org/repo
+    community.general                -> community.general
+    """
+    s = (identity or "").strip().lower()
+    if not s:
+        return ""
+    scp = False
+    for pfx in ("https://", "http://", "ssh://", "git+ssh://", "git://"):
+        if s.startswith(pfx):
+            s = s[len(pfx) :]
+            break
+    if s.startswith("git@"):
+        s = s[len("git@") :]
+        scp = True
+    at = s.find("@")
+    if at != -1 and "/" not in s[:at]:
+        s = s[at + 1 :]
+        scp = True
+    if scp:
+        s = s.replace(":", "/", 1)
+    if s.endswith("/"):
+        s = s[:-1]
+    if s.endswith(".git"):
+        s = s[: -len(".git")]
+    if s.endswith("/"):
+        s = s[:-1]
+    return s
+
+
+def _lock_entry_identity(e: dict[str, Any]) -> str:
+    """dependency.entryIdentity: git URL for git entries, else namespace.name."""
+    src = str(e.get("src", "") or "")
+    if src:
+        return _normalize_identity(src)
+    name = str(e.get("name", "") or "")
+    if "." in name:
+        name = name.split(".", 1)[1]
+    ns = str(e.get("namespace", "") or "")
+    return (f"{ns}.{name}" if ns else name).lower()
+
+
+def _is_git_collection(e: dict[str, Any]) -> bool:
+    """dependency.IsGitCollection for a diffusion.lock collection entry.
+
+    The lock's 'scm' key holds the source type (LockFileEntry.Source).
+    """
+    scm = str(e.get("scm", "") or "")
+    if scm == "git":
+        return True
+    return bool(e.get("src")) and scm != "galaxy"
+
+
+def _resolve_git_ref(version: str) -> str:
+    """dependency.ResolveGitRef: constraint -> '' (default branch), else ref."""
+    if not version or version == "latest":
+        return ""
+    if version.startswith((">=", "<=", ">", "<", "==")):
+        return ""
+    return version
+
+
+def _detect_self_identity(root: Path) -> list[str]:
+    """dependency.DetectSelfIdentity: git origin URL, meta role_name, dir name."""
+    identities: list[str] = []
+    res = _run(["git", "-C", str(root), "remote", "get-url", "origin"], timeout=10)
+    if res["returncode"] == 0 and res["stdout"]:
+        identities.append(res["stdout"].strip())
+    meta_path = root / "meta" / "main.yml"
+    if meta_path.exists():
+        try:
+            meta = _load_yaml(meta_path) or {}
+            gi = meta.get("galaxy_info", {}) or {}
+            role_name = str(gi.get("role_name", "") or "")
+            if role_name:
+                identities.append(role_name)
+                ns = str(gi.get("namespace", "") or "")
+                if ns:
+                    identities.append(f"{ns}.{role_name}")
+        except Exception:
+            pass
+    if root.name:
+        identities.append(root.name)
+    return identities
+
+
+# --- Patch helpers (mirror internal/patch) -------------------------------------
+
+_CONTAINER_ROLES_PATH = "/root/.ansible/roles"  # config.ContainerRolesCachePath
+_CONTAINER_PATCH_DIR = "/var/lib/diffusion-patch"  # config.ContainerPatchDir
+_SAFE_CONTAINER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_PATCH_MAX_TASK_ID_DEPTH = 32
+_PATCH_CONDITION_KEYS = ("when", "changed_when", "failed_when")
+_PATCH_TOP_KEY = "Bundles"  # yaml.v3 tag is case-sensitive
+_PATCH_BUNDLE_KEYS = {"patch_bundle_name", "tasks_to_patch", "scenario", "role_name"}
+_PATCH_TASK_KEYS = {
+    "task_id",
+    "new_module",
+    "new_module_setup",
+    "new_conditions",
+    "new_become_user",
+    "new_environment",
+    "new_block",
+    "new_file_src",
+    "new_template_src",
+}
+
+
+def _parse_patch_task_id(task_id: Any) -> tuple[bool, list[int]] | str:
+    """patch.splitTaskID + ParseTaskID.
+
+    Accepts '1', '1.3.1' (tasks) and 'h1', 'H1.2' (handlers). Returns
+    (is_handler, segments) or an error string.
+    """
+    raw = str(task_id if task_id is not None else "").strip()
+    handler = False
+    if len(raw) > 1 and raw[0] in "hH":
+        handler = True
+        raw = raw[1:].strip()
+    if not raw:
+        return "task id is empty"
+    parts = raw.split(".")
+    if len(parts) > _PATCH_MAX_TASK_ID_DEPTH:
+        return f"task id {task_id!r} exceeds max depth of {_PATCH_MAX_TASK_ID_DEPTH}"
+    out: list[int] = []
+    for p in parts:
+        if p == "":
+            return f"invalid task id {task_id!r}: empty segment"
+        if len(p) > 1 and p[0] == "0":
+            return f"invalid task id {task_id!r}: segment {p!r} has leading zero"
+        if not p.isdigit() or int(p) < 1:
+            return f"invalid task id {task_id!r}: segment {p!r} must be a positive integer"
+        out.append(int(p))
+    return handler, out
+
+
+def _canonical_patch_task_id(task_id: Any) -> str | None:
+    parsed = _parse_patch_task_id(task_id)
+    if isinstance(parsed, str):
+        return None
+    handler, parts = parsed
+    return ("h" if handler else "") + ".".join(str(n) for n in parts)
+
+
+def _patch_role_name_matches(bundle_role: str, requirement_role: str) -> bool:
+    """patch.roleNameMatches: short bundle names match namespaced entries."""
+    b, r = (bundle_role or "").strip(), (requirement_role or "").strip()
+    if not b or not r:
+        return False
+    if b.lower() == r.lower():
+        return True
+    if "." in b:
+        return False
+    return b.lower() == r.rsplit(".", 1)[-1].lower()
+
+
+def _toml_roles_for_patch(root: Path, bundle_scenario: str) -> list[str]:
+    """Roles a bundle may target (patch.validateRoleName).
+
+    A scoped bundle only sees '<scenario>.<role>' entries; an unscoped bundle
+    (empty 'scenario') accepts entries from any scenario.
+    """
+    deps = _load_dependency_config(root)
+    available: list[str] = []
+    for entry in _ci_get(deps, "roles", []) or []:
+        short = _dep_name(entry).strip()
+        if bundle_scenario:
+            prefix = bundle_scenario + "."
+            if not short.startswith(prefix):
+                continue
+            short = short[len(prefix) :]
+        elif "." in short:
+            short = short.split(".", 1)[1]
+        ns = str(_ci_get(entry, "namespace", "") or "").strip() if isinstance(entry, dict) else ""
+        available.append(f"{ns}.{short}" if ns else short)
+    return available
+
+
+_YAML_NULLS = {"", "~", "null", "Null", "NULL"}
+
+
+def _load_patch_yaml(path: Path) -> Any:
+    """Load patch.yml keeping every scalar as its raw string (like yaml.v3
+    decoding into Go string fields)."""
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.load(f, Loader=yaml.BaseLoader)  # noqa: S506 - BaseLoader is safe
+
+
+def _yaml_truthy(v: Any) -> bool:
+    """YAML 1.1/1.2 boolean truthiness for BaseLoader raw strings."""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("true", "yes", "on", "y")
+
+
+def _patch_overlay_path(root: Path, scenario: str, subdir: str, value: str) -> Path:
+    return root / "scenarios" / (scenario or "default") / "patch" / subdir / Path(value)
+
+
+def _validate_patch_task(
+    task: Any, root: Path, scenario: str, where: str
+) -> tuple[list[str], list[str]]:
+    """Mirror PatchingTask.validate plus apply-time limitations.
+
+    Returns (errors, warnings). 'scenario' is the bundle's scenario field
+    (empty -> default), which is what diffusion uses to locate overlays at
+    validation time.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not isinstance(task, dict):
+        return [f"{where}: task entry must be a mapping"], warnings
+
+    unknown = sorted(set(task) - _PATCH_TASK_KEYS)
+    if unknown:
+        warnings.append(
+            f"{where}: unknown key(s) {unknown} are silently ignored by diffusion "
+            f"(allowed: {sorted(_PATCH_TASK_KEYS)})"
+        )
+
+    tid = task.get("task_id")
+    if tid is None or str(tid).strip() == "":
+        errors.append(f"{where}: task_id is required")
+    else:
+        parsed = _parse_patch_task_id(tid)
+        if isinstance(parsed, str):
+            errors.append(f"{where}: {parsed}")
+
+    file_src = str(task.get("new_file_src", "") or "").strip()
+    tpl_src = str(task.get("new_template_src", "") or "").strip()
+    new_module = str(task.get("new_module", "") or "").strip()
+    module_setup = task.get("new_module_setup") or []
+    conditions = task.get("new_conditions") or []
+    become = task.get("new_become_user")
+    if isinstance(become, str) and become.strip() in _YAML_NULLS:
+        become = None  # yaml.v3 leaves the *PatchBecomeSetup pointer nil
+    env = task.get("new_environment") or []
+    block = task.get("new_block") or []
+
+    if not any([file_src, tpl_src, new_module, module_setup, conditions, become is not None, env, block]):
+        errors.append(f"{where}: no patch action specified")
+    if file_src and tpl_src:
+        errors.append(f"{where}: new_file_src and new_template_src are mutually exclusive")
+    if (file_src or tpl_src) and (new_module or module_setup):
+        errors.append(f"{where}: src overlay cannot be combined with new_module/new_module_setup")
+
+    for value, subdir, field in ((file_src, "files", "new_file_src"), (tpl_src, "templates", "new_template_src")):
+        if not value:
+            continue
+        if Path(value).is_absolute() or value.startswith(("/", "\\")):
+            errors.append(f"{where}: {field} must be relative, got {value!r}")
+            continue
+        norm = os.path.normpath(value)
+        if norm == ".." or norm.startswith(".." + os.sep) or norm.startswith("../"):
+            errors.append(f"{where}: {field} escapes the patch folder: {value!r}")
+            continue
+        full = _patch_overlay_path(root, scenario, subdir, value)
+        if not full.exists():
+            errors.append(f"{where}: {field} overlay not found: {full}")
+        elif full.is_dir():
+            errors.append(f"{where}: {field} overlay is a directory: {full}")
+
+    for i, c in enumerate(conditions if isinstance(conditions, list) else []):
+        if not isinstance(c, dict):
+            errors.append(f"{where}: condition {i} must be a mapping with 'condition' and 'body'")
+            continue
+        key = str(c.get("condition", "") or "").strip().lower()
+        if key not in _PATCH_CONDITION_KEYS:
+            errors.append(
+                f"{where}: condition {i}: condition key must be one of when, changed_when, "
+                "failed_when (migrate: put the key in condition: and the expression in body:)"
+            )
+        body = c.get("body")
+        body_s = str(body).strip() if body is not None else ""
+        if not body_s:
+            errors.append(f"{where}: condition {i} has empty body")
+        elif body_s.lower() in ("true", "false"):
+            warnings.append(
+                f"{where}: static {key or 'when'} {body_s.lower()} — diffusion will warn "
+                "'possible design problem, verify intent' at apply time"
+            )
+
+    for label, items in (("module setup", module_setup), ("environment", env)):
+        for i, kv in enumerate(items if isinstance(items, list) else []):
+            k = kv.get("key") if isinstance(kv, dict) else None
+            if k is None or (isinstance(k, str) and k in _YAML_NULLS - {""}):
+                errors.append(f"{where}: {label} {i} has nil key")
+            elif isinstance(k, str) and not k.strip():
+                errors.append(f"{where}: {label} {i} has empty key")
+
+    if become is not None:
+        if not isinstance(become, dict) or (
+            not str(become.get("user", "") or "").strip() and not _yaml_truthy(become.get("become", ""))
+        ):
+            errors.append(f"{where}: become setup sets neither user nor become")
+
+    if block:
+        errors.append(
+            f"{where}: new_block passes validation but apply fails with "
+            "'new_block apply is not supported in v1'"
+        )
+        for i, sub in enumerate(block if isinstance(block, list) else []):
+            e2, w2 = _validate_patch_task(sub, root, scenario, f"{where} block {i}")
+            errors.extend(e2)
+            warnings.extend(w2)
+
+    if module_setup and not new_module:
+        warnings.append(
+            f"{where}: new_module_setup without new_module MERGES into existing module args; "
+            "it fails with 'module args are not a mapping' for free-form tasks (e.g. command: foo)"
+        )
+    return errors, warnings
+
+
+def _validate_patch_config(root: Path, scenario: str) -> dict[str, Any]:
+    """Statically validate scenarios/<scenario>/patch.yml like diffusion does
+    on load (PatchesConfig.validate), plus extra lint for silent pitfalls."""
+    path = root / "scenarios" / scenario / "patch.yml"
+    report: dict[str, Any] = {"patch_file": str(path), "scenario": scenario}
+    errors: list[str] = []
+    warnings: list[str] = []
+    bundles_out: list[dict[str, Any]] = []
+
+    if not path.exists():
+        report["present"] = False
+        report["note"] = (
+            "No patch.yml: 'diffusion molecule' skips patching silently, but "
+            "'diffusion patch list|check' fail with 'failed to read patch config file'."
+        )
+        report["errors"], report["warnings"], report["bundles"] = [], [], []
+        return report
+    report["present"] = True
+
+    try:
+        data = _load_patch_yaml(path)
+    except Exception as e:
+        report["errors"] = [f"failed to unmarshal patch config: {e}"]
+        report["warnings"], report["bundles"] = [], []
+        return report
+
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        report["errors"] = ["patch.yml must be a mapping with a top-level 'Bundles:' list"]
+        report["warnings"], report["bundles"] = [], []
+        return report
+
+    bundles = data.get(_PATCH_TOP_KEY)
+    if bundles is None:
+        variant = next((k for k in data if isinstance(k, str) and k.lower() == "bundles"), None)
+        if variant is not None:
+            errors.append(
+                f"top-level key is {variant!r} but diffusion only reads 'Bundles' (case-sensitive): "
+                "the file parses to ZERO bundles and molecule runs unpatched"
+            )
+        else:
+            warnings.append("no 'Bundles:' key — nothing to patch")
+        bundles = []
+    if not isinstance(bundles, list):
+        errors.append("'Bundles' must be a list")
+        bundles = []
+
+    for k in data:
+        if k != _PATCH_TOP_KEY and not (isinstance(k, str) and k.lower() == "bundles"):
+            warnings.append(f"unknown top-level key {k!r} is ignored")
+
+    seen_names: set[str] = set()
+    for bi, b in enumerate(bundles):
+        where_b = f"bundle[{bi}]"
+        if not isinstance(b, dict):
+            errors.append(f"{where_b}: must be a mapping")
+            continue
+        name = str(b.get("patch_bundle_name", "") or "").strip()
+        where_b = f"bundle {name!r}" if name else where_b
+        role = str(b.get("role_name", "") or "").strip()
+        b_scen = str(b.get("scenario", "") or "").strip()
+        tasks = b.get("tasks_to_patch") or []
+        info: dict[str, Any] = {
+            "name": name,
+            "role_name": role,
+            "scenario_field": b_scen or "(empty = any scenario)",
+            "tasks": len(tasks) if isinstance(tasks, list) else 0,
+        }
+        bundles_out.append(info)
+
+        unknown = sorted(set(b) - _PATCH_BUNDLE_KEYS)
+        if unknown:
+            warnings.append(f"{where_b}: unknown key(s) {unknown} are silently ignored")
+        if not name:
+            errors.append(f"{where_b}: bundle name is required")
+        elif name in seen_names:
+            errors.append(f"duplicate patch bundle name {name!r}")
+        seen_names.add(name)
+
+        if b_scen and b_scen != scenario:
+            warnings.append(
+                f"{where_b}: 'scenario: {b_scen}' differs from the patch.yml location "
+                f"(scenarios/{scenario}/). Role/overlay validation uses '{b_scen}' while "
+                f"apply reads overlays from scenarios/{scenario}/patch/ — keep them equal."
+            )
+
+        if not role:
+            errors.append(f"{where_b}: role name is required")
+        else:
+            available = _toml_roles_for_patch(root, b_scen)
+            info["roles_available_in_diffusion_toml"] = available
+            if not _ci_get(_load_dependency_config(root), "roles"):
+                errors.append(f"{where_b}: no roles declared in diffusion.toml [dependencies]")
+            elif not available:
+                errors.append(
+                    f"{where_b}: no roles declared for scenario {b_scen!r} in diffusion.toml [dependencies]"
+                )
+            elif not any(_patch_role_name_matches(role, r) for r in available):
+                errors.append(
+                    f"{where_b}: role {role!r} not found in diffusion.toml [dependencies] "
+                    f"for scenario {b_scen!r} (available roles: {', '.join(available)})"
+                )
+            else:
+                short_hits = [r for r in available if _patch_role_name_matches(role, r)]
+                if "." not in role and len(short_hits) > 1:
+                    warnings.append(
+                        f"{where_b}: short role name {role!r} matches {short_hits}; inside the "
+                        "container this is 'ambiguous' — use the full namespace.role name"
+                    )
+
+        if not isinstance(tasks, list) or not tasks:
+            errors.append(f"{where_b}: no tasks to patch")
+            continue
+        seen_ids: set[str] = set()
+        for ti, t in enumerate(tasks):
+            where_t = f"{where_b} task {ti}"
+            e2, w2 = _validate_patch_task(t, root, b_scen, where_t)
+            errors.extend(e2)
+            warnings.extend(w2)
+            canon = _canonical_patch_task_id(t.get("task_id") if isinstance(t, dict) else None)
+            if canon:
+                if canon in seen_ids:
+                    errors.append(f"{where_b}: duplicate task_id {canon!r}")
+                seen_ids.add(canon)
+
+    report["bundles"] = bundles_out
+    report["errors"] = errors
+    report["warnings"] = warnings
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -642,12 +1186,25 @@ def check_verify_yml(project_path: str = "", scenario: str = "default") -> str:
                 info.append(f"  → vars: {', '.join(var_keys)}")
 
                 # Validate known diffusion_tests variables
+                # (diffusion-ansible-tests-role defaults/main.yml)
                 known_vars = [
                     "verify_ports",
                     "verify_docker_containers",
+                    "verify_docker_user",
+                    "verify_docker_rootless",
+                    "verify_docker_env_override",
                     "verify_output_in_cmd",
                     "verify_uris",
+                    "uri_test_ip",
+                    "uri_validate_certs",
+                    "uri_timeout",
+                    "uri_expected_status",
+                    "uri_follow_redirects",
+                    "postgres_host",
+                    "postgres_port",
                     "postgres_db",
+                    "postgres_user",
+                    "postgres_password",
                     "postgres_expected_tables",
                     "postgres_expected_records",
                     "postgres_expected_roles",
@@ -717,7 +1274,8 @@ def get_diffusion_cli_reference(command: str = "") -> str:
 
     Args:
         command: Specific command to get help for (e.g. "molecule", "deps", "cache",
-                 "role", "artifact", "show"). Use "role add-role" or "deps init" for
+                 "role", "artifact", "show", "docs", "deploy", "patch"). Use
+                 "role add-collection", "deps lock" or "patch apply" for
                  subcommand details. Leave empty for the full command tree.
     """
     cli_ref: dict[str, dict[str, Any]] = {
@@ -729,6 +1287,11 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Role name and org are auto-detected from meta/main.yml if present.",
                 "In CI mode (--ci), the repo is cloned inside the container instead of volume-mounting.",
                 "First run without --ci creates diffusion.toml interactively if it doesn't exist.",
+                "Scenario patches: when scenarios/<scenario>/patch.yml declares bundles, converge, verify and the default flow AUTO-APPLY them inside the container right before molecule runs and remove the overlay again afterwards (see 'diffusion patch'). A patch error FAILS the run ('patch apply failed: ...') — testing pristine roles silently would give false confidence. Without patch.yml nothing changes.",
+                "Before auto-patching (and without --force) diffusion runs 'ansible-galaxy install -r molecule/<scenario>/requirements.yml' so the targeted roles exist in the container; a failure there is only a warning ('warning: galaxy install before patching failed').",
+                "--force now runs 'ansible-galaxy install --force -r molecule/<scenario>/requirements.yml' as a separate best-effort step BEFORE patching (previously chained into the converge command), so a forced reinstall can never wipe the patch overlay.",
+                "--destroy and --wipe first remove any leftover patch overlay (bind mounts under /root/.ansible/roles and /var/lib/diffusion-patch/<scenario>) so molecule sees pristine roles.",
+                "CI mode clones the repository inside the container with up to 10 attempts; after the final failure: 'failed to clone repository —container after 10 attempts: <err>'.",
             ],
             "flags": {
                 "--role, -r": {
@@ -784,7 +1347,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "default": "false",
                 },
                 "--force": {
-                    "description": "Force reinstall of roles/collections from requirements.yml before converge",
+                    "description": "Force reinstall of roles/collections from requirements.yml before converge (best-effort, runs before scenario patches are applied)",
                     "default": "false",
                 },
             },
@@ -794,16 +1357,18 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "3. CI repo clone or local file copy into /opt/molecule/<org>.<role>/",
                 "4. Registry login inside container (provider-specific)",
                 "5. uv-sync (install Python deps from pyproject.toml)",
-                "6. ansible-galaxy install (if --force)",
-                "7. molecule create + molecule converge (default flow)",
-                "8. Permission fix (chown on /opt/molecule for Unix)",
+                "6. ansible-galaxy install --force (if --force, best-effort)",
+                "7. Scenario patches (only if scenarios/<scenario>/patch.yml has bundles): ansible-galaxy install, then copy → patch → bind-mount overlay inside the container",
+                "8. molecule create + molecule converge (default flow) / molecule verify",
+                "9. Patch overlay removed (bind mounts unmounted)",
+                "10. Permission fix (chown on /opt/molecule for Unix)",
             ],
             "examples": [
                 "diffusion molecule                                      # Interactive setup + converge",
                 "diffusion molecule --ci                                 # CI mode: create container + converge",
                 "diffusion molecule --verify                             # Run all verification tests",
-                "diffusion molecule --verify --tags ports                # Run only port tests",
-                "diffusion molecule --ci --verify --tags 'ports,docker'  # Multiple tags",
+                "diffusion molecule --verify --tag ports                 # Run only port tests",
+                "diffusion molecule --ci --verify -t 'ports,docker'      # Multiple tags",
                 "diffusion molecule --lint                               # Run yamllint + ansible-lint",
                 "diffusion molecule --idempotence                        # Idempotence check",
                 "diffusion molecule --destroy                            # Destroy molecule instances (keep container)",
@@ -820,6 +1385,8 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "/root/.ansible/collections/": "Cached Ansible collections",
                 "/root/.cache/uv/": "UV package cache",
                 "/root/.cache/docker/": "Docker image cache (tarballs)",
+                "/var/lib/diffusion-patch/<scenario>/work/<role>": "Patched role copy, bind-mounted over /root/.ansible/roles/<role> while patched",
+                "/var/lib/diffusion-patch/<scenario>/backup/<role>": "Pristine copy of the role taken before patching (audit)",
             },
         },
         "role": {
@@ -829,10 +1396,11 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Without flags or subcommands, displays current role config from meta/main.yml.",
                 "Roles are stored per-scenario in diffusion.toml as '<scenario>.<role_name>'.",
                 "Dots are forbidden in role/collection names (reserved as scenario prefixes).",
+                "Values passed as positional arguments to ansible-galaxy/git (role names, URLs, versions) must not start with '-': 'refusing to use \"<v>\": <kind> looks like a command line option'.",
             ],
             "flags": {
                 "--init, -i": {
-                    "description": "Initialize a new Ansible role via ansible-galaxy init",
+                    "description": "Initialize a new Ansible role via ansible-galaxy init (role name must not start with '-')",
                     "default": "false",
                 },
                 "--scenario, -s": {
@@ -894,21 +1462,41 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 },
                 "add-collection": {
                     "usage": "diffusion role add-collection [collection-name] [flags]",
-                    "description": "Add a collection to diffusion.toml and update diffusion.lock",
-                    "args": "[collection-name] — name without namespace (use --namespace separately)",
+                    "description": "Add a Galaxy or git-sourced collection to diffusion.toml and re-lock the --scenario",
+                    "args": "[collection-name] — short name without namespace and without dots (may carry a constraint, e.g. 'general>=9.0.0'; an explicit --version wins)",
                     "flags": {
                         "--scenario, -s": {
                             "description": "Molecule scenario folder",
                             "default": "default",
                         },
                         "--namespace, -n": {
-                            "description": "Galaxy namespace (required, e.g. 'community' for community.general)",
+                            "description": "Galaxy namespace — REQUIRED for Galaxy collections, optional (stored for reference only) for git collections",
+                            "default": "",
+                        },
+                        "--src": {
+                            "description": "Git URL of the collection. Setting it switches the collection to a git source (diffusion.toml: Source = <scm>, SourceURL = <url>)",
+                            "default": "",
+                        },
+                        "--scm": {
+                            "description": "SCM type, only used together with --src",
+                            "default": "git",
+                        },
+                        "--version, -v": {
+                            "description": "Version, tag, branch or constraint. Empty/'latest': Galaxy → resolve latest and store '>=<v>'; git → resolve highest remote tag and store '>=<v>' (falls back to branch 'main' when no usable tag). A branch name (main, develop) or explicit constraint is stored verbatim.",
                             "default": "",
                         },
                     },
+                    "behavior": [
+                        "Galaxy without --namespace fails: '--namespace/-n is required for Galaxy collections.'",
+                        "Git collections are written to requirements.yml in ansible-galaxy git form: '- name: <git url>\\n  type: git\\n  version: <ref>'.",
+                        "Git collections cannot be expressed in meta/main.yml (it only accepts namespace.name) and are skipped there.",
+                        "Prints 'Note: git collections cannot be listed in meta/main.yml — they are written to requirements.yml only' after a git add.",
+                    ],
                     "examples": [
                         "diffusion role add-collection general --namespace community",
                         "diffusion role add-collection docker --namespace community --scenario production",
+                        "diffusion role add-collection foo --src https://github.com/org/ansible-collection-foo.git --version main",
+                        "diffusion role add-collection foo --src https://github.com/org/ansible-collection-foo.git   # resolves highest tag → '>=<tag>'",
                     ],
                 },
                 "remove-collection": {
@@ -946,7 +1534,28 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "A scenario is valid if scenarios/<name>/ exists, OR (fallback) if any [dependencies] entry in diffusion.toml is prefixed '<name>.'. Otherwise: error 'scenario \"<name>\" not found (no scenarios/<name> directory)'.",
                 "meta/main.yml (default-scenario collections) is processed only when the selector is empty or 'default' — a scoped run for another scenario never touches meta/main.yml.",
                 "'diffusion role add-role/remove-role/add-collection/remove-collection' pass their --scenario to the lock update, so they perform a scenario-scoped lock merge.",
+                "diffusion.lock is a YAML file (with a generated header comment); diffusion.toml is TOML with capitalised entry keys (Name, Namespace, Version, Source, SourceURL, Src, Scm).",
+                "Transitive dependencies (default ON): a git-sourced role/collection whose repo contains a diffusion.lock (or only a diffusion.toml) contributes its DEFAULT-scenario collections and roles to your lock, re-prefixed with the scenario that pulled them in. Recurses through nested git deps up to depth 10; constraints from all sources are intersected and re-resolved. Pulled-in entries carry 'required_by: <normalised identity of the parent>'.",
+                "Disable transitive resolution per run with 'deps lock --no-transitive' or permanently with 'transitive = false' under [dependencies] in diffusion.toml.",
+                "Git-sourced collections: diffusion.toml entry with Source = \"git\" and SourceURL = <url>; lock entry with scm: git and src: <url>; requirements.yml '- name: <url>, type: git, version: <ref>'. Never written to meta/main.yml.",
+                "The lock hash of a project with only Galaxy collections is unchanged by the git-collection feature (Source/SourceURL are only hashed when they carry information).",
             ],
+            "diffusion_toml_dependencies_keys": {
+                "transitive": "bool, optional — default true. false disables nested dependency resolution.",
+                "collections[].Source": "'galaxy' (default when empty) or 'git'",
+                "collections[].SourceURL": "git URL — REQUIRED when Source is not galaxy, otherwise deps lock fails",
+                "roles[].Src / roles[].Scm": "git URL and SCM type for git roles",
+            },
+            "lock_entry_fields": {
+                "name": "'<scenario>.<short name>'",
+                "namespace": "Galaxy namespace",
+                "version": "declared constraint",
+                "resolved_version": "pinned version",
+                "scm": "source type: galaxy | git (LockFileEntry.Source)",
+                "src": "git URL for git roles/collections",
+                "required_by": "NEW — identity of the dependency that pulled this entry in transitively (empty = direct dependency)",
+                "python_deps": "pip packages required by the collection",
+            },
             "scenario_flag": {
                 "flag": "--scenario, -s",
                 "default": "(empty = all scenarios)",
@@ -963,21 +1572,33 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                         "Scans scenarios/*/requirements.yml for existing collections and roles",
                         "Scans meta/main.yml for collections",
                         "Adds found dependencies with >= version constraints",
+                        "Recognises git collections in requirements.yml (type: git or a URL-shaped name) and stores them as '<scenario>.<repo basename>' with Source='git' / SourceURL=<url>; 'ansible-collection-' / 'ansible_collection_' prefixes are stripped and remaining dots become '_'",
+                        "Never reads diffusion.lock, so transitive (required_by) entries never leak into diffusion.toml as direct dependencies",
                     ],
                 },
                 "lock": {
-                    "usage": "diffusion deps lock [--scenario <name>]",
+                    "usage": "diffusion deps lock [--scenario <name>] [--no-transitive]",
                     "description": "Generate or update diffusion.lock from current dependencies in meta/main.yml, requirements.yml, and diffusion.toml",
                     "flags": {
                         "--scenario, -s": {
                             "description": "Only regenerate entries for this scenario and merge them into the existing lock file",
                             "default": "(empty = full regeneration for all scenarios)",
                         },
+                        "--no-transitive": {
+                            "description": "Lock direct dependencies only — do not resolve nested dependencies of git-sourced roles and collections (overrides [dependencies].transitive)",
+                            "default": "false",
+                        },
                     },
                     "behavior": [
                         "Resolves all collection and role versions from Galaxy API or git",
                         "Pins Python version and tool versions",
-                        "Writes diffusion.lock (TOML format)",
+                        "Writes diffusion.lock (YAML format, with a generated header comment)",
+                        "Fails loudly when a non-Galaxy collection has no SourceURL: 'collection <name>: missing SourceURL for non-Galaxy source \"git\"' (previously skipped silently)",
+                        "Transitive (unless disabled): shallow-clones each git dependency (git clone --depth 1 --no-tags --branch <ref> -- <url>; constraints like '>=1.0' clone the default branch), imports the remote's default-scenario entries from its diffusion.lock (preferred) or diffusion.toml, BFS up to depth 10.",
+                        "Transitive warnings (yellow, non-fatal): 'could not fetch dependencies of <id>: ...', 'skipping <id> required by <parent>: already resolved (duplicate or cycle)', 'max transitive depth 10 reached at <id>: not descending further', 'could not resolve <id>: ...; leaving constraint <c>', 'transitive: could not determine repository identity (no git origin / meta role_name); cycle detection relies on dependency graph only'.",
+                        "Self-identity (cycle protection): git 'origin' URL, meta/main.yml role_name and namespace.role_name, and the working directory name. URLs are compared normalised (https://GitHub.com/Org/Repo.git/ == git@github.com:org/repo).",
+                        "Private transitive git deps reuse [[artifact_sources]] credentials (Vault or local) via GIT_USER_* / GIT_PASSWORD_* / GIT_URL_* env vars.",
+                        "Tools and Python version always come from the direct lock — a remote role never narrows the container runtime.",
                         "With --scenario: entries of OTHER scenarios are preserved verbatim (original order), then the fresh entries of the target scenario are appended. Tools/Python metadata are global and always taken fresh.",
                         "With --scenario but NO existing diffusion.lock: falls back to a FULL generation for all scenarios (prints 'No existing diffusion.lock found — generating full lock file for all scenarios'). A scenario-only lock file is never written.",
                         "The lock hash is always computed over ALL scenarios, so a scoped lock has identical hash semantics to a full lock.",
@@ -985,6 +1606,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "examples": [
                         "diffusion deps lock                 # full regeneration",
                         "diffusion deps lock -s production   # scoped merge for 'production' only",
+                        "diffusion deps lock --no-transitive # direct dependencies only",
                     ],
                 },
                 "check": {
@@ -999,6 +1621,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "behavior": [
                         "Compares lock file against requirements.yml and meta.yml",
                         "Exits with code 1 if out of date (useful in CI)",
+                        "Git collections are compared by repository URL (requirements.yml 'name' is the URL); they are ignored for meta/main.yml",
                         "Scoped mismatch message: \"Lock file is not fitting yaml manifests for scenario <name>. Run 'diffusion deps sync -s <name>' to update.\"",
                     ],
                 },
@@ -1010,6 +1633,8 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                         "Shows tools with constraints and resolved versions",
                         "Shows collections per scenario with constraints and resolved versions",
                         "Shows roles per scenario with constraints and resolved versions",
+                        "Git collections are displayed as '<name> (git: <url>)'",
+                        "Transitive entries are suffixed with '(via <required_by>)'",
                     ],
                 },
                 "sync": {
@@ -1025,6 +1650,8 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                         "Overwrites requirements.yml for each scenario with resolved versions from lock file",
                         "Updates meta/main.yml collections (default scenario only; skipped for a scoped non-default scenario)",
                         "Useful for rollback or ensuring consistency after lock file changes",
+                        "Git collections are written as '- name: <url>, type: git, version: <ref>' and skipped for meta/main.yml with '- skipping git collection <url> (not expressible in meta/main.yml)'",
+                        "Console lines for transitive entries end in '(via <id>)' — console only, requirements.yml stays plain YAML",
                         "Requires an existing diffusion.lock — otherwise: \"lock file not found. Run 'diffusion deps lock' first\"",
                     ],
                 },
@@ -1033,6 +1660,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "diffusion deps init                # Initialize dependency tracking",
                 "diffusion deps lock                # Generate/update lock file",
                 "diffusion deps lock -s production  # Scoped lock merge for one scenario",
+                "diffusion deps lock --no-transitive # Skip nested dependency resolution",
                 "diffusion deps check               # Verify lock file is current (CI gate)",
                 "diffusion deps check -s production # Verify one scenario only",
                 "diffusion deps resolve             # Show all resolved versions",
@@ -1270,6 +1898,8 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Remote state is written to ~/.diffusion/state on each host after every run.",
                 "Skip logic: re-deploy is skipped if last run succeeded within --skip-period AND run_id matches.",
                 "run_id is a SHA-256 of merged lock hash + inventory + playbook + extra-vars.",
+                "The lock-merge step emits collections, roles and tools in sorted key order, so merged locks (and run_id inputs) are stable across runs.",
+                "Role-source URLs, refs, Galaxy names and versions starting with '-' are rejected before git/ansible-galaxy is invoked ('refusing to clone \"<v>\": argument looks like a git option' / 'refusing to use \"<v>\": <kind> looks like a command line option'). git invocations also pass '--' before positionals.",
             ],
             "flags": {
                 "--role-source": {
@@ -1411,6 +2041,152 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 'diffusion deploy --role-source scm=galaxy,version=>=7.0.0,galaxy=geerlingguy.docker --host web01=ansible_host=1.2.3.4 --ssh-key "*=<base64>"',
                 "diffusion deploy --role-source scm=git,version=main,url=https://github.com/org/role.git --ci --cache --host-wait-max-attempts 30",
                 'diffusion deploy --role-source scm=git,version=main,url=https://github.com/org/role.git --ssh-key "group:webservers=<base64>" --host web01=ansible_host=1.2.3.4',
+            ],
+        },
+        "patch": {
+            "description": "Inspect and patch external Ansible roles (ephemeral, per scenario) inside the running molecule container",
+            "usage": "diffusion patch [subcommand]",
+            "notes": [
+                "Patch bundles live in scenarios/<scenario>/patch.yml; overlay sources live in scenarios/<scenario>/patch/files/ and scenarios/<scenario>/patch/templates/.",
+                "Patching never mutates the host: the role is copied inside the container to /var/lib/diffusion-patch/<scenario>/work/<role> (pristine copy in .../backup/<role>), streamed to a throwaway host temp dir, patched, streamed back and BIND-MOUNTED over /root/.ansible/roles/<role>.",
+                "The patch dir lives under /var/lib (container writable layer), NOT /tmp: the molecule image mounts /tmp as tmpfs and 'docker cp' cannot read out of a tmpfs mount.",
+                "'diffusion molecule' (converge, verify, default flow) auto-applies the scenario's bundles before molecule runs and removes the overlay afterwards. 'diffusion patch apply' leaves the overlay in place until the container is destroyed, 'diffusion molecule --destroy/--wipe' runs, or the next molecule run replaces it.",
+                "patch.yml is fully validated on load — ANY invalid bundle makes 'diffusion molecule' fail with 'patch apply failed: invalid patch config: ...'.",
+                "Role names in bundles must be declared in diffusion.toml [dependencies] roles for the bundle's scenario. Run diffusion patch from the project root (diffusion.toml is read from the current directory).",
+                "Task IDs are POSITIONAL (tree order from 'patch analyze'). Upgrading the external role can shift IDs — re-run 'patch analyze' and 'patch check' after every role version bump.",
+                "Without --role, diff/apply auto-detect the FIRST running molecule-* container; pass --role when several are running.",
+                "Use MCP tools check_patch_config (static lint of patch.yml) and inspect_patch_overlays (live mounts in the container).",
+            ],
+            "patch_yml_schema": {
+                "top_level": "Bundles: — a list. The key is case-sensitive ('bundles:' parses to zero bundles).",
+                "bundle": {
+                    "patch_bundle_name": "string, required, unique within the file",
+                    "role_name": "string, required — 'namespace.role' or short 'role' (short matches a namespaced diffusion.toml entry; ambiguous short names fail inside the container)",
+                    "scenario": "string, optional — scopes the diffusion.toml role lookup and overlay validation; empty = accept roles of any scenario. Keep equal to the patch.yml directory.",
+                    "tasks_to_patch": "list, required (non-empty), task_id unique per bundle",
+                },
+                "task": {
+                    "task_id": "required — dotted positive integers ('1', '1.3.1', no leading zeros, max depth 32); handlers use an 'h' prefix ('h1', 'h1.2'). Must address a LEAF, never a branch.",
+                    "new_module": "rename the task's module (e.g. ansible.builtin.copy → ansible.builtin.template)",
+                    "new_module_setup": "list of {key, value}. With new_module: REPLACES module args. Without: MERGES into existing args (must be a mapping; free-form args fail).",
+                    "new_conditions": "list of {condition: when|changed_when|failed_when, body: <expr>}. Multiple bodies per key render as a list. Body 'true'/'false' renders a YAML bool and emits a 'possible design problem' warning.",
+                    "new_become_user": "{user: <name>, become: true|false} — at least one must be set",
+                    "new_environment": "list of {key, value} — REPLACES the task's environment mapping",
+                    "new_file_src": "file under scenarios/<scenario>/patch/files/ copied over the leaf's recorded src (files/<src> in the role). Relative, must exist, no '..' escape. Only for file-module leaves (copy etc.), not template.",
+                    "new_template_src": "file under scenarios/<scenario>/patch/templates/ copied over templates/<src>. Only for 'template' leaves.",
+                    "new_block": "accepted by the schema but NOT supported in v1 — apply fails with 'new_block apply is not supported in v1'",
+                },
+                "constraints": [
+                    "At least one action per task ('no patch action specified')",
+                    "new_file_src and new_template_src are mutually exclusive",
+                    "A src overlay cannot be combined with new_module/new_module_setup",
+                    "Overlays need a static, relative leaf src (Jinja or absolute src → unsupported)",
+                    "action:/local_action: tasks cannot be mutated in v1",
+                ],
+                "example": (
+                    "Bundles:\n"
+                    "  - patch_bundle_name: docker-hardening\n"
+                    "    role_name: geerlingguy.docker\n"
+                    "    scenario: default\n"
+                    "    tasks_to_patch:\n"
+                    "      - task_id: \"1.3\"\n"
+                    "        new_conditions:\n"
+                    "          - condition: when\n"
+                    "            body: ansible_os_family == 'Debian'\n"
+                    "        new_become_user:\n"
+                    "          become: true\n"
+                    "      - task_id: \"2.1\"\n"
+                    "        new_template_src: daemon.json.j2   # scenarios/default/patch/templates/daemon.json.j2\n"
+                    "      - task_id: h1\n"
+                    "        new_module_setup:\n"
+                    "          - key: state\n"
+                    "            value: restarted\n"
+                ),
+            },
+            "task_tree": {
+                "leaf": "real module execution — patchable, gets a dotted ID",
+                "branch": "include_tasks / import_tasks / include_role / import_role / block — visual-only grouping, never a patch target ('task_id \"X\" is a branch (visual-only, patch a leaf instead)')",
+                "opaque_branch": "include_role/import_role (always), or include with a dynamic, missing, cyclic or out-of-root target — not expanded",
+                "numbering": "tasks/main.yml top level → 1,2,3; tasks included from branch 1 → 1.1,1.2; block/rescue/always children of 2 → 2.1,2.2; handlers/main.yml → h1,h2",
+            },
+            "subcommands": {
+                "analyze": {
+                    "usage": "diffusion patch analyze <role> [flags]",
+                    "description": "Print the task/branch tree of an installed external role with dotted leaf IDs",
+                    "flags": {
+                        "--scenario, -s": {"description": "Molecule scenario to operate on", "default": "default"},
+                        "--format": {"description": "Output format: tree|yaml", "default": "tree"},
+                        "--no-color": {"description": "Disable ANSI colors", "default": "false"},
+                        "--tag": {"description": "Highlight tasks with these tags (repeatable or comma-separated)", "default": ""},
+                    },
+                    "behavior": [
+                        "Role lookup on the host: diffusion cache <cache>/roles/, ./molecule/<role>, ~/.ansible/roles (full name, short name, then '<ns>.<short>' scan)",
+                        "Fallback: read-only 'docker cp' of the role out of the first running molecule-* container into a temp dir",
+                        "Requires tasks/main.yml ('no tasks/main.yml under <path>: not an analyzable role')",
+                        "Tree output annotates leaves overlaid by the scenario's patch.yml with '<= patch/files|templates/<name>'",
+                    ],
+                    "examples": [
+                        "diffusion patch analyze geerlingguy.docker",
+                        "diffusion patch analyze geerlingguy.docker -s production --format yaml",
+                        "diffusion patch analyze docker --tag install --no-color",
+                    ],
+                },
+                "list": {
+                    "usage": "diffusion patch list [-s <scenario>]",
+                    "description": "List patch bundles of a scenario and summarise each task action (module->, args(n), file<=, template<=, when(n), changed(n), failed(n), become, env, block(n))",
+                    "flags": {"--scenario, -s": {"description": "Molecule scenario", "default": "default"}},
+                    "behavior": ["Fails when scenarios/<scenario>/patch.yml does not exist or does not validate"],
+                },
+                "check": {
+                    "usage": "diffusion patch check [-s <scenario>]",
+                    "description": "Validate every bundle (diffusion.toml role, task IDs, overlays) and verify each task ID resolves to a LEAF of the installed role analysis",
+                    "flags": {"--scenario, -s": {"description": "Molecule scenario", "default": "default"}},
+                    "behavior": [
+                        "Prints 'OK <bundle> (role <r>, <n> tasks)' or 'FAIL <bundle>: <reason>' per bundle",
+                        "Exit 1 with 'patch check failed for scenario <s>' if any bundle fails",
+                        "Overlay kind is checked against the leaf module (template ↔ new_template_src, file modules ↔ new_file_src)",
+                    ],
+                },
+                "diff": {
+                    "usage": "diffusion patch diff [-s <scenario>] [-r <role>] [--bundle <name>]",
+                    "description": "Dry-run apply inside the running molecule container: report what would change; nothing is written back and no overlay is mounted",
+                    "flags": {
+                        "--scenario, -s": {"description": "Molecule scenario", "default": "default"},
+                        "--role, -r": {"description": "Role under test (container molecule-<role>); default: first running molecule container", "default": ""},
+                        "--bundle": {"description": "Only process this bundle name", "default": "(all)"},
+                    },
+                },
+                "apply": {
+                    "usage": "diffusion patch apply [-s <scenario>] [-r <role>] [--bundle <name>] [--dry-run] [--force]",
+                    "description": "Apply patch bundles inside the running molecule-<role> container (bind-mount overlay)",
+                    "flags": {
+                        "--scenario, -s": {"description": "Molecule scenario", "default": "default"},
+                        "--role, -r": {"description": "Role under test (container molecule-<role>); default: first running molecule container", "default": ""},
+                        "--bundle": {"description": "Only process this bundle name", "default": "(all)"},
+                        "--dry-run": {"description": "Report changes without writing (same as 'patch diff')", "default": "false"},
+                        "--force": {"description": "Apply despite analysis drift (task line/name changed since analyze)", "default": "false"},
+                    },
+                    "behavior": [
+                        "Requires a converged container ('diffusion molecule --converge' first)",
+                        "Self-heals first: unmounts stale overlays under /root/.ansible/roles and removes /var/lib/diffusion-patch/<scenario>; a mount that resists umount and umount -l aborts the apply",
+                        "If one bundle fails, overlays of bundles applied earlier in the same run are removed again",
+                        "Prints the per-bundle summary (patched tasks, overlays, files changed, warnings) and 'overlay: <container>:<work> -> <roles path>'",
+                        "Rewritten task files use 4-space indentation, keep the original '---' marker and a blank line between top-level tasks",
+                    ],
+                    "examples": [
+                        "diffusion patch apply -r myrole",
+                        "diffusion patch apply -r myrole -s production --bundle docker-hardening",
+                        "diffusion patch apply -r myrole --dry-run",
+                    ],
+                },
+            },
+            "examples": [
+                "diffusion patch analyze geerlingguy.docker      # find leaf IDs",
+                "diffusion patch list                            # show bundles of scenario 'default'",
+                "diffusion patch check -s production             # validate against installed roles",
+                "diffusion patch diff -r myrole                  # dry-run inside molecule-myrole",
+                "diffusion patch apply -r myrole                 # mount patched roles",
+                "diffusion molecule --converge                   # auto-applies scenario patches",
             ],
         },
     }
@@ -1774,6 +2550,38 @@ def troubleshoot_molecule_container(role: str) -> str:
         }
     )
 
+    # 10. Patch overlays (diffusion patch / auto-patching during molecule runs)
+    overlay_result = _run(
+        [
+            "docker",
+            "exec",
+            container,
+            "/bin/sh",
+            "-c",
+            f"awk '{{print $2}}' /proc/self/mounts | grep '^{_CONTAINER_ROLES_PATH}/' ; "
+            f"echo '---'; ls -1 {_CONTAINER_PATCH_DIR} 2>/dev/null",
+        ]
+    )
+    mounts_part, _, dirs_part = overlay_result.get("stdout", "").partition("---")
+    overlay_mounts = [m for m in mounts_part.splitlines() if m.strip()]
+    patch_scenarios = [d for d in dirs_part.splitlines() if d.strip()]
+    diagnostics.append(
+        {
+            "check": "Patch overlays",
+            "result": "active" if overlay_mounts else "none",
+            "mounted_over": overlay_mounts,
+            "patch_dir_scenarios": patch_scenarios,
+            "suggestion": (
+                "Overlays persist after 'diffusion patch apply' by design, but should NOT remain "
+                "after a 'diffusion molecule' run finished. Use inspect_patch_overlays for details. "
+                "'diffusion molecule --destroy/--wipe' always unmount them; converge/verify/'patch apply' "
+                "self-heal only while the scenario's patch.yml still declares bundles."
+                if overlay_mounts
+                else ""
+            ),
+        }
+    )
+
     return json.dumps({"container": container, "diagnostics": diagnostics}, indent=2)
 
 
@@ -1847,9 +2655,19 @@ def list_molecule_scenarios(project_path: str = "") -> str:
                     "requirements.yml",
                     "prepare.yml",
                     "cleanup.yml",
+                    "patch.yml",
                 ]:
                     fpath = entry / fname
                     scenario_info["files"][fname] = fpath.exists()
+
+                # Patch overlay sources (diffusion patch new_file_src / new_template_src)
+                patch_dir = entry / "patch"
+                if patch_dir.is_dir():
+                    scenario_info["patch_overlays"] = sorted(
+                        str(f.relative_to(entry)).replace("\\", "/")
+                        for f in patch_dir.rglob("*")
+                        if f.is_file()
+                    )
 
                 # Check for tests directory
                 tests_dir = entry / "tests"
@@ -1880,10 +2698,14 @@ def run_diffusion_command(
 ) -> str:
     """Run a diffusion CLI command and return the output.
 
-    Only allows safe, read-only or non-destructive commands.
+    Only allows safe, read-only or non-destructive commands. 'patch analyze',
+    'patch list', 'patch check' and 'patch diff' are read-only ('patch diff'
+    is a dry-run that never writes back into the container); 'patch apply'
+    is NOT allowed — run it in a terminal.
 
     Args:
-        subcommand: The diffusion subcommand (e.g. "show", "deps check", "cache status").
+        subcommand: The diffusion subcommand (e.g. "show", "deps check", "cache status",
+                    "patch analyze" with args="geerlingguy.docker --no-color").
         args: Additional arguments as a string.
         project_path: Working directory (auto-detected if empty).
     """
@@ -1897,6 +2719,10 @@ def run_diffusion_command(
         "docs --dry-run",
         "role",
         "deploy",
+        "patch analyze",
+        "patch list",
+        "patch check",
+        "patch diff",
         "--version",
     }
 
@@ -2623,6 +3449,403 @@ def get_terraform_provider_reference(resource: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool: check_patch_config
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def check_patch_config(project_path: str = "", scenario: str = "default") -> str:
+    """Statically validate scenarios/<scenario>/patch.yml for `diffusion patch`.
+
+    Mirrors the validation diffusion runs when it loads patch.yml (which also
+    happens automatically during `diffusion molecule` converge/verify):
+    top-level 'Bundles' key (case-sensitive), unique bundle names, role_name
+    declared in diffusion.toml [dependencies] for the bundle scenario, task_id
+    syntax ('1.3.1' / 'h1'), duplicate IDs, at least one action, overlay files
+    present under scenarios/<scenario>/patch/files|templates, mutual
+    exclusions, condition keys, become/env keys. Also flags pitfalls that pass
+    validation but break later (new_block unsupported in v1, static boolean
+    conditions, ignored unknown keys, scenario field mismatch).
+
+    It does NOT resolve task IDs against the installed role — use
+    `run_diffusion_command("patch check", "-s <scenario>")` for that.
+
+    Args:
+        project_path: Path to the project root (auto-detected if empty).
+        scenario: Scenario whose patch.yml to check (default: "default").
+    """
+    root = Path(project_path) if project_path else _find_project_root()
+    if root is None:
+        return "Error: Could not find project root."
+    scen = (scenario or "default").strip()
+    if not _SAFE_CONTAINER_NAME.match(scen):
+        return f"Error: invalid scenario {scen!r}: must be a plain scenario name"
+
+    report = _validate_patch_config(root, scen)
+
+    # Overlay sources on disk vs. referenced in patch.yml (informational).
+    patch_dir = root / "scenarios" / scen / "patch"
+    if patch_dir.is_dir():
+        on_disk = sorted(
+            str(f.relative_to(patch_dir)).replace("\\", "/")
+            for f in patch_dir.rglob("*")
+            if f.is_file()
+        )
+        report["overlay_sources_on_disk"] = on_disk
+        try:
+            data = _load_patch_yaml(root / "scenarios" / scen / "patch.yml") or {}
+            referenced: set[str] = set()
+
+            def _collect(tasks: Any) -> None:
+                for t in tasks or []:
+                    if not isinstance(t, dict):
+                        continue
+                    if t.get("new_file_src"):
+                        referenced.add("files/" + str(t["new_file_src"]).strip())
+                    if t.get("new_template_src"):
+                        referenced.add("templates/" + str(t["new_template_src"]).strip())
+                    _collect(t.get("new_block"))
+
+            for b in (data.get(_PATCH_TOP_KEY) or []) if isinstance(data, dict) else []:
+                if isinstance(b, dict):
+                    _collect(b.get("tasks_to_patch"))
+            unused = [f for f in on_disk if f not in referenced]
+            if unused:
+                report["unreferenced_overlay_sources"] = unused
+        except Exception:
+            pass
+
+    if report.get("present"):
+        report["summary"] = (
+            "ok — patch.yml would load; run 'diffusion patch check' to resolve task IDs"
+            if not report["errors"]
+            else f"{len(report['errors'])} error(s) — 'diffusion molecule' would fail with "
+            "'patch apply failed: invalid patch config: ...'"
+        )
+        report["next_steps"] = [
+            f"diffusion patch analyze <role> -s {scen}   # confirm leaf IDs",
+            f"diffusion patch check -s {scen}            # IDs vs installed role",
+            f"diffusion patch diff -s {scen} -r <role>   # dry-run in container",
+        ]
+    return json.dumps(report, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Tool: inspect_patch_overlays
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def inspect_patch_overlays(role: str, scenario: str = "") -> str:
+    """Inspect `diffusion patch` bind-mount overlays inside a molecule container.
+
+    Shows which /root/.ansible/roles/<role> directories are currently
+    overlaid, the work/backup trees under /var/lib/diffusion-patch/<scenario>,
+    and (optionally per scenario) which files differ between the pristine
+    backup and the patched work copy.
+
+    Interpretation: overlays persist after `diffusion patch apply` by design;
+    after a `diffusion molecule` converge/verify finished they should be gone.
+    `diffusion molecule --destroy/--wipe` always remove leftovers; converge,
+    verify and `patch apply` self-heal only while patch.yml declares bundles.
+
+    Args:
+        role: The role under test (container will be molecule-<role>).
+        scenario: Optional scenario to diff work vs backup (empty = list all).
+    """
+    container = _container_name(role)
+    if not _SAFE_CONTAINER_NAME.match(container):
+        return f"Error: invalid container name {container!r}"
+    scen = scenario.strip()
+    if scen and not _SAFE_CONTAINER_NAME.match(scen):
+        return f"Error: invalid scenario {scen!r}: must be a plain scenario name"
+
+    state = _run(["docker", "inspect", "-f", "{{.State.Running}}", container])
+    if state["returncode"] != 0 or state["stdout"].strip() != "true":
+        return json.dumps(
+            {
+                "container": container,
+                "running": False,
+                "detail": state["stderr"] or "container not running",
+                "suggestion": f"Start it with 'diffusion molecule -r {role} --converge'. "
+                "diffusion patch diff/apply fail with 'container molecule-<role> is not running'.",
+            },
+            indent=2,
+        )
+
+    script = (
+        f"awk '{{print $2}}' /proc/self/mounts | grep '^{_CONTAINER_ROLES_PATH}/' ; "
+        "echo '---'; "
+        f"for s in $(ls -1 {_CONTAINER_PATCH_DIR} 2>/dev/null); do "
+        f"for kind in work backup; do "
+        f"for r in $(ls -1 {_CONTAINER_PATCH_DIR}/$s/$kind 2>/dev/null); do echo \"$s $kind $r\"; done; "
+        "done; done"
+    )
+    res = _run(["docker", "exec", container, "/bin/sh", "-c", script])
+    mounts_part, _, tree_part = res.get("stdout", "").partition("---")
+    mounts = [m.strip() for m in mounts_part.splitlines() if m.strip()]
+
+    tree: dict[str, dict[str, list[str]]] = {}
+    for line in tree_part.splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            s, kind, r = parts
+            tree.setdefault(s, {"work": [], "backup": []})[kind].append(r)
+
+    overlays: list[dict[str, Any]] = []
+    for m in mounts:
+        role_dir = m[len(_CONTAINER_ROLES_PATH) + 1 :]
+        owners = [s for s, t in tree.items() if role_dir in t.get("work", [])]
+        overlays.append(
+            {
+                "mounted_over": m,
+                "role_dir": role_dir,
+                "work_dir_scenarios": owners,
+                "status": "ok" if owners else "orphan — no matching work dir (mount source deleted?)",
+            }
+        )
+
+    report: dict[str, Any] = {
+        "container": container,
+        "roles_path": _CONTAINER_ROLES_PATH,
+        "patch_dir": _CONTAINER_PATCH_DIR,
+        "active_overlays": overlays,
+        "patch_tree": tree,
+    }
+
+    if scen:
+        diffs: dict[str, Any] = {}
+        for r in tree.get(scen, {}).get("work", []):
+            if not _SAFE_CONTAINER_NAME.match(r):
+                continue
+            base = f"{_CONTAINER_PATCH_DIR}/{scen}"
+            d = _run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "/bin/sh",
+                    "-c",
+                    f"diff -rq {base}/backup/{r} {base}/work/{r} 2>&1 | head -50",
+                ]
+            )
+            diffs[r] = d["stdout"].splitlines() or ["(no differences or diff unavailable)"]
+        report["work_vs_backup"] = diffs
+
+    if overlays:
+        report["note"] = (
+            "Overlays are expected after 'diffusion patch apply'. If they are left over from an "
+            "interrupted 'diffusion molecule' run: 'diffusion molecule --destroy' / '--wipe' always "
+            "unmount them; converge/verify/'patch apply' self-heal only while the scenario's "
+            "patch.yml still declares bundles. A mount that resists 'umount -l' produces "
+            "'stale patch overlay still mounted in container ...' — restart the container."
+        )
+    elif tree:
+        report["note"] = (
+            "Patch work/backup trees exist but nothing is mounted: a dry-run or a finished molecule "
+            "run left the staging copies behind. Harmless; cleaned on the next apply."
+        )
+    else:
+        report["note"] = "No patch overlays and no patch work tree in this container."
+    return json.dumps(report, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Tool: check_transitive_dependencies
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def check_transitive_dependencies(project_path: str = "", scenario: str = "") -> str:
+    """Analyse transitive (nested) dependencies and git-sourced collections.
+
+    Reports, without touching the network:
+    - whether transitive resolution is enabled ([dependencies].transitive,
+      default true; `deps lock --no-transitive` overrides per run)
+    - the self-identity diffusion uses for cycle detection (git origin URL,
+      meta/main.yml role_name / namespace.role_name, directory name) and
+      whether it is "weak" (directory name only)
+    - direct vs transitive lock entries (required_by) grouped by parent
+    - git collections in diffusion.toml / diffusion.lock, including the fatal
+      "missing SourceURL for non-Galaxy source" misconfiguration
+    - URLs/versions starting with '-' (rejected by the CLI argument guard)
+    - lock entries that point back at this repository, and duplicate
+      identities within one scenario
+
+    Args:
+        project_path: Path to the project root (auto-detected if empty).
+        scenario: Optional scenario prefix to restrict the lock analysis.
+    """
+    root = Path(project_path) if project_path else _find_project_root()
+    if root is None:
+        return "Error: Could not find project root."
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    report: dict[str, Any] = {"project_root": str(root)}
+
+    deps = _load_dependency_config(root)
+    transitive = _ci_get(deps, "transitive")
+    report["transitive_enabled"] = True if transitive is None else bool(transitive)
+    report["transitive_source"] = (
+        "default (true)" if transitive is None else "diffusion.toml [dependencies].transitive"
+    )
+    report["max_depth"] = _TRANSITIVE_MAX_DEPTH
+
+    self_ids = _detect_self_identity(root)
+    report["self_identity"] = self_ids
+    report["self_identity_normalised"] = sorted({_normalize_identity(i) for i in self_ids if i})
+    if len(self_ids) <= 1:
+        warnings.append(
+            "Weak self-identity (no git origin / meta role_name): deps lock prints "
+            "'transitive: could not determine repository identity ...' and a dependency that "
+            "depends back on this repo is only stopped by the visited set."
+        )
+
+    # diffusion.toml collections / roles
+    toml_git_cols: list[dict[str, Any]] = []
+    for col in _ci_get(deps, "collections", []) or []:
+        if not isinstance(col, dict):
+            continue
+        name = _dep_name(col)
+        source = str(_ci_get(col, "source", "") or "")
+        url = str(_ci_get(col, "sourceurl", "") or "")
+        version = str(_ci_get(col, "version", "") or "")
+        if source and source != "galaxy":
+            toml_git_cols.append({"name": name, "source": source, "source_url": url, "version": version})
+            if not url:
+                errors.append(
+                    f'collection {name}: missing SourceURL for non-Galaxy source "{source}" — '
+                    "deps lock now FAILS (previously skipped silently). Add SourceURL = \"<git url>\"."
+                )
+        if source == "" and url:
+            warnings.append(
+                f"collection {name}: SourceURL set but Source empty — diffusion treats it as Galaxy "
+                "and ignores the URL. Set Source = \"git\"."
+            )
+        for kind, val in (("git URL", url), ("version constraint", version)):
+            if val:
+                err = _validate_cli_argument(kind, val)
+                if err:
+                    errors.append(f"collection {name}: {err}")
+    for r in _ci_get(deps, "roles", []) or []:
+        if not isinstance(r, dict):
+            continue
+        name = _dep_name(r)
+        for kind, val in (
+            ("git URL", str(_ci_get(r, "src", "") or "")),
+            ("version constraint", str(_ci_get(r, "version", "") or "")),
+        ):
+            if val:
+                err = _validate_cli_argument(kind, val)
+                if err:
+                    errors.append(f"role {name}: {err}")
+    report["diffusion_toml_git_collections"] = toml_git_cols
+
+    # meta/main.yml cannot carry git collections
+    meta_path = root / "meta" / "main.yml"
+    if meta_path.exists():
+        try:
+            meta = _load_yaml(meta_path) or {}
+            for c in meta.get("collections", []) or []:
+                if isinstance(c, str) and _is_git_url(c):
+                    errors.append(
+                        f"meta/main.yml lists git URL {c!r} under collections — meta only accepts "
+                        "'namespace.name'. Keep git collections in requirements.yml / diffusion.toml."
+                    )
+        except Exception:
+            pass
+
+    # diffusion.lock analysis
+    lock_path = root / "diffusion.lock"
+    if not lock_path.exists():
+        report["lock_file_present"] = False
+        warnings.append("No diffusion.lock — run 'diffusion deps lock'.")
+    else:
+        report["lock_file_present"] = True
+        try:
+            lock = _load_yaml(lock_path) or {}
+        except Exception as e:
+            return f"Error parsing diffusion.lock: {e}"
+
+        self_norm = {_normalize_identity(i) for i in self_ids if i}
+        prefix = f"{scenario.strip()}." if scenario.strip() else ""
+        direct: list[str] = []
+        by_parent: dict[str, list[str]] = {}
+        lock_git_cols: list[dict[str, Any]] = []
+        seen: dict[tuple[str, str], str] = {}
+
+        for section in ("collections", "roles"):
+            for e in lock.get(section, []) or []:
+                if not isinstance(e, dict):
+                    continue
+                name = str(e.get("name", "") or "")
+                if prefix and not name.startswith(prefix):
+                    continue
+                scen = name.split(".", 1)[0] if "." in name else "(unprefixed)"
+                ident = _lock_entry_identity(e)
+                label = f"{section[:-1]} {name}"
+                rb = str(e.get("required_by", "") or "")
+                if rb:
+                    by_parent.setdefault(rb, []).append(label)
+                else:
+                    direct.append(label)
+                if section == "collections" and _is_git_collection(e):
+                    lock_git_cols.append(
+                        {
+                            "name": name,
+                            "src": e.get("src", ""),
+                            "resolved_version": e.get("resolved_version", ""),
+                            "required_by": rb,
+                        }
+                    )
+                if ident and ident in self_norm:
+                    warnings.append(
+                        f"{label} resolves to THIS repository ({ident}) — a dependency cycle that "
+                        "self-identity should have skipped. Check git origin / meta role_name."
+                    )
+                key = (scen, f"{section}:{ident}")
+                if ident and key in seen:
+                    warnings.append(
+                        f"{label} duplicates {seen[key]} (same identity {ident!r} in scenario {scen}) — "
+                        "requirements.yml would list it twice."
+                    )
+                elif ident:
+                    seen[key] = label
+                for kind, val in (
+                    ("git URL", str(e.get("src", "") or "")),
+                    ("ref", _resolve_git_ref(str(e.get("resolved_version", "") or e.get("version", "") or ""))),
+                ):
+                    if val:
+                        err = _validate_cli_argument(kind, val)
+                        if err:
+                            errors.append(f"{label}: {err}")
+
+        report["lock_direct_entries"] = direct
+        report["lock_transitive_entries_by_parent"] = by_parent
+        report["lock_git_collections"] = lock_git_cols
+        if by_parent and not report["transitive_enabled"]:
+            warnings.append(
+                "diffusion.lock contains required_by entries but transitive resolution is disabled — "
+                "the next 'deps lock' will drop them."
+            )
+
+    report["errors"] = errors
+    report["warnings"] = warnings
+    report["summary"] = (
+        "ok"
+        if not errors and not warnings
+        else f"{len(errors)} error(s), {len(warnings)} warning(s)"
+    )
+    report["hints"] = [
+        "diffusion deps lock --no-transitive   # lock direct deps only",
+        "diffusion deps resolve                # shows '(via <id>)' and '(git: <url>)'",
+        "get_troubleshooting_guide('transitive') for warning meanings",
+    ]
+    return json.dumps(report, indent=2, default=str)
+
+
+# ---------------------------------------------------------------------------
 # Tool: check_lock_file_scenarios
 # ---------------------------------------------------------------------------
 
@@ -2847,6 +4070,281 @@ _TROUBLESHOOTING_CASES: dict[str, dict[str, Any]] = {
             "The AppArmor relaxation step (kernel.apparmor_restrict_unprivileged_userns=0) is now non-fatal ('|| true') — failure there no longer aborts the job.",
         ],
     },
+    # ------------------------------------------------------------------ patch
+    "patch-config-missing": {
+        "area": "patch",
+        "symptom": "failed to read patch config file: open scenarios/<scenario>/patch.yml: no such file or directory",
+        "trigger": "diffusion patch list | check (wrong -s, or run outside the project root)",
+        "cause": "list/check require scenarios/<scenario>/patch.yml relative to the CURRENT directory. (diffusion molecule and patch diff/apply silently no-op when it is absent.)",
+        "fix": [
+            "Run from the project root and pass the right --scenario/-s.",
+            "Create scenarios/<scenario>/patch.yml with a top-level 'Bundles:' list.",
+        ],
+    },
+    "patch-bundles-key-case": {
+        "area": "patch",
+        "symptom": "No patch bundles defined for scenario <s> — although patch.yml has bundles; molecule runs unpatched",
+        "trigger": "patch.yml uses 'bundles:' (or any casing other than 'Bundles:')",
+        "cause": "The top-level YAML key is matched case-sensitively ('Bundles'). Other casings and unknown keys are ignored silently, so the file parses to zero bundles.",
+        "fix": [
+            "Rename the top-level key to 'Bundles:'.",
+            "Run MCP tool check_patch_config(scenario=<s>) — it flags casing and ignored keys.",
+        ],
+    },
+    "patch-invalid-config": {
+        "area": "patch",
+        "symptom": "patch apply failed: invalid patch config: patch bundle \"<b>\" task <i>: patching task \"<id>\": <reason>",
+        "trigger": "diffusion molecule --converge/--verify (auto-patch) or any diffusion patch subcommand",
+        "cause": "patch.yml is validated in full on load. Typical reasons: 'no patch action specified', 'new_file_src and new_template_src are mutually exclusive', 'src overlay cannot be combined with new_module/new_module_setup', '<field> overlay not found: scenarios/<s>/patch/...', '<field> escapes the patch folder', 'condition <n> has empty body', 'module setup <n> has empty key', 'become setup sets neither user nor become', 'duplicate task_id', 'duplicate patch bundle name', 'no tasks to patch', 'bundle name is required'.",
+        "fix": [
+            "Fix the reported field; overlay files must exist under scenarios/<scenario>/patch/files|templates/ with a relative path.",
+            "Validate offline with MCP tool check_patch_config before running molecule.",
+        ],
+    },
+    "patch-role-not-declared": {
+        "area": "patch",
+        "symptom": "patch bundle \"<b>\": role \"<r>\" not found in diffusion.toml [dependencies] for scenario \"<s>\" (available roles: …) / no roles declared for scenario \"<s>\" / no roles declared in diffusion.toml [dependencies]",
+        "trigger": "Loading patch.yml",
+        "cause": "Only roles declared under [dependencies] roles for the bundle's 'scenario' field can be patched. A scoped bundle only sees '<scenario>.<role>' entries; an empty scenario field accepts any scenario.",
+        "fix": [
+            "diffusion role add-role <name> -n <namespace> -s <scenario>, or fix role_name/scenario in the bundle.",
+            "Short names ('docker') match namespaced entries ('geerlingguy.docker'); a namespaced bundle name must match in full.",
+        ],
+    },
+    "patch-condition-key": {
+        "area": "patch",
+        "symptom": "condition key must be one of when, changed_when, failed_when (migrate: put the key in condition: and the expression in body:)",
+        "trigger": "new_conditions entry with an old-style or misspelt key",
+        "cause": "Each new_conditions item is {condition: when|changed_when|failed_when, body: <expr>}.",
+        "fix": ["Rewrite as '- condition: when\\n  body: ansible_os_family == \"Debian\"'."],
+    },
+    "patch-task-id-invalid": {
+        "area": "patch",
+        "symptom": "invalid task id \"<id>\": segment \"<x>\" has leading zero | must be a positive integer | empty segment / task id exceeds max depth of 32",
+        "trigger": "task_id in patch.yml",
+        "cause": "IDs are dotted positive integers ('1', '1.3.1'); handlers use an 'h' prefix ('h1'). diffusion reads the raw scalar text, so unquoted 1.10 stays '1.10' — but quoting is still recommended for other YAML tooling.",
+        "fix": ["Copy IDs from 'diffusion patch analyze <role>' (e.g. task_id: \"1.3.1\")."],
+    },
+    "patch-task-id-branch-or-unknown": {
+        "area": "patch",
+        "symptom": "patch bundle \"<b>\": task_id \"<id>\" is a branch (visual-only, patch a leaf instead) / unknown task_id \"<id>\" (re-run analyze?)",
+        "trigger": "diffusion patch check | diff | apply, or molecule auto-patch",
+        "cause": "include_tasks/import_tasks/include_role/import_role/block nodes are branches and never patchable; IDs are positional, so a role version bump can shift or remove them.",
+        "fix": [
+            "Re-run 'diffusion patch analyze <role> -s <s>' and target a leaf ID.",
+            "After every external role upgrade run 'diffusion patch check' — a shifted ID may otherwise patch a different task.",
+        ],
+    },
+    "patch-drift": {
+        "area": "patch",
+        "symptom": "task <id> drifted since analyze (run analyze again or use --force) / task <id> no longer exists in <file> (role changed since analyze?)",
+        "trigger": "diffusion patch apply",
+        "cause": "The located YAML node's line or name differs from the analysis (role content changed between analysis and apply).",
+        "fix": ["Re-run analyze/check and update task IDs; use --force only if you verified the target task."],
+    },
+    "patch-overlay-kind-mismatch": {
+        "area": "patch",
+        "symptom": "task <id> uses module template: use new_template_src / uses module \"<m>\": use new_file_src for non-template tasks / references no files / records no src to overlay / has a dynamic src \"{{ … }}\" (unsupported) / has an absolute src (unsupported)",
+        "trigger": "diffusion patch check | apply with new_file_src/new_template_src",
+        "cause": "Overlays only replace the leaf's recorded static, relative src: templates/<src> for template tasks, files/<src> for file modules.",
+        "fix": ["Pick the matching field, or patch the src argument via new_module_setup instead."],
+    },
+    "patch-unsupported-v1": {
+        "area": "patch",
+        "symptom": "new_block apply is not supported in v1 / action:/local_action: tasks are not supported in v1 / module args are not a mapping: use new_module to replace",
+        "trigger": "diffusion patch apply/diff or molecule auto-patch",
+        "cause": "v1 limitations: new_block validates but cannot be applied; action:-form tasks cannot be mutated; new_module_setup without new_module MERGES into args, which fails for free-form args (e.g. 'command: echo hi').",
+        "fix": [
+            "Drop new_block; patch the individual leaves instead.",
+            "For free-form tasks set new_module (same module) together with new_module_setup to REPLACE the args.",
+        ],
+    },
+    "patch-static-bool-warning": {
+        "area": "patch",
+        "symptom": "warning: task <id>: static when false (task never runs) — possible design problem, verify intent",
+        "trigger": "new_conditions body 'true' or 'false'",
+        "cause": "A literal boolean freezes behaviour regardless of facts (always/never runs, always/never changed/failed). Non-fatal advisory.",
+        "fix": ["Intended (e.g. disabling a task in tests)? Ignore. Otherwise use a real expression."],
+    },
+    "patch-no-running-container": {
+        "area": "patch",
+        "symptom": "no running molecule-* container found (run 'diffusion molecule --converge' first) / container molecule-<r> is not running; run 'diffusion molecule -r <r> --converge' first",
+        "trigger": "diffusion patch diff | apply (and analyze when the role is not installed on the host)",
+        "cause": "Patching happens inside the running molecule container; without --role the first running molecule-* container is used.",
+        "fix": [
+            "diffusion molecule -r <role> --converge, then retry.",
+            "With several molecule containers running always pass --role/-r.",
+        ],
+    },
+    "patch-role-not-in-container": {
+        "area": "patch",
+        "symptom": "role not installed in container: role \"<r>\" is not installed in container molecule-<x> under /root/.ansible/roles; run 'diffusion molecule --converge' once or check scenarios/<scenario>/requirements.yml",
+        "trigger": "patch diff/apply or molecule auto-patch",
+        "cause": "The bundle's role is not in the container's roles path (missing from requirements.yml, or the pre-patch 'ansible-galaxy install' failed — look for 'warning: galaxy install before patching failed').",
+        "fix": [
+            "Add the role to the scenario (diffusion role add-role … -s <s>; diffusion deps sync -s <s>).",
+            "Converge once, then retry; inspect with docker_exec_in_molecule(role, 'ls /root/.ansible/roles').",
+        ],
+    },
+    "patch-role-ambiguous": {
+        "area": "patch",
+        "symptom": "role \"<short>\" is ambiguous in container molecule-<x>: matches [a.<short> b.<short>] — use the full namespace.role name in patch.yml",
+        "trigger": "Short role_name matching several namespaced installs",
+        "cause": "diffusion refuses to patch an arbitrary match.",
+        "fix": ["Set role_name to the full 'namespace.role'."],
+    },
+    "patch-stale-overlay": {
+        "area": "patch",
+        "symptom": "stale patch overlay still mounted in container molecule-<x>: <path> (a process may be holding it; restart the container or run 'diffusion molecule --wipe')",
+        "trigger": "patch apply / molecule auto-patch / --destroy after an interrupted run",
+        "cause": "The self-heal step could not unmount (umount and umount -l failed). The work tree is deliberately kept so the live mount does not point at a deleted dir.",
+        "fix": [
+            "docker restart molecule-<role> (or diffusion molecule --wipe) and retry.",
+            "Inspect with MCP tool inspect_patch_overlays(role).",
+        ],
+    },
+    "patch-staging-failed": {
+        "area": "patch",
+        "symptom": "staging role <r> in container molecule-<x>: copying the role into the work dir failed | creating the patch directory tree failed | removing the previous work/backup copies failed …",
+        "trigger": "patch apply / molecule auto-patch",
+        "cause": "The in-container copy to /var/lib/diffusion-patch/<scenario>/{work,backup} failed — typically no space left in the container writable layer or a read-only filesystem.",
+        "fix": [
+            "Check df -h / inside the container (troubleshoot_molecule_container).",
+            "Free space: diffusion molecule --wipe, docker system prune.",
+        ],
+    },
+    "patch-bind-mount-failed": {
+        "area": "patch",
+        "symptom": "failed to bind-mount patched role over /root/.ansible/roles/<r>: … permission denied / must be superuser",
+        "trigger": "patch apply / molecule auto-patch",
+        "cause": "'mount --bind' inside the container needs CAP_SYS_ADMIN; the diffusion molecule container normally runs privileged (Docker-in-Docker). A custom/non-privileged image or runtime breaks it.",
+        "fix": ["Use the standard diffusion-molecule-container image started by 'diffusion molecule' (privileged)."],
+    },
+    "patch-apply-failed-molecule": {
+        "area": "patch",
+        "symptom": "patch apply failed: <reason> (converge/verify exits non-zero before molecule runs)",
+        "trigger": "diffusion molecule (converge, verify, default flow) with scenarios/<s>/patch.yml present",
+        "cause": "By design a patch error FAILS the run — silently testing pristine roles would give false confidence.",
+        "fix": [
+            "Look up <reason> in this guide (query 'patch').",
+            "Temporarily move patch.yml away to test unpatched roles.",
+        ],
+    },
+    # ------------------------------------------------------- transitive deps
+    "deps-transitive-fetch-failed": {
+        "area": "deps",
+        "symptom": "could not fetch dependencies of <id>: git clone failed: …",
+        "trigger": "diffusion deps lock (transitive enabled) with a private or unreachable git dependency",
+        "cause": "Each git dependency is shallow-cloned to read its diffusion.lock/diffusion.toml. A fetch failure is a WARNING — the rest still resolves, but that repo's nested deps are missing from the lock.",
+        "fix": [
+            "Add credentials: diffusion artifact add <name> (URL must match the repo host); they are injected as GIT_USER_*/GIT_PASSWORD_*/GIT_URL_*.",
+            "Check the ref exists (non-constraint versions are used as --branch).",
+            "Or run diffusion deps lock --no-transitive.",
+        ],
+    },
+    "deps-transitive-duplicate-or-cycle": {
+        "area": "deps",
+        "symptom": "skipping <id> required by <parent>: already resolved (duplicate or cycle)",
+        "trigger": "diffusion deps lock",
+        "cause": "Informational: the identity is already a direct dep, was pulled in by another parent (diamond), or points back at this repo (cycle).",
+        "fix": ["No action needed. To pin a different version, declare the dependency directly in diffusion.toml."],
+    },
+    "deps-transitive-max-depth": {
+        "area": "deps",
+        "symptom": "max transitive depth 10 reached at <id>: not descending further",
+        "trigger": "diffusion deps lock with a very deep git dependency chain",
+        "cause": "Recursion is bounded at depth 10.",
+        "fix": ["Declare the deeper dependencies directly, or flatten the chain."],
+    },
+    "deps-transitive-weak-identity": {
+        "area": "deps",
+        "symptom": "transitive: could not determine repository identity (no git origin / meta role_name); cycle detection relies on dependency graph only",
+        "trigger": "diffusion deps lock in a repo without 'origin' remote and without meta/main.yml role_name",
+        "cause": "Self-identity falls back to the directory name only, so a remote that depends back on this repo is fetched once before the visited set stops it.",
+        "fix": ["git remote add origin <url> and/or set galaxy_info.role_name (+ namespace) in meta/main.yml."],
+    },
+    "deps-transitive-unresolved": {
+        "area": "deps",
+        "symptom": "could not resolve <id>: <err>; leaving constraint <c>",
+        "trigger": "Remote ships only a diffusion.toml (no lock) and the constraint cannot be resolved",
+        "cause": "Entries without a resolved version are resolved after the walk; on failure the constraint (or 'main' for git, 'latest' otherwise) is stored.",
+        "fix": ["Ask the remote to commit a diffusion.lock, or pin the dependency directly."],
+    },
+    "deps-transitive-entries-dropped": {
+        "area": "deps",
+        "symptom": "required_by entries vanished from diffusion.lock after deps lock",
+        "trigger": "deps lock --no-transitive, or [dependencies] transitive = false, or the parent's repo no longer lists them in its default scenario",
+        "cause": "Transitive entries are re-derived from their parent on every lock; only the remote's 'default' scenario is imported.",
+        "fix": ["Re-enable transitive resolution, or declare the dependency directly."],
+    },
+    "deps-git-collection-missing-source-url": {
+        "area": "deps",
+        "symptom": "failed to generate lock file: collection <scenario>.<name>: missing SourceURL for non-Galaxy source \"git\"",
+        "trigger": "diffusion deps lock (also role add-*/remove-* re-locks)",
+        "cause": "A collection with Source != galaxy has no SourceURL. Previously silently skipped (incomplete lock), now a hard error.",
+        "fix": [
+            "Add SourceURL = \"<git url>\" to the entry in diffusion.toml, or re-add it: diffusion role add-collection <name> --src <url>.",
+            "Check with MCP tool check_transitive_dependencies.",
+        ],
+    },
+    "deps-git-collection-meta-skipped": {
+        "area": "deps",
+        "symptom": "- skipping git collection <url> (not expressible in meta/main.yml)",
+        "trigger": "diffusion deps sync for the default scenario",
+        "cause": "meta/main.yml collections only accept 'namespace.name'; git collections are written to requirements.yml only. Informational.",
+        "fix": ["Nothing to do; ensure consumers install from requirements.yml."],
+    },
+    "role-add-collection-namespace-required": {
+        "area": "role",
+        "symptom": "--namespace/-n is required for Galaxy collections.",
+        "trigger": "diffusion role add-collection <name> without --namespace and without --src",
+        "cause": "Without --src the collection is resolved from Galaxy, which needs namespace.name.",
+        "fix": [
+            "Galaxy: diffusion role add-collection general --namespace community",
+            "Git: diffusion role add-collection foo --src https://github.com/org/ansible-collection-foo.git",
+        ],
+    },
+    "role-add-collection-no-tag": {
+        "area": "role",
+        "symptom": "No usable tag found for <url> — using branch 'main'",
+        "trigger": "diffusion role add-collection <name> --src <url> without --version",
+        "cause": "The highest remote tag is resolved and stored as '>=<tag>'; without tags (or if ls-remote fails) diffusion falls back to branch 'main'.",
+        "fix": ["Pass --version <tag|branch|constraint> explicitly, or tag the collection repo."],
+    },
+    # ----------------------------------------------------------------- security
+    "security-option-like-argument": {
+        "area": "security",
+        "symptom": "refusing to use \"-<x>\": <git URL|version constraint|role name|galaxy name|version|role|scenario|container> looks like a command line option / refusing to clone \"-<x>\": argument looks like a git option",
+        "trigger": "Any URL, ref, version, role, scenario or container name starting with '-' — directly or from a third-party diffusion.lock/diffusion.toml during transitive resolution or deploy --role-source",
+        "cause": "Argument-injection hardening: values such as '--upload-pack=…' would be executed by git. git calls also pass '--' before positionals; ansible-galaxy role install/init have no '--', hence the prefix guard.",
+        "fix": [
+            "Fix the offending value (it is never legitimate).",
+            "If it comes from a remote dependency's lock file, treat that repository as untrusted and use --no-transitive.",
+        ],
+    },
+    # ------------------------------------------------------------------ molecule
+    "molecule-ci-clone-retries": {
+        "area": "molecule",
+        "symptom": "failed to clone repository —container after 10 attempts: <err>",
+        "trigger": "diffusion molecule --ci (repo cloned inside the container)",
+        "cause": "The in-container 'git clone --single-branch --branch $GIT_BRANCH $GIT_REMOTE' failed 10 times (network, auth, or wrong branch/remote).",
+        "fix": [
+            "Check GIT_BRANCH / GIT_REMOTE (derived from GITHUB_REF_NAME / GITHUB_HEAD_REF in Actions) and that the branch exists remotely.",
+            "Private repos: make sure artifact source credentials (GIT_USER_N/GIT_PASSWORD_N/GIT_URL_N) are configured.",
+            "Reproduce: docker_exec_in_molecule(role, 'cd /tmp && git clone --single-branch --branch \"$GIT_BRANCH\" \"$GIT_REMOTE\" repo').",
+        ],
+    },
+    # ---------------------------------------------------------------- tests role
+    "tests-role-postgresql-5-params": {
+        "area": "tests-role",
+        "symptom": "Unsupported parameters for (community.postgresql.postgresql_query / postgresql_*) module: db, port",
+        "trigger": "diffusion molecule --verify with postgres tests, community.postgresql >= 5.0.0 and an older diffusion-ansible-tests-role",
+        "cause": "community.postgresql 5.x requires login_db / login_port instead of db / port. diffusion-ansible-tests-role switched its tasks to the new names (user-facing vars postgres_db / postgres_port are unchanged).",
+        "fix": [
+            "Update the tests role (diffusion molecule --verify --testsoverwrite for diffusion/remote test types).",
+            "Or pin community.postgresql < 5.0.0 in the scenario until the tests role is updated.",
+        ],
+    },
 }
 
 
@@ -2854,14 +4352,19 @@ _TROUBLESHOOTING_CASES: dict[str, dict[str, Any]] = {
 def get_troubleshooting_guide(query: str = "") -> str:
     """Look up known Diffusion failure modes and their fixes.
 
-    Covers deps --scenario scoping, deploy --ssh-key name validation,
-    Terraform provider PEM normalisation, and diffusion-test / diffusion-update
-    GitHub Action diagnostics.
+    Covers deps --scenario scoping, transitive dependencies and git-sourced
+    collections, `diffusion patch` bundles/overlays, deploy --ssh-key name
+    validation, CLI argument-injection guards, molecule CI clone retries,
+    diffusion-ansible-tests-role compatibility, Terraform provider PEM
+    normalisation, and diffusion-test / diffusion-update GitHub Action
+    diagnostics.
 
     Args:
-        query: Case id (e.g. "deploy-ssh-key-invalid-name"), an area
-               ("deps", "deploy", "terraform", "github-actions"), or free text
-               matched against symptoms/triggers. Empty = list all cases.
+        query: Case id (e.g. "patch-bundles-key-case"), an area ("deps",
+               "patch", "role", "deploy", "security", "molecule",
+               "tests-role", "terraform", "github-actions"), or free text
+               matched against ids/symptoms/triggers/causes/fixes.
+               Empty = list all cases.
     """
     q = query.strip().lower()
     if not q:
@@ -2883,6 +4386,7 @@ def get_troubleshooting_guide(query: str = "") -> str:
         or q in c["symptom"].lower()
         or q in c["trigger"].lower()
         or q in c["cause"].lower()
+        or any(q in f.lower() for f in c.get("fix", []))
     }
     if not matches:
         return (

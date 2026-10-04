@@ -247,6 +247,7 @@
     <a href="#cmd-show">show</a>
     <a href="#cmd-deploy">deploy</a>
     <a href="#cmd-docs">docs</a>
+    <a href="#cmd-patch">patch</a>
   </div>
   <div class="mob-section">
     <div class="mob-title">MCP Server</div>
@@ -304,6 +305,7 @@
       <a href="#cmd-show">show</a>
       <a href="#cmd-deploy">deploy</a>
       <a href="#cmd-docs">docs</a>
+      <a href="#cmd-patch">patch</a>
     </div>
     <div class="sidebar-section">
       <div class="sidebar-title">MCP Server</div>
@@ -383,7 +385,7 @@
         <div class="card">
           <div class="card-icon">🔒</div>
           <h4>Dependency Lock Files</h4>
-          <p>Pin Python, Ansible, Molecule, and collection versions to <code>diffusion.lock</code> for fully reproducible builds.</p>
+          <p>Pin Python, Ansible, Molecule, and collection versions to <code>diffusion.lock</code> for fully reproducible builds — including nested dependencies of git-sourced roles and collections.</p>
         </div>
         <div class="card">
           <div class="card-icon">⚡</div>
@@ -408,7 +410,12 @@
         <div class="card">
           <div class="card-icon">🤖</div>
           <h4>MCP Server</h4>
-          <p>AI assistant integration via Model Context Protocol — 23 tools for container management, validation, troubleshooting, deploy diagnostics and CLI / Terraform reference.</p>
+          <p>AI assistant integration via Model Context Protocol — 26 tools for container management, validation, troubleshooting, deploy and patch diagnostics and CLI / Terraform reference.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">🩹</div>
+          <h4>Role Patching</h4>
+          <p>Patch external roles per scenario with <code>diffusion patch</code> — conditions, module args, become, env, file/template overlays — applied ephemerally inside the molecule container.</p>
         </div>
       </div>
     </div>
@@ -494,6 +501,9 @@ diffusion molecule --destroy</code><button class="copy-btn" onclick="copyCode(th
           <tr><td><code>--wipe</code></td><td>Remove container + molecule folder</td></tr>
           <tr><td><code>--ci</code></td><td>CI/CD mode  no TTY, no spinners, clones repo inside container</td></tr>
           <tr><td><code>--role / --org</code></td><td>Override auto-detected role/org</td></tr>
+          <tr><td><code>--scenario / -s &lt;name&gt;</code></td><td>Molecule scenario to run (<code>scenarios/&lt;name&gt;/</code>, default <code>default</code>); also selects which <code>requirements.yml</code> and <code>patch.yml</code> are used</td></tr>
+          <tr><td><code>--force</code></td><td>Best-effort <code>ansible-galaxy install --force</code> of the scenario requirements before converge (runs before scenario patches are applied, so it can never wipe them)</td></tr>
+          <tr><td><code>--oidc</code></td><td>Use an OIDC token from the environment (<code>TOKEN</code> + <code>YC_CLOUD_ID</code>/<code>YC_FOLDER_ID</code> for YC, <code>AWS_REGION</code> for AWS)</td></tr>
           <tr><td><code>--testsoverwrite</code></td><td>Overwrite molecule tests folder</td></tr>
         </tbody>
       </table></div>
@@ -505,8 +515,11 @@ diffusion molecule --lint
 diffusion molecule --idempotence
 diffusion molecule --destroy
 diffusion molecule --wipe</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      <h3>Scenario patches</h3>
+      <p>When <code>scenarios/&lt;scenario&gt;/patch.yml</code> declares bundles, <code>converge</code>, <code>verify</code> and the default flow apply them <strong>inside the container</strong> right before Molecule runs and remove the overlay again afterwards. Diffusion first runs <code>ansible-galaxy install -r molecule/&lt;scenario&gt;/requirements.yml</code> so the targeted roles exist. <code>--destroy</code> and <code>--wipe</code> clear any leftover overlay first. Without <code>patch.yml</code> nothing changes. See <a href="#cmd-patch" style="color:var(--accent)">diffusion patch</a>.</p>
+      <div class="note warn">A patch error fails the run (<code>patch apply failed: …</code>) — silently testing unpatched roles would give false confidence.</div>
       <h3>CI/CD mode</h3>
-      <p>The <code>--ci</code> flag clones the repository inside the container instead of using volume mounts, eliminating TTY and permission issues in CI runners.</p>
+      <p>The <code>--ci</code> flag clones the repository inside the container instead of using volume mounts, eliminating TTY and permission issues in CI runners. The in-container clone is retried up to 10 times before failing with <code>failed to clone repository —container after 10 attempts</code>.</p>
       <pre><code><span style="color:var(--muted)"># GitHub Actions</span>
 - run: diffusion molecule --ci --converge
 - run: diffusion molecule --ci --verify
@@ -527,12 +540,28 @@ script:
           <tr><td><code>diffusion role --init</code></td><td>Initialize a new role interactively</td></tr>
           <tr><td><code>diffusion role add-role &lt;name&gt; --src &lt;url&gt; --version main</code></td><td>Add a role dependency</td></tr>
           <tr><td><code>diffusion role remove-role &lt;name&gt;</code></td><td>Remove a role dependency</td></tr>
-          <tr><td><code>diffusion role add-collection community.general</code></td><td>Add a collection</td></tr>
-          <tr><td><code>diffusion role remove-collection community.general</code></td><td>Remove a collection</td></tr>
+          <tr><td><code>diffusion role add-collection general --namespace community</code></td><td>Add a Galaxy collection (<code>--namespace / -n</code> required)</td></tr>
+          <tr><td><code>diffusion role add-collection foo --src &lt;git-url&gt; [--version main]</code></td><td>Add a git-sourced collection (<code>--namespace</code> optional)</td></tr>
+          <tr><td><code>diffusion role remove-collection general</code></td><td>Remove a collection</td></tr>
           <tr><td><code>--scenario / -s &lt;name&gt;</code></td><td>Target a specific Molecule scenario (default: <code>default</code>)</td></tr>
         </tbody>
       </table></div>
-      <div class="note">Without <code>--init</code>, the command displays current config. Use <code>--init</code> to scaffold a new role. If a role already exists, <code>--init</code> will warn you.</div>
+      <div class="note">Without <code>--init</code>, the command displays current config. Use <code>--init</code> to scaffold a new role. If a role already exists, <code>--init</code> will warn you. Role and collection names are given <strong>without</strong> namespace and must not contain dots (dots are reserved for scenario prefixes).</div>
+
+      <h3>add-collection flags</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Flag</th><th>Description</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td><code>--namespace, -n</code></td><td>Galaxy namespace — required for Galaxy collections, optional (stored for reference) for git collections</td><td></td></tr>
+          <tr><td><code>--src</code></td><td>Git URL of the collection; switches the collection to a git source</td><td></td></tr>
+          <tr><td><code>--scm</code></td><td>SCM type, only used together with <code>--src</code></td><td><code>git</code></td></tr>
+          <tr><td><code>--version, -v</code></td><td>Version, tag, branch or constraint. Empty: the latest Galaxy version / highest git tag is resolved and stored as <code>&gt;=&lt;version&gt;</code> (git falls back to <code>main</code> when no tag exists). Branch names and explicit constraints are stored verbatim.</td><td>(resolve)</td></tr>
+          <tr><td><code>--scenario, -s</code></td><td>Molecule scenario</td><td><code>default</code></td></tr>
+        </tbody>
+      </table></div>
+      <pre><code>diffusion role add-collection general --namespace community
+diffusion role add-collection foo --src https://github.com/org/ansible-collection-foo.git --version main</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      <p>Git collections are written to <code>requirements.yml</code> in the ansible-galaxy git form (<code>name: &lt;git url&gt;</code>, <code>type: git</code>, <code>version: &lt;ref&gt;</code>) and are never written to <code>meta/main.yml</code>, which only accepts <code>namespace.name</code>.</p>
     </div>
 
     <!-- CMD: DEPS -->
@@ -542,9 +571,10 @@ script:
         <thead><tr><th>Command</th><th>Description</th></tr></thead>
         <tbody>
           <tr><td><code>diffusion deps init</code></td><td>Add <code>[dependencies]</code> section to <code>diffusion.toml</code></td></tr>
-          <tr><td><code>diffusion deps lock</code></td><td>Resolve versions from PyPI/Galaxy and write <code>diffusion.lock</code></td></tr>
+          <tr><td><code>diffusion deps lock</code></td><td>Resolve versions from PyPI/Galaxy/git and write <code>diffusion.lock</code> (including <a href="#deps-guide" style="color:var(--accent)">transitive dependencies</a>)</td></tr>
+          <tr><td><code>diffusion deps lock --no-transitive</code></td><td>Lock direct dependencies only — skip nested dependencies of git-sourced roles and collections</td></tr>
           <tr><td><code>diffusion deps check</code></td><td>Verify lock file is up-to-date (exits 1 if not  ideal for CI)</td></tr>
-          <tr><td><code>diffusion deps resolve</code></td><td>Pretty-print all resolved versions from lock file</td></tr>
+          <tr><td><code>diffusion deps resolve</code></td><td>Pretty-print all resolved versions from lock file — git collections as <code>&lt;name&gt; (git: &lt;url&gt;)</code>, transitive entries suffixed <code>(via &lt;parent&gt;)</code></td></tr>
           <tr><td><code>diffusion deps sync</code></td><td>Write locked versions back to <code>requirements.yml</code> / <code>meta.yml</code></td></tr>
         </tbody>
       </table></div>
@@ -657,6 +687,7 @@ diffusion deploy --playbook site.yml --role-source scm=galaxy,version=&gt;=6.0.0
         <li>Run <code>ansible-playbook</code> inside the container</li>
         <li>Write remote state to <code>~/.diffusion/state</code> on each host</li>
       </ol>
+      <div class="note">Merged lock entries (collections, roles, tools) are emitted in sorted order, so the merged lock — and therefore <code>run_id</code> — is stable across runs. Role-source URLs, refs, Galaxy names and versions that start with <code>-</code> are rejected before <code>git</code> / <code>ansible-galaxy</code> is invoked (argument-injection guard).</div>
 
       <h3>Auto-generated playbook</h3>
       <p>Roles are grouped by <code>apply_to</code> pattern into separate plays. Each play has <code>gather_facts: true</code>.</p>
@@ -776,6 +807,99 @@ my_variable: "default_value"
       <p>If the markers already exist, content between them is replaced. If no markers exist, the section is appended to the end of README.md.</p>
     </div>
 
+    <!-- CMD: PATCH -->
+    <div id="cmd-patch" class="doc-section reveal">
+      <h2>🩹 diffusion patch</h2>
+      <p>Inspect and patch <strong>external</strong> Ansible roles per scenario — without forking them. Patch bundles live in <code>scenarios/&lt;scenario&gt;/patch.yml</code>; overlay sources live in <code>scenarios/&lt;scenario&gt;/patch/files/</code> and <code>scenarios/&lt;scenario&gt;/patch/templates/</code>. Patching is ephemeral and never touches the host: it happens inside the running molecule container.</p>
+
+      <h3>Subcommands</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Command</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>diffusion patch analyze &lt;role&gt;</code></td><td>Print the task/branch tree of an installed role with dotted leaf IDs. Flags: <code>--format tree|yaml</code>, <code>--tag</code> (highlight), <code>--no-color</code></td></tr>
+          <tr><td><code>diffusion patch list</code></td><td>List the scenario's bundles and summarise each task action</td></tr>
+          <tr><td><code>diffusion patch check</code></td><td>Validate bundles (role in <code>diffusion.toml</code>, task IDs, overlays) and resolve every task ID to a leaf of the installed role; exits 1 on failure</td></tr>
+          <tr><td><code>diffusion patch diff</code></td><td>Dry-run inside the running molecule container — report changes, write nothing</td></tr>
+          <tr><td><code>diffusion patch apply</code></td><td>Apply bundles inside the running molecule container (bind-mount overlay)</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Flags</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Flag</th><th>Applies to</th><th>Description</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td><code>--scenario, -s</code></td><td>all</td><td>Molecule scenario to operate on</td><td><code>default</code></td></tr>
+          <tr><td><code>--role, -r</code></td><td>diff, apply</td><td>Role under test (container <code>molecule-&lt;role&gt;</code>)</td><td>first running <code>molecule-*</code> container</td></tr>
+          <tr><td><code>--bundle</code></td><td>diff, apply</td><td>Only process this bundle name</td><td>all bundles</td></tr>
+          <tr><td><code>--dry-run</code></td><td>apply</td><td>Report changes without writing (same as <code>diff</code>)</td><td><code>false</code></td></tr>
+          <tr><td><code>--force</code></td><td>apply</td><td>Apply despite analysis drift (task line/name changed since analyze)</td><td><code>false</code></td></tr>
+          <tr><td><code>--format</code></td><td>analyze</td><td>Output format: <code>tree</code> | <code>yaml</code></td><td><code>tree</code></td></tr>
+          <tr><td><code>--tag</code></td><td>analyze</td><td>Highlight tasks with these tags (repeatable or comma-separated)</td><td></td></tr>
+          <tr><td><code>--no-color</code></td><td>analyze</td><td>Disable ANSI colors</td><td><code>false</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Workflow</h3>
+      <pre><code>diffusion molecule --converge                      <span style="color:var(--muted)"># install roles into the container</span>
+diffusion patch analyze geerlingguy.docker         <span style="color:var(--muted)"># find leaf task IDs</span>
+<span style="color:var(--muted)"># … write scenarios/default/patch.yml …</span>
+diffusion patch check                              <span style="color:var(--muted)"># validate against the installed role</span>
+diffusion patch diff -r myrole                     <span style="color:var(--muted)"># dry-run inside molecule-myrole</span>
+diffusion molecule --converge                      <span style="color:var(--muted)"># patches are applied automatically</span></code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+
+      <h3>Task IDs</h3>
+      <p><code>analyze</code> numbers every executable task (a <strong>leaf</strong>): top-level tasks of <code>tasks/main.yml</code> are <code>1</code>, <code>2</code>, …; tasks included from branch <code>1</code> are <code>1.1</code>, <code>1.2</code>; <code>block</code>/<code>rescue</code>/<code>always</code> children of task <code>2</code> are <code>2.1</code>, <code>2.2</code>; handlers use an <code>h</code> prefix (<code>h1</code>, <code>h1.2</code>). Branches (<code>include_tasks</code>, <code>import_tasks</code>, <code>include_role</code>, <code>import_role</code>, <code>block</code>) are visual-only and cannot be patched. Includes with dynamic, missing, cyclic or out-of-role targets, and all <code>include_role</code>/<code>import_role</code>, are shown as opaque.</p>
+      <div class="note warn">Task IDs are positional. After upgrading an external role, re-run <code>diffusion patch analyze</code> and <code>diffusion patch check</code> — IDs may have shifted.</div>
+
+      <h3>patch.yml</h3>
+      <pre><code>Bundles:                                   <span style="color:var(--muted)"># top-level key is case-sensitive</span>
+  - patch_bundle_name: docker-hardening
+    role_name: geerlingguy.docker          <span style="color:var(--muted)"># must be declared in diffusion.toml [dependencies]</span>
+    scenario: default                      <span style="color:var(--muted)"># keep equal to the patch.yml directory</span>
+    tasks_to_patch:
+      - task_id: "1.3"
+        new_conditions:
+          - condition: when                <span style="color:var(--muted)"># when | changed_when | failed_when</span>
+            body: ansible_os_family == 'Debian'
+        new_become_user:
+          become: true
+      - task_id: "2.1"
+        new_template_src: daemon.json.j2   <span style="color:var(--muted)"># scenarios/default/patch/templates/daemon.json.j2</span>
+      - task_id: h1
+        new_module_setup:
+          - key: state
+            value: restarted</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Task key</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td><code>task_id</code></td><td>Required. Dotted leaf ID (<code>1</code>, <code>1.3.1</code>, <code>h1</code>) — positive integers, no leading zeros, max depth 32</td></tr>
+          <tr><td><code>new_module</code></td><td>Rename the task's module</td></tr>
+          <tr><td><code>new_module_setup</code></td><td>List of <code>key</code>/<code>value</code>. With <code>new_module</code>: replaces the module args. Without: merges into existing args (must be a mapping)</td></tr>
+          <tr><td><code>new_conditions</code></td><td>List of <code>condition</code> (<code>when</code>, <code>changed_when</code>, <code>failed_when</code>) + <code>body</code>. A literal <code>true</code>/<code>false</code> body emits a "possible design problem" warning</td></tr>
+          <tr><td><code>new_become_user</code></td><td><code>user</code> and/or <code>become: true</code></td></tr>
+          <tr><td><code>new_environment</code></td><td>List of <code>key</code>/<code>value</code>; replaces the task's <code>environment</code></td></tr>
+          <tr><td><code>new_file_src</code></td><td>Copy <code>patch/files/&lt;value&gt;</code> over the leaf's <code>files/&lt;src&gt;</code> (file modules only)</td></tr>
+          <tr><td><code>new_template_src</code></td><td>Copy <code>patch/templates/&lt;value&gt;</code> over the leaf's <code>templates/&lt;src&gt;</code> (<code>template</code> tasks only)</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>Every task needs at least one action; <code>new_file_src</code> and <code>new_template_src</code> are mutually exclusive and cannot be combined with <code>new_module</code> / <code>new_module_setup</code></li>
+        <li>Overlay paths must be relative, must exist and must not escape the patch folder; the leaf's src must be static and relative</li>
+        <li>Not supported in v1: <code>new_block</code> (validates, but apply fails) and <code>action:</code> / <code>local_action:</code> tasks</li>
+        <li><code>patch.yml</code> is fully validated on load — any invalid bundle fails <code>diffusion molecule</code></li>
+      </ul>
+
+      <h3>How it works</h3>
+      <ol>
+        <li>Stale overlays from an interrupted run are unmounted (self-heal)</li>
+        <li>The role is copied inside the container to <code>/var/lib/diffusion-patch/&lt;scenario&gt;/work/&lt;role&gt;</code>; a pristine copy is kept in <code>…/backup/&lt;role&gt;</code></li>
+        <li>The work copy is streamed to a throwaway host temp dir, analysed and patched (4-space YAML, original <code>---</code> marker preserved), then streamed back</li>
+        <li>The work copy is bind-mounted over <code>/root/.ansible/roles/&lt;role&gt;</code> — the role cache on the host is never written</li>
+        <li>During <code>diffusion molecule</code> the overlay is removed once converge/verify returns; after <code>diffusion patch apply</code> it stays until the container is destroyed, <code>--destroy</code>/<code>--wipe</code> runs, or the next run replaces it</li>
+      </ol>
+      <div class="note">The patch tree lives under <code>/var/lib</code> rather than <code>/tmp</code> because the molecule image mounts <code>/tmp</code> as tmpfs, which <code>docker cp</code> cannot read. The MCP tools <code>check_patch_config</code> and <code>inspect_patch_overlays</code> help debug bundles and live overlays.</div>
+    </div>
+
     <!-- ══════════════════════════════════════════════ -->
     <!-- MCP SERVER                                     -->
     <!-- ══════════════════════════════════════════════ -->
@@ -797,7 +921,7 @@ my_variable: "default_value"
         <div class="card">
           <div class="card-icon">🔍</div>
           <h4>Troubleshooting</h4>
-          <p>9-point diagnostic: DinD, Python, Ansible, Molecule, uv venv, volumes, disk, and scenarios.</p>
+          <p>10-point diagnostic: DinD, Python, Ansible, Molecule, uv venv, volumes, disk, scenarios and patch overlays — plus a searchable knowledge base of known failure modes.</p>
         </div>
         <div class="card">
           <div class="card-icon">📋</div>
@@ -828,10 +952,13 @@ ghcr.io/polar-team/diffusion-mcp-server:{version}       <span style="color:var(-
           <tr><td><code>check_molecule_yml</code></td><td>Validate molecule scenario file for common issues</td></tr>
           <tr><td><code>check_verify_yml</code></td><td>Validate verify.yml structure, tags, and file references</td></tr>
           <tr><td><code>check_docker_environment</code></td><td>Validate Docker daemon, version, DinD readiness, disk</td></tr>
-          <tr><td><code>troubleshoot_molecule_container</code></td><td>Run comprehensive 9-point diagnostics</td></tr>
+          <tr><td><code>troubleshoot_molecule_container</code></td><td>Run comprehensive 10-point diagnostics (incl. leftover patch overlays)</td></tr>
           <tr><td><code>get_requirements_yml</code></td><td>Read Ansible <code>requirements.yml</code> for a scenario</td></tr>
-          <tr><td><code>list_molecule_scenarios</code></td><td>List all scenarios with their key files</td></tr>
-          <tr><td><code>run_diffusion_command</code></td><td>Run safe read-only diffusion CLI commands</td></tr>
+          <tr><td><code>list_molecule_scenarios</code></td><td>List all scenarios with their key files, <code>patch.yml</code> and patch overlay sources</td></tr>
+          <tr><td><code>run_diffusion_command</code></td><td>Run safe read-only diffusion CLI commands (incl. <code>patch analyze</code>, <code>patch list</code>, <code>patch check</code>, <code>patch diff</code>)</td></tr>
+          <tr><td><code>check_patch_config</code></td><td>Statically validate <code>scenarios/&lt;scenario&gt;/patch.yml</code> like diffusion does on load, plus pitfalls (key casing, ignored keys, <code>new_block</code>, unused overlays)</td></tr>
+          <tr><td><code>inspect_patch_overlays</code></td><td>Show active patch bind mounts, work/backup trees and changed files inside a molecule container</td></tr>
+          <tr><td><code>check_transitive_dependencies</code></td><td>Analyse transitive (<code>required_by</code>) entries, git collections, missing <code>SourceURL</code>, self-identity and option-like URLs/refs</td></tr>
           <tr><td><code>docker_in_docker_in_molecule</code></td><td>Execute commands inside a scenario instance running in the DinD daemon</td></tr>
           <tr><td><code>check_lock_file_scenarios</code></td><td>Per-scenario analysis of <code>diffusion.lock</code> vs <code>scenarios/</code> vs <code>diffusion.toml</code>; predicts whether a <code>--scenario</code> value is accepted</td></tr>
           <tr><td><code>get_diffusion_cli_reference</code></td><td>Structured CLI command reference with flags and examples</td></tr>
@@ -840,7 +967,7 @@ ghcr.io/polar-team/diffusion-mcp-server:{version}       <span style="color:var(-
           <tr><td><code>troubleshoot_deploy</code></td><td>Diagnose deploy prerequisites: binary, Docker, image, cache dir, SSH, <code>diffusion.toml</code></td></tr>
           <tr><td><code>check_deploy_cache</code></td><td>Inspect <code>~/.diffusion/deploy-cache/</code> entries by RunID with sizes</td></tr>
           <tr><td><code>troubleshoot_ssh_keys</code></td><td>Check PEM format, container <code>/tmp/ssh-keys</code>, and validate intended <code>--ssh-key</code> names (routing, env var, path)</td></tr>
-          <tr><td><code>get_troubleshooting_guide</code></td><td>Searchable knowledge base of known failure modes (deps scoping, SSH key validation, Terraform PEM, GitHub Actions)</td></tr>
+          <tr><td><code>get_troubleshooting_guide</code></td><td>Searchable knowledge base of known failure modes (deps scoping, transitive deps, git collections, patch bundles/overlays, SSH key validation, argument-injection guards, CI clone retries, Terraform PEM, GitHub Actions)</td></tr>
           <tr><td><code>get_server_version</code></td><td>Return MCP server version and Python environment info</td></tr>
         </tbody>
       </table></div>
@@ -1014,8 +1141,9 @@ enabled = false</code><button class="copy-btn" onclick="copyCode(this)">copy</bu
         <div class="card"><h4>Dependencies</h4><ul>
           <li>Version constraints for ansible, molecule, ansible_lint, yamllint</li>
           <li>Python <code>min</code> / <code>max</code> / <code>pinned</code> (allowed: 3.11, 3.12, 3.13)</li>
-          <li>Collections: <code>[[dependencies.collections]]</code></li>
+          <li>Collections: <code>[[dependencies.collections]]</code> (git: <code>Source = "git"</code> + <code>SourceURL</code>)</li>
           <li>Roles: <code>[[dependencies.roles]]</code></li>
+          <li><code>transitive = false</code> disables nested dependency resolution (default <code>true</code>)</li>
         </ul></div>
         <div class="card"><h4>Vault</h4><ul>
           <li><code>enabled = true</code> to activate</li>
@@ -1084,7 +1212,11 @@ molecule_container_tag = "latest-amd64"</code><button class="copy-btn" onclick="
 │       ├── converge.yml      <span style="color:var(--muted)"># convergence playbook</span>
 │       ├── verify.yml        <span style="color:var(--muted)"># verification tests</span>
 │       ├── molecule.yml      <span style="color:var(--muted)"># molecule configuration</span>
-│       └── requirements.yml  <span style="color:var(--muted)"># role &amp; collection dependencies</span>
+│       ├── requirements.yml  <span style="color:var(--muted)"># role &amp; collection dependencies</span>
+│       ├── patch.yml         <span style="color:var(--muted)"># optional: patch bundles for external roles</span>
+│       └── patch/
+│           ├── files/        <span style="color:var(--muted)"># new_file_src overlay sources</span>
+│           └── templates/    <span style="color:var(--muted)"># new_template_src overlay sources</span>
 ├── diffusion.toml            <span style="color:var(--muted)"># diffusion configuration</span>
 ├── diffusion.lock            <span style="color:var(--muted)"># locked dependency versions</span>
 └── .gitignore</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
@@ -1151,8 +1283,9 @@ max = "3.13"
 pinned = "3.13"
 
 [[dependencies.collections]]
-name = "community.general"
-version = "&gt;=7.4.0"</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+Name = "default.general"        <span style="color:var(--muted)"># &lt;scenario&gt;.&lt;name&gt;</span>
+Namespace = "community"
+Version = "&gt;=7.4.0"</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
 
       <h3>Lock file structure</h3>
       <pre><code>version: "1.0"
@@ -1169,25 +1302,78 @@ tools:
     version: "&gt;=13.0.0"
     resolved_version: "13.1.0"
     type: tool
-    source: pypi
+    scm: pypi
 
 collections:
-  - name: community.general
+  - name: default.general
+    namespace: community
     version: "&gt;=7.4.0"
     resolved_version: "7.5.0"
     type: collection
-    source: galaxy
+    scm: galaxy
     python_deps:
       docker: "7.1.0"
       requests: "2.32.3"
+  - name: default.foo                     <span style="color:var(--muted)"># git-sourced collection</span>
+    version: main
+    resolved_version: main
+    type: collection
+    scm: git
+    src: https://github.com/org/ansible-collection-foo.git
+  - name: default.bar                     <span style="color:var(--muted)"># pulled in transitively</span>
+    namespace: acme
+    version: "&gt;=1.0.0"
+    resolved_version: "1.2.0"
+    type: collection
+    scm: galaxy
+    required_by: github.com/org/ansible-collection-foo
 
 roles:
-  - name: geerlingguy.docker
+  - name: default.docker
+    namespace: geerlingguy
     version: "&gt;=7.0.0"
     resolved_version: "7.4.1"
     type: role
-    source: galaxy</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
-      <p>The hash is computed from all dependency names, versions, and Python config. <code>diffusion deps check</code> recomputes and compares it.</p>
+    scm: galaxy</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      <p>Entry names are prefixed with the scenario they belong to (<code>&lt;scenario&gt;.&lt;name&gt;</code>). The hash is computed from all dependency names, versions, and Python config. <code>diffusion deps check</code> recomputes and compares it. Projects with only Galaxy collections keep the same hash as before git collections were introduced.</p>
+
+      <h3>Git-sourced collections</h3>
+      <p>Collections can be installed from a git repository instead of Galaxy (<code>diffusion role add-collection &lt;name&gt; --src &lt;url&gt;</code>). They are stored as follows:</p>
+      <pre><code><span style="color:var(--muted)"># diffusion.toml</span>
+[[dependencies.collections]]
+Name = "default.foo"
+Source = "git"
+SourceURL = "https://github.com/org/ansible-collection-foo.git"
+Version = "main"
+
+<span style="color:var(--muted)"># scenarios/default/requirements.yml (after deps sync)</span>
+collections:
+  - name: https://github.com/org/ansible-collection-foo.git
+    type: git
+    version: main</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      <ul>
+        <li><code>deps init</code> recognises git collections in an existing <code>requirements.yml</code> (<code>type: git</code> or a URL-shaped name) and derives the key from the repository basename, stripping <code>ansible-collection-</code> / <code>ansible_collection_</code> prefixes and turning dots into <code>_</code></li>
+        <li><code>deps check</code> compares git collections by repository URL; <code>meta/main.yml</code> never contains them</li>
+        <li>A non-Galaxy collection without <code>SourceURL</code> makes <code>deps lock</code> fail: <code>missing SourceURL for non-Galaxy source "git"</code></li>
+      </ul>
+
+      <h3>Transitive dependencies</h3>
+      <p>When a git-sourced role or collection's repository itself contains a <code>diffusion.lock</code> (or only a <code>diffusion.toml</code>), <code>deps lock</code> pulls that repository's <strong>default-scenario</strong> collections and roles into your lock file, re-prefixed with the scenario that required them.</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Behaviour</th><th>Details</th></tr></thead>
+        <tbody>
+          <tr><td>Depth</td><td>Recurses through nested git dependencies up to depth 10 (<code>max transitive depth 10 reached …</code> warning beyond)</td></tr>
+          <tr><td>Versions</td><td>Constraints from all sources are intersected and re-resolved; remotes with only a <code>diffusion.toml</code> are resolved after the walk</td></tr>
+          <tr><td>Origin</td><td>Pulled-in entries carry <code>required_by</code>; <code>deps resolve</code> / <code>deps sync</code> print <code>(via &lt;id&gt;)</code> (console only)</td></tr>
+          <tr><td>Duplicates &amp; cycles</td><td>Skipped with a warning, including dependencies that point back at your own repo (identified by git <code>origin</code>, <code>meta/main.yml</code> <code>role_name</code> / <code>namespace.role_name</code>, and directory name). URLs are compared normalised.</td></tr>
+          <tr><td>Failures</td><td>An unreachable dependency is a warning, not an error. Private repos reuse <code>[[artifact_sources]]</code> credentials.</td></tr>
+          <tr><td>Runtime pins</td><td>Tools and the Python version always come from your own lock — a remote never narrows the container runtime</td></tr>
+          <tr><td>Disable</td><td><code>diffusion deps lock --no-transitive</code> per run, or <code>transitive = false</code> under <code>[dependencies]</code></td></tr>
+        </tbody>
+      </table></div>
+      <pre><code>[dependencies]
+transitive = false   <span style="color:var(--muted)"># default: true</span></code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+      <div class="note warn">URLs, refs and versions that start with <code>-</code> are rejected (<code>refusing to use "…": … looks like a command line option</code>) and <code>git</code> is always called with <code>--</code> before positional arguments — transitive URLs come from third-party lock files.</div>
 
       <h3>Version compatibility</h3>
       <p>Diffusion automatically validates tool compatibility with Python versions. If you specify incompatible versions, it warns and adjusts.</p>
@@ -1210,7 +1396,7 @@ roles:
 
       <h3>Workflow</h3>
       <pre><code>diffusion deps init       <span style="color:var(--muted)"># add [dependencies] to diffusion.toml</span>
-diffusion deps lock       <span style="color:var(--muted)"># resolve from PyPI/Galaxy, write diffusion.lock</span>
+diffusion deps lock       <span style="color:var(--muted)"># resolve from PyPI/Galaxy/git (+ transitive), write diffusion.lock</span>
 diffusion deps resolve    <span style="color:var(--muted)"># pretty-print resolved versions</span>
 diffusion deps check      <span style="color:var(--muted)"># verify lock is up-to-date (CI gate)</span>
 diffusion deps sync       <span style="color:var(--muted)"># write locked versions back to requirements.yml</span></code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
@@ -1596,7 +1782,7 @@ dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd)</code><button cla
       </table></div>
 
       <h3>Adding a role with constraints</h3>
-      <pre><code>diffusion role add-role geerlingguy.docker \
+      <pre><code>diffusion role add-role docker --namespace geerlingguy \
   --src https://github.com/geerlingguy/ansible-role-docker.git \
   --version "&gt;=6.0.0" \
   --scenario default</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
@@ -1608,16 +1794,20 @@ dockerExecInteractiveHide(RoleFlag, "/bin/sh", "-c", chownCmd)</code><button cla
       <h3>File structure</h3>
       <pre><code><span style="color:var(--muted)"># diffusion.toml — stores constraints</span>
 [[dependencies.roles]]
-name = "default.geerlingguy.docker"
-src = "https://github.com/geerlingguy/ansible-role-docker.git"
-scm = "git"
-version = "&gt;=6.0.0"
+Name = "default.docker"
+Namespace = "geerlingguy"
+Src = "https://github.com/geerlingguy/ansible-role-docker.git"
+Scm = "git"
+Version = "&gt;=6.0.0"
 
 <span style="color:var(--muted)"># diffusion.lock — stores both</span>
 roles:
-  - name: geerlingguy.docker
+  - name: default.docker
+    namespace: geerlingguy
     version: "&gt;=6.0.0"
     resolved_version: "6.1.0"
+    scm: git
+    src: https://github.com/geerlingguy/ansible-role-docker.git
 
 <span style="color:var(--muted)"># requirements.yml — stores resolved</span>
 roles:
