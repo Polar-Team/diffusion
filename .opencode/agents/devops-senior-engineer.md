@@ -1,7 +1,7 @@
 ---
 description: Senior DevOps engineer specialized in CI/CD pipelines, GitHub Actions, cross-platform builds, Chocolatey packaging, and infrastructure automation. Works inside dev-new-features/.
 mode: subagent
-model: github-copilot/claude-sonnet-5
+model: Yandex/deepseek-v4.1-flash
 permission:
   edit:
     "*": deny

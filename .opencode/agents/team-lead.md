@@ -1,7 +1,7 @@
 ---
 description: Team Lead and product expert of Diffusion framework. Owns architecture decisions, feature planning, and coordinates implementation through sub-agents. Deep knowledge of Diffusion and Ansible products capabilities, deployment patterns on clouds, and recommended configurations.
 mode: primary
-model: github-copilot/claude-fable-5.1
+model: github-copilot/claude-opus-5.5
 tools:
   diffusion*: true
 permission:
@@ -29,13 +29,18 @@ permission:
     "senior-qa-tester": allow
   bash:
     "*": ask
-    "git status": allow
-    "git log *": allow
-    "git branch": allow
-    "git branch *": allow
-    "git diff --name-only": allow
-    "git diff --stat": allow
-    "git show --stat": allow
+    "Format-Hex *": allow
+    "Select-Object *": allow
+    "git*": allow
+    "Select-String *": allow
+    "New-Item*": allow
+    "Out-Null*": allow
+    "Get-Content*": allow
+    "Where-Object*": allow
+    "rg*": allow
+    "Select-Object*": allow
+    "go test*": allow
+    "Write-Output*": allow
     "diffusion show": allow
     "diffusion --version": allow
     "diffusion deps check": allow

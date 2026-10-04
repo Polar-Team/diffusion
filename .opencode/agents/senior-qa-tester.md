@@ -1,7 +1,7 @@
 ---
 description: Senior QA tester specialized in Go testing, e2e testing with Vagrant, test strategy, and quality assurance. Works inside dev-new-features/.
 mode: subagent
-model: github-copilot/claude-sonnet-5
+model: Yandex/deepseek-v4.1-flash
 permission:
   edit:
     "*": deny

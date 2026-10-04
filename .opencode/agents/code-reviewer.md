@@ -1,13 +1,24 @@
 ---
 description: Senior code reviewer specialized in Go code quality, security analysis, best practices enforcement. Reviews code inside dev-new-features/.
 mode: subagent
-model: github-copilot/claude-sonnet-5
+model: Yandex/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   edit: deny
   webfetch: deny
   bash:
     "*": ask
+    "sed*": allow
+    "grep*": allow
+    "echo*": allow
+    "head*": allow
+    "powershell *": allow
+    "Out-String *": allow
+    "Get-ChildItem*": allow
+    "Write-Output *": allow
+    "Select-String *": allow
+    "python3 *": allow
+    "go build*": allow
     "go vet ./...": allow
     "go test ./...": allow
     "go test -v ./...": allow

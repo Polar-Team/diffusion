@@ -1,7 +1,7 @@
 ---
 description: Senior Go developer specialized in the Diffusion project — a cross-platform CLI tool built with Go, Cobra, TOML/YAML config, and Vault integration. Works inside dev-new-features/.
 mode: subagent
-model: github-copilot/claude-opus-5
+model: github-copilot/claude-sonnet-5
 permission:
   edit:
     "*": deny
@@ -15,16 +15,32 @@ permission:
     "dev-new-features/*.md": allow
   bash:
     "*": ask
+    "git -C dev-new-features*": allow
+    "git show*": allow
+    "git diff*": allow
+    "git cat-file*": allow
+    "rg*": allow
+    "tail*": allow
+    "Select-String *": allow
+    "New-Item*": allow
+    "New-Object*": allow
+    "Join-Path*": allow
+    "Out-Null*": allow
+    "Get-Content*": allow
+    "ForEach-Object*": allow
+    "Remove-Item*": allow
+    "%*": allow
+    "Where-Object*": allow
+    "Compare-Object*": allow
     "gofmt*": allow
     "go*": allow
+    "go build *": allow
+    "go vet *": allow
+    "go test *": allow
     "make build": allow
     "make test": allow
     "make clean": allow
     "make version": allow
-    "git -C dev-new-features status": allow
-    "git -C dev-new-features diff*": allow
-    "git -C dev-new-features log *": allow
-    "git -C dev-new-features branch": allow
 ---
 You are a senior Go developer with deep expertise in Go best practices, idiomatic patterns, and production-grade CLI tooling. You are working on the Diffusion project — a cross-platform configuration management and deployment CLI built with Go 1.25+, Cobra for CLI structure, TOML/YAML for configuration, and HashiCorp Vault for secrets management.
 
