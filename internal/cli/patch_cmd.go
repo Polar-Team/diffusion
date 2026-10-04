@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"diffusion/internal/config"
@@ -19,8 +20,10 @@ func NewPatchCmd(_ *CLI) *cobra.Command {
 		Long: `Inspect external role task trees and apply patch bundles.
 
 Patch bundles live in scenarios/<scenario>/patch.yml with overlay sources
-under scenarios/<scenario>/patch/files|templates/. Patches apply to staged
-or installed role copies — the source of truth is never mutated.`,
+under scenarios/<scenario>/patch/files|templates/. Patching happens inside
+the running molecule container: the role is copied to a container-local
+work dir and bind-mounted over the original roles path, so neither the
+installed source of truth nor the host cache is ever mutated.`,
 	}
 
 	patchCmd.AddCommand(newPatchAnalyzeCmd())
@@ -75,8 +78,8 @@ func newPatchAnalyzeCmd() *cobra.Command {
 dotted leaf IDs (branches are visual-only, leaves are patchable).
 
 The role is resolved on this system (diffusion cache, molecule working
-copies, Galaxy roles path). When missing, it is installed into a running
-molecule container first and analyzed from a temporary copy.
+copies, Galaxy roles path). When missing, a read-only copy is pulled out
+of the running molecule container and analyzed from a temporary copy.
 
 EXAMPLES
   diffusion patch analyze geerlingguy.docker
@@ -247,106 +250,114 @@ against the installed role analysis. Exits 1 on the first failure.`,
 	return cmd
 }
 
-// runPatchBundles analyzes each selected bundle's role and applies it.
-// dryRun only reports; otherwise the target role copy is patched in place
-// (a backup path is printed for revert).
-func runPatchBundles(scenario, bundleName, targetPath string, dryRun, force bool, backupDir string) error {
-	cfg, err := loadPatchBundles(scenario)
+// runPatchBundles applies (or dry-runs) the selected bundles inside the
+// running molecule container. The role is copied out of the container,
+// patched on a throwaway temp dir and bind-mounted back over
+// /root/.ansible/roles/<role> — neither the host cache nor any other host
+// path is modified. With dryRun nothing is written back.
+func runPatchBundles(scenario, bundleName, role string, dryRun, force bool) error {
+	container, err := resolvePatchContainer(role)
 	if err != nil {
 		return err
 	}
-	if cfg == nil || len(cfg.Bundles) == 0 {
-		return fmt.Errorf("no patch bundles defined for scenario %s", scenario)
+	applied, err := patch.ApplyScenarioPatchesInContainer(container, scenario, patch.ContainerApplyOptions{
+		Bundle: bundleName, DryRun: dryRun, Force: force,
+	})
+	if err != nil {
+		return err
 	}
-	failed := false
-	for i := range cfg.Bundles {
-		b := &cfg.Bundles[i]
-		if bundleName != "" && b.PatchBundleName != bundleName {
-			continue
-		}
-		target := strings.TrimSpace(targetPath)
-		if target == "" {
-			target, err = patch.ResolveInstalledRolePath(b.RoleName, b.Scenario)
-			if err != nil {
-				fmt.Printf("\033[31mFAIL %s: %v\033[0m\n", b.PatchBundleName, err)
-				failed = true
-				continue
-			}
-		}
-		analysis, err := patch.AnalyzeRoleAtPath(target, scenario, b.RoleName)
-		if err != nil {
-			fmt.Printf("\033[31mFAIL %s: analyze %s: %v\033[0m\n", b.PatchBundleName, target, err)
-			failed = true
-			continue
-		}
-		res, err := patch.ApplyBundle(b, analysis, patch.ApplyOptions{
-			Scenario: scenario, RolePath: target,
-			DryRun: dryRun, Force: force, BackupDir: backupDir,
-		})
-		if err != nil {
-			fmt.Printf("\033[31mFAIL %s: %v\033[0m\n", b.PatchBundleName, err)
-			failed = true
-			continue
-		}
-		fmt.Print(res.Summary())
+	if len(applied) == 0 {
+		fmt.Printf("No patch bundles defined for scenario %s (%s)\n",
+			scenario, "scenarios/"+scenario+"/patch.yml")
+		return nil
 	}
-	if bundleName != "" && !failed {
-		found := false
-		for _, b := range cfg.Bundles {
-			if b.PatchBundleName == bundleName {
-				found = true
-				break
-			}
+	for _, ap := range applied {
+		if ap.Result != nil {
+			fmt.Print(ap.Result.Summary())
 		}
-		if !found {
-			return fmt.Errorf("bundle %q not found in scenario %s", bundleName, scenario)
+		if !dryRun {
+			fmt.Printf("  overlay: %s:%s -> %s\n", ap.Container, ap.WorkPath, ap.ContainerPath)
 		}
 	}
-	if failed {
-		return fmt.Errorf("patch %s failed for scenario %s", map[bool]string{true: "diff", false: "apply"}[dryRun], scenario)
+	return nil
+}
+
+// resolvePatchContainer maps --role to molecule-<role>, verifying the
+// container is actually running, and falls back to auto-detecting the
+// first running molecule container when --role is omitted.
+func resolvePatchContainer(role string) (string, error) {
+	r := strings.TrimSpace(role)
+	if r == "" {
+		return patch.FindMoleculeContainer()
+	}
+	container := patch.MoleculeContainerName(r)
+	if err := dockerContainerRunning(container); err != nil {
+		return "", fmt.Errorf("container %s is not running; run 'diffusion molecule -r %s --converge' first", container, r)
+	}
+	return container, nil
+}
+
+// dockerContainerRunning reports whether a container exists and is running.
+var dockerContainerRunning = func(container string) error {
+	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", container).Output()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(out)) != "true" {
+		return fmt.Errorf("container %s is not running", container)
 	}
 	return nil
 }
 
 func newPatchDiffCmd() *cobra.Command {
-	var scenario, bundle string
+	var scenario, bundle, role string
 
 	cmd := &cobra.Command{
 		Use:   "diff",
 		Short: "Dry-run apply: report what patching would change",
+		Long: `Copy the targeted roles out of the running molecule container and
+report what applying the bundles would change. Nothing is written back and
+no overlay is mounted.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPatchBundles(scenario, bundle, "", true, false, "")
+			return runPatchBundles(scenario, bundle, role, true, false)
 		},
 	}
 
 	cmd.Flags().StringVarP(&scenario, "scenario", "s", config.DefaultScenario, "Molecule scenario to operate on")
+	cmd.Flags().StringVarP(&role, "role", "r", "", "Role under test (container molecule-<role>; default: first running molecule container)")
 	cmd.Flags().StringVar(&bundle, "bundle", "", "Only process this bundle name (default: all)")
 
 	return cmd
 }
 
 func newPatchApplyCmd() *cobra.Command {
-	var scenario, bundle, targetPath, backupDir string
+	var scenario, bundle, role string
 	var dryRun, force bool
 
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Apply patch bundles to a role copy",
-		Long: `Apply patch bundles from scenarios/<scenario>/patch.yml.
+		Short: "Apply patch bundles inside the running molecule container",
+		Long: `Apply patch bundles from scenarios/<scenario>/patch.yml inside the
+running molecule-<role> container.
 
-The target defaults to the resolved installed role. Prefer staging a copy
-(diffusion molecule does this automatically) — manual applies print a
-backup path usable with revert semantics. Use --dry-run (or the diff
-subcommand) to preview.`,
+Each targeted role is copied to a patch work directory under the
+container's writable layer (<scenario>/work/<role>, a pristine copy kept
+under backup/), patched via a temporary host directory and bind-mounted
+over the original roles path, so Ansible picks up the patched content
+without any host file being modified.
+The overlay stays until the container is destroyed, 'diffusion molecule
+--destroy'/'--wipe' runs, or the next molecule run replaces it.
+
+Requires a converged container: run 'diffusion molecule --converge' first.
+Use --dry-run (or the diff subcommand) to preview.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPatchBundles(scenario, bundle, targetPath, dryRun, force, backupDir)
+			return runPatchBundles(scenario, bundle, role, dryRun, force)
 		},
 	}
 
 	cmd.Flags().StringVarP(&scenario, "scenario", "s", config.DefaultScenario, "Molecule scenario to operate on")
+	cmd.Flags().StringVarP(&role, "role", "r", "", "Role under test (container molecule-<role>; default: first running molecule container)")
 	cmd.Flags().StringVar(&bundle, "bundle", "", "Only process this bundle name (default: all)")
-	cmd.Flags().StringVar(&targetPath, "path", "", "Role directory to patch (default: resolved installed role)")
-	cmd.Flags().StringVar(&backupDir, "backup-dir", "", "Directory for pre-apply backups (default: temp dir)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report changes without writing")
 	cmd.Flags().BoolVar(&force, "force", false, "Apply despite analysis drift")
 

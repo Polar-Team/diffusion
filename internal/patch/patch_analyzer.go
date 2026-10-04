@@ -21,7 +21,6 @@ import (
 	"io"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -750,10 +749,9 @@ func analyzeRoleAtPath(rolePath, scenario, roleName string) (*RoleAnalysis, erro
 }
 
 // AnalyzeExternalRole analyzes the installed role roleName for scenario.
-// Path is the general installed location resolved on this system (Galaxy
-// roles path, diffusion cache, molecule working copies). When the role is
-// not installed anywhere, it is installed into a running molecule
-// container first and analyzed from a temporary copy.
+// Resolution order: host search (diffusion cache, molecule working copies,
+// Galaxy roles path), then a read-only copy-out of the role from a running
+// molecule container. Nothing is ever installed or downloaded.
 func AnalyzeExternalRole(scenario, roleName string) (*RoleAnalysis, error) {
 	if err := utils.ValidateCLIArgument("role", roleName); err != nil {
 		return nil, err
@@ -761,18 +759,17 @@ func AnalyzeExternalRole(scenario, roleName string) (*RoleAnalysis, error) {
 	if path, err := ResolveInstalledRolePath(roleName, scenario); err == nil {
 		return analyzeRoleAtPath(path, scenario, roleName)
 	}
-	path, cleanup, err := ensureRoleViaContainer(roleName)
+	container, err := FindMoleculeContainer()
+	if err != nil {
+		return nil, fmt.Errorf("role %q is not installed on this host: %w", roleName, err)
+	}
+	path, cleanup, err := CopyRoleFromContainer(container, roleName)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 	return analyzeRoleAtPath(path, scenario, roleName)
 }
-
-// dockerRoleDownloader downloads scenario roles into patchDir via a
-// separately mounted container. It is a variable so tests can stub it
-// without requiring a real docker daemon.
-var dockerRoleDownloader = utils.DockerRunRoleDownloadingContainer
 
 // resolveRoleCandidates lists installed-role search paths in priority
 // order. Empty base dirs are skipped. Pure function for testability.
@@ -838,12 +835,12 @@ func findInstalledRole(candidates, bases []string, roleName string) (string, []s
 
 // ResolveInstalledRolePath returns the installed directory of roleName.
 //
-// It first searches already-installed locations (diffusion cache, cwd
-// molecule working copies, user Galaxy roles path) without side effects.
-// Only when nothing is found locally does it download scenario roles into
-// a fresh temp dir via a separately mounted container and search there.
-// The temp dir persists on success because callers patch/analyze from it;
-// it is removed when the download yields nothing usable.
+// It is a pure search over already-installed locations (diffusion cache,
+// cwd molecule working copies, user Galaxy roles path) with no side
+// effects: no download, no container, no installation. Patching during a
+// molecule run does not use it — see container.go, which patches inside
+// the running molecule container. It stays available for inspection
+// commands operating on a local copy.
 func ResolveInstalledRolePath(roleName, scenario string) (string, error) {
 	if err := utils.ValidateCLIArgument("role", roleName); err != nil {
 		return "", err
@@ -855,59 +852,21 @@ func ResolveInstalledRolePath(roleName, scenario string) (string, error) {
 		return "", err
 	}
 
-	var cacheDir, cwd, home string
+	var cacheDir string
 	if cfg, err := config.LoadConfig(); err == nil && cfg != nil &&
 		cfg.CacheConfig != nil && cfg.CacheConfig.Enabled && cfg.CacheConfig.CacheID != "" {
 		cacheDir, _ = cache.GetCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
 	}
-	cwd, _ = os.Getwd()
-	home, _ = os.UserHomeDir()
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
 
 	candidates := resolveRoleCandidates(cacheDir, cwd, home, roleName)
 	bases := shortRoleBases(cacheDir, cwd, home)
-	if hit, _ := findInstalledRole(candidates, bases, roleName); hit != "" {
-		return hit, nil
+	hit, tried := findInstalledRole(candidates, bases, roleName)
+	if hit == "" {
+		return "", fmt.Errorf("role %q is not installed on this host (tried: %s)", roleName, strings.Join(tried, ", "))
 	}
-
-	// Nothing installed locally — fall back to downloading scenario roles
-	// into a temp dir. Skip docker entirely when there is no manifest to
-	// install from so unit tests and offline flows fail fast with the
-	// local tried list instead of a docker error.
-	scenario = strings.TrimSpace(scenario)
-	if scenario == "" {
-		scenario = config.DefaultScenario
-	}
-	if strings.Contains(scenario, "/") || strings.Contains(scenario, "\\") || strings.Contains(scenario, "..") {
-		return "", fmt.Errorf("invalid scenario %q: must be a plain scenario name", scenario)
-	}
-	reqFile := filepath.Join(cwd, config.ScenariosDir, scenario, config.RequirementsFileName)
-	if _, err := os.Stat(reqFile); err != nil {
-		tried := append([]string{}, candidates...)
-		return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(tried, ", "))
-	}
-
-	tmpHome, err := os.MkdirTemp("", "diffusion-patch-"+strings.ReplaceAll(roleName, ".", "-"))
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp dir for role resolution: %v", err)
-	}
-	if err := dockerRoleDownloader(utils.GenerateSessionID(), tmpHome, scenario); err != nil {
-		_ = os.RemoveAll(tmpHome)
-		return "", fmt.Errorf("failed to run role-downloading container: %v", err)
-	}
-	// Temp-only search: tmpHome/.ansible/roles/<variants>, matching the
-	// downloader container mount in utils.DockerRunRoleDownloadingContainer.
-	tmpCandidates := []string{}
-	for _, v := range roleDirVariants(roleName) {
-		tmpCandidates = append(tmpCandidates, filepath.Join(tmpHome, ".ansible", "roles", v))
-	}
-	tmpBases := []string{filepath.Join(tmpHome, ".ansible", "roles")}
-	if hit, triedTmp := findInstalledRole(tmpCandidates, tmpBases, roleName); hit != "" {
-		return hit, nil
-	} else {
-		_ = os.RemoveAll(tmpHome)
-		allTried := append(append([]string{}, candidates...), triedTmp...)
-		return "", fmt.Errorf("role %q is not installed (tried: %s)", roleName, strings.Join(allTried, ", "))
-	}
+	return hit, nil
 }
 
 // matchShortRoleDir finds an installed dir for a short role name inside
@@ -932,53 +891,6 @@ func matchShortRoleDir(baseDir, short string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// ensureRoleViaContainer installs roleName into a running molecule
-// container and copies it to a temp dir for host-side analysis. It
-// returns the temp path and a cleanup func removing it.
-func ensureRoleViaContainer(roleName string) (string, func(), error) {
-	noop := func() {}
-	out, err := exec.Command("docker", "ps", "--format", "{{.Names}}").Output()
-	if err != nil {
-		return "", noop, fmt.Errorf("role %q is not installed and docker is unavailable: %v", roleName, err)
-	}
-	container := ""
-	for line := range strings.SplitSeq(string(out), "\n") {
-		if name := strings.TrimSpace(line); strings.HasPrefix(name, config.MoleculeContainerPrefix) {
-			container = name
-			break
-		}
-	}
-	if container == "" {
-		return "", noop, fmt.Errorf("role %q is not installed: no running %s* container found (run diffusion molecule first)", roleName, config.MoleculeContainerPrefix)
-	}
-	rolesPath := config.ContainerRolesCachePath
-	if res, err := exec.Command("docker", "exec", container, "ansible-galaxy", "role", "install", roleName, "-p", rolesPath).CombinedOutput(); err != nil {
-		return "", noop, fmt.Errorf("failed to install role %q in container %s: %v: %s",
-			roleName, container, err, strings.TrimSpace(string(res)))
-	}
-	dir := ""
-	for _, v := range roleDirVariants(roleName) {
-		if err := exec.Command("docker", "exec", container, "test", "-d", rolesPath+"/"+v).Run(); err == nil {
-			dir = v
-			break
-		}
-	}
-	if dir == "" {
-		return "", noop, fmt.Errorf("role %q installed but directory not found under %s in container %s", roleName, rolesPath, container)
-	}
-	tmp, err := os.MkdirTemp("", "diffusion-patch-role-")
-	if err != nil {
-		return "", noop, fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	cleanup := func() { _ = os.RemoveAll(tmp) }
-	if res, err := exec.Command("docker", "cp", container+":"+rolesPath+"/"+dir, tmp+"/role").CombinedOutput(); err != nil {
-		cleanup()
-		return "", noop, fmt.Errorf("failed to copy role %q from container %s: %v: %s",
-			roleName, container, err, strings.TrimSpace(string(res)))
-	}
-	return filepath.Join(tmp, "role"), cleanup, nil
 }
 
 // roleDirVariants returns candidate directory names for a role reference:
