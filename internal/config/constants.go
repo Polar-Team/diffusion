@@ -76,6 +76,19 @@ const (
 	UVCacheTarball                = "uv-cache.tar"               // Filename for packed UV cache tarball (Windows precache)
 	ContainerDockerCachePath      = "/root/.cache/docker"        // Docker image tarballs inside the container
 	DockerImageTarball            = "images.tar"                 // Filename for cached Docker image tarball (multi-image)
+	// ContainerPatchDir is the in-container root of the patch overlay
+	// tree: <ContainerPatchDir>/<scenario>/work/<role> holds the patched
+	// role bind-mounted over ContainerRolesCachePath/<role>, and
+	// <ContainerPatchDir>/<scenario>/backup/<role> keeps a pristine copy.
+	//
+	// It must NOT live under /tmp: the molecule image mounts /tmp as
+	// tmpfs, and `docker cp` cannot read files out of a tmpfs mount
+	// inside a container (it fails with "Could not find the file ... in
+	// container" even though the files are there and `ls`/`cat` work
+	// fine via `docker exec`). /var/lib is part of the container's
+	// writable overlay layer, not a host bind mount and not tmpfs, so no
+	// host path is ever mutated by patching and `docker cp` works.
+	ContainerPatchDir = "/var/lib/diffusion-patch"
 )
 
 // Registry providers

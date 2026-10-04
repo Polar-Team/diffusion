@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -412,6 +413,10 @@ func keyString(k any) string {
 type parsedFile struct {
 	doc   *yaml.Node
 	dirty bool
+	// hadDocStart records whether the original file began with a "---"
+	// document start marker, so marshalTaskDoc can preserve it (yaml.v3's
+	// encoder never emits it on its own).
+	hadDocStart bool
 }
 
 // locateTaskNode re-descends roleRoot along path and returns the parsed
@@ -436,7 +441,7 @@ func locateTaskNode(roleRoot string, path []FileIndex, want *TaskNode, force boo
 		if len(doc.Content) == 0 {
 			return nil, nil, fmt.Errorf("empty document: %s", rel)
 		}
-		cache[rel] = &parsedFile{doc: &doc}
+		cache[rel] = &parsedFile{doc: &doc, hadDocStart: hasDocStart(data)}
 		return listOf(&doc), &doc, nil
 	}
 	var list []*yaml.Node
@@ -514,9 +519,15 @@ func branchSubList(node *yaml.Node) ([]*yaml.Node, error) {
 	return sub, nil
 }
 
-// marshalTaskDoc encodes a task file document with 4-space indent.
-func marshalTaskDoc(doc *yaml.Node) ([]byte, error) {
-	var root *yaml.Node = doc
+// marshalTaskDoc encodes a task file document with 4-space indent and
+// restores the readability yaml.v3 otherwise strips on round-trip: a
+// single blank line between consecutive TOP-LEVEL sequence items (never
+// inside nested block/rescue/always children, loops or other nested
+// sequences — see spaceTopLevelItems) and the original "---" document
+// start marker when the source file had one (yaml.v3's encoder never
+// emits it for a single document).
+func marshalTaskDoc(doc *yaml.Node, hadDocStart bool) ([]byte, error) {
+	var root = doc
 	if doc != nil && doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
 		root = doc.Content[0]
 	}
@@ -528,7 +539,96 @@ func marshalTaskDoc(doc *yaml.Node) ([]byte, error) {
 		return nil, err
 	}
 	_ = enc.Close()
-	return buf.Bytes(), nil
+
+	out := buf.Bytes()
+	if root != nil && root.Kind == yaml.SequenceNode {
+		out = spaceTopLevelItems(out)
+	}
+	// Exactly one trailing newline, regardless of how many the encoder or
+	// spaceTopLevelItems left behind.
+	out = append(bytes.TrimRight(out, "\n"), '\n')
+	if hadDocStart {
+		out = append([]byte("---\n"), out...)
+	}
+	return out, nil
+}
+
+// spaceTopLevelItems inserts exactly one blank line between consecutive
+// top-level sequence items (tasks or handlers): none before the first
+// item, none after the last, and none inside a nested sequence (block/
+// rescue/always children, loop lists, module-argument lists).
+//
+// A line is a top-level item start when it begins with "- " (or is
+// exactly "-") at column 0. Every value nested under a top-level item —
+// including literal/folded block scalar content — sits at indent >= 4
+// under this encoder's 4-space SetIndent, so a column-0 "- " can only be
+// the start of a new top-level item, never a continuation line.
+//
+// A comment block yaml.v3 renders directly above an item (its
+// HeadComment) must move with the item: the blank line is inserted above
+// the contiguous run of column-0 "#" lines, not between the comment and
+// the "- ". If the encoder ever emits a blank line itself, insertion is
+// skipped there to avoid a double blank line.
+func spaceTopLevelItems(out []byte) []byte {
+	if len(out) == 0 {
+		return out
+	}
+	lines := strings.Split(string(out), "\n")
+
+	var itemStarts []int
+	for i, line := range lines {
+		if isTopLevelItemLine(line) {
+			itemStarts = append(itemStarts, i)
+		}
+	}
+	if len(itemStarts) < 2 {
+		return out
+	}
+
+	blockStarts := make(map[int]bool, len(itemStarts)-1)
+	for _, idx := range itemStarts[1:] {
+		start := idx
+		for j := idx - 1; j >= 0 && isColumnZeroComment(lines[j]); j-- {
+			start = j
+		}
+		blockStarts[start] = true
+	}
+
+	result := make([]string, 0, len(lines)+len(blockStarts))
+	for i, line := range lines {
+		if blockStarts[i] && len(result) > 0 && result[len(result)-1] != "" {
+			result = append(result, "")
+		}
+		result = append(result, line)
+	}
+	return []byte(strings.Join(result, "\n"))
+}
+
+// isTopLevelItemLine reports whether line starts a top-level sequence
+// item: "- " (or bare "-") at column 0.
+func isTopLevelItemLine(line string) bool {
+	return line == "-" || strings.HasPrefix(line, "- ")
+}
+
+// isColumnZeroComment reports whether line is a YAML comment starting at
+// column 0 (no leading indentation), i.e. a HeadComment line emitted
+// directly above a top-level item.
+func isColumnZeroComment(line string) bool {
+	return strings.HasPrefix(line, "#")
+}
+
+// hasDocStart reports whether raw YAML bytes begin with a "---" document
+// start marker (ignoring leading blank lines), so marshalTaskDoc can
+// restore it after round-tripping through yaml.v3.
+func hasDocStart(raw []byte) bool {
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		return trimmed == "---" || strings.HasPrefix(trimmed, "--- ")
+	}
+	return false
 }
 
 // ApplyBundle applies one validated bundle to the staged role at
@@ -674,7 +774,7 @@ func ApplyBundle(bundle *PatchBundle, analysis *RoleAnalysis, opts ApplyOptions)
 			if !pf.dirty {
 				continue
 			}
-			data, err := marshalTaskDoc(pf.doc)
+			data, err := marshalTaskDoc(pf.doc, pf.hadDocStart)
 			if err != nil {
 				return nil, fmt.Errorf("failed to encode %s: %w", rel, err)
 			}
@@ -687,11 +787,8 @@ func ApplyBundle(bundle *PatchBundle, analysis *RoleAnalysis, opts ApplyOptions)
 		// Overlay-only runs touch no YAML; still report overlay targets.
 		for rel := range changed {
 			found := false
-			for _, f := range files {
-				if f == rel {
-					found = true
-					break
-				}
+			if slices.Contains(files, rel) {
+				break
 			}
 			if !found {
 				if pf, ok := cache[rel]; ok && pf.dirty {
