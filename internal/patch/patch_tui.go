@@ -135,9 +135,8 @@ func (m analyzeRoleTUIReader) layoutHeight() int {
 // may be 0) go to the scrolling body.
 func (m analyzeRoleTUIReader) layout() (titleRows, bodyRows, footerRows int) {
 	h := m.layoutHeight()
-	if h < 0 {
-		h = 0
-	}
+	h = max(h, 0)
+
 	if h >= 3 {
 		titleRows = 1
 	}
@@ -145,9 +144,7 @@ func (m analyzeRoleTUIReader) layout() (titleRows, bodyRows, footerRows int) {
 		footerRows = 1
 	}
 	bodyRows = h - titleRows - footerRows
-	if bodyRows < 0 {
-		bodyRows = 0
-	}
+	bodyRows = max(bodyRows, 0)
 	return
 }
 
@@ -162,9 +159,7 @@ func (m analyzeRoleTUIReader) bodyHeight() int {
 // content) doesn't divide by zero or leave the cursor stuck.
 func (m analyzeRoleTUIReader) scrollHeight() int {
 	h := m.bodyHeight()
-	if h < 1 {
-		h = 1
-	}
+	h = max(h, 0)
 	return h
 }
 
@@ -189,9 +184,7 @@ func (m *analyzeRoleTUIReader) clampCursor() {
 		m.offset = m.cursor - h + 1
 	}
 	maxOffset := len(m.plain) - h
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
+	maxOffset = max(maxOffset, 0)
 	if m.offset > maxOffset {
 		m.offset = maxOffset
 	}
@@ -241,9 +234,7 @@ func (m analyzeRoleTUIReader) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // short for a true half-page.
 func halfPageStep(h int) int {
 	step := h / 2
-	if step < 1 {
-		step = 1
-	}
+	step = max(step, 0)
 	return step
 }
 
@@ -270,9 +261,7 @@ func (m analyzeRoleTUIReader) footerLine(width int) string {
 	availHelp = max(availHelp, 0)
 	help := ansi.Truncate(footerHelp, availHelp, "…")
 	gap := width - ansi.StringWidth(help) - posWidth
-	if gap < 1 {
-		gap = 1
-	}
+	gap = max(gap, 0)
 	return help + strings.Repeat(" ", gap) + pos
 }
 
@@ -290,9 +279,8 @@ func (m analyzeRoleTUIReader) View() string {
 	}
 
 	end := m.offset + bodyRows
-	if end > len(m.plain) {
-		end = len(m.plain)
-	}
+	end = min(end, len(m.plain))
+
 	shown := 0
 	for i := m.offset; i < end; i++ {
 		gutter := "  "
