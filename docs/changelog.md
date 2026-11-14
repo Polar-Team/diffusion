@@ -14,7 +14,7 @@ All notable changes to the Diffusion project will be documented in this file.
   - Ephemeral and host-safe: the role is copied inside the container to `/var/lib/diffusion-patch/<scenario>/work/<role>` (pristine copy in `backup/`), patched through a throwaway host temp dir and bind-mounted over `/root/.ansible/roles/<role>`; stale overlays are self-healed; ambiguous short role names are rejected
   - Not supported in v1: `new_block` apply and `action:` / `local_action:` tasks
 
-- **Automatic Scenario Patching in `diffusion molecule`**: `converge`, `verify` and the default flow apply the scenario's `patch.yml` bundles inside the container before Molecule runs and remove the overlay afterwards; a patch error fails the run (`patch apply failed: …`). `--destroy` and `--wipe` clear leftover overlays first. Projects without `patch.yml` are unaffected
+- **Automatic Scenario Patching in `diffusion molecule`**: `converge`, `verify`, `idempotence` and the default flow apply the scenario's `patch.yml` bundles inside the container before Molecule runs and remove the overlay afterwards (for `idempotence` this covers both converge passes, and the overlay is removed even if `molecule idempotence` fails); a patch error fails the run (`patch apply failed: …`). `--destroy` and `--wipe` clear leftover overlays first. Projects without `patch.yml` are unaffected
 
 - **Git-Sourced Collections**: Collections can now be installed from a git repository instead of Ansible Galaxy
   - New `--src` (git URL), `--scm` (default `git`), and `--version` / `-v` flags on `diffusion role add-collection`
