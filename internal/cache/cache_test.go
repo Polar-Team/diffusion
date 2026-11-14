@@ -55,6 +55,58 @@ func TestGetCacheDir(t *testing.T) {
 	}
 }
 
+func TestGetCacheDir_RelativeCustomPathIsAbsolute(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWd) })
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	relCachePath := ".cache"
+	if err := os.MkdirAll(filepath.Join(tmpDir, relCachePath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cacheDir, err := GetCacheDir("relabs1", relCachePath)
+	if err != nil {
+		t.Fatalf("GetCacheDir failed: %v", err)
+	}
+
+	if !filepath.IsAbs(cacheDir) {
+		t.Fatalf("expected absolute cache dir for relative cache_path, got %q", cacheDir)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(cwd, relCachePath, "cache", "role_relabs1")
+
+	// Resolve symlinks on both sides using the existing grandparent
+	// directory (the `cache/role_<id>` subdirectories are never created by
+	// GetCacheDir): on macOS, temp dirs live under /var, which is a symlink
+	// to /private/var.
+	gotBaseResolved, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cacheDir)))
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for got path %q: %v", cacheDir, err)
+	}
+	wantBaseResolved, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(want)))
+	if err != nil {
+		t.Fatalf("failed to resolve symlinks for want path %q: %v", want, err)
+	}
+	gotResolved := filepath.Join(gotBaseResolved, "cache", "role_relabs1")
+	wantResolved := filepath.Join(wantBaseResolved, "cache", "role_relabs1")
+
+	if gotResolved != wantResolved {
+		t.Errorf("cache dir = %q (resolved %q), want %q (resolved %q)", cacheDir, gotResolved, want, wantResolved)
+	}
+}
+
 func TestEnsureCacheDir(t *testing.T) {
 	cacheID := "testcache"
 	customPath := ""
