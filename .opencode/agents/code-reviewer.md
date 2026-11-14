@@ -6,6 +6,8 @@ temperature: 0.1
 permission:
   edit: deny
   webfetch: deny
+  read:
+    "*": allow
   bash:
     "*": ask
     "sed*": allow
