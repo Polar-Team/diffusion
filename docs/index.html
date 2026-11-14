@@ -605,10 +605,13 @@ diffusion deps sync  -s production   <span style="color:var(--muted)"># restore 
           <tr><td><code>diffusion cache enable</code></td><td>Enable caching for current role</td></tr>
           <tr><td><code>diffusion cache enable --docker</code></td><td>Also cache Docker images as tarballs</td></tr>
           <tr><td><code>diffusion cache enable --uv</code></td><td>Also cache UV/Python packages</td></tr>
+          <tr><td><code>diffusion cache enable --cache-id &lt;id&gt;</code></td><td>Pin an explicit cache ID (<code>^[A-Za-z0-9_-]{1,64}$</code>) instead of generating a random one; overrides any existing committed <code>cache_id</code></td></tr>
           <tr><td><code>diffusion cache disable</code></td><td>Disable caching (preserves cache directory)</td></tr>
           <tr><td><code>diffusion cache clean</code></td><td>Remove cached artifacts for current role</td></tr>
           <tr><td><code>diffusion cache status</code></td><td>Show cache config and size</td></tr>
           <tr><td><code>diffusion cache list</code></td><td>List all cache directories across all roles</td></tr>
+          <tr><td><code>diffusion cache path</code></td><td>Print the effective cache directory for this role (machine-readable, for scripting)</td></tr>
+          <tr><td><code>diffusion cache path --base</code></td><td>Print the parent directory containing all <code>role_*</code> cache directories</td></tr>
         </tbody>
       </table></div>
     </div>
@@ -1240,6 +1243,33 @@ molecule_container_tag = "latest-amd64"</code><button class="copy-btn" onclick="
 - name: Check deps are locked
   run: diffusion deps check</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
         <p>Prefer the composite actions: <code>Polar-Team/diffusion/diffusion-test</code> (converge / lint / verify / idempotence, with supply-chain verification and Ubuntu 24.04 rootless prerequisites — AppArmor userns relaxation and a non-fatal cgroup v2 <code>user.slice</code> check) and <code>Polar-Team/diffusion/diffusion-update</code> (lock → check → sync → test → PR). The <code>scenario</code> input of <code>diffusion-update</code> is optional: empty means all scenarios are locked/checked/synced and tests run against <code>default</code>; a value must match <code>^[A-Za-z0-9._-]+$</code>.</p>
+        <h3>Composite action caching (per-scenario keys)</h3>
+        <p>With <code>cache-enabled: 'true'</code> the <code>diffusion-test</code> action stores one cache entry per runner platform, role and scenario, so matrix jobs never reserve the same key:</p>
+        <pre><code>diffusion-cache-&lt;os&gt;-&lt;arch&gt;-&lt;role-slug&gt;-&lt;scenario&gt;[-&lt;suffix&gt;]-&lt;deps-hash&gt;
+
+# working-directory ".", scenario default / ubuntu
+diffusion-cache-linux-x64-root-cdb4ee2a-default-0c4e4200a63646ca
+diffusion-cache-linux-x64-root-cdb4ee2a-ubuntu-9b8cb9cb19f7e167</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
+        <ul>
+          <li><code>&lt;role-slug&gt;</code> — sanitized <code>working-directory</code> plus 8 hex chars of the raw path; <code>.</code> becomes <code>root-&lt;hash&gt;</code></li>
+          <li><code>&lt;deps-hash&gt;</code> — 16 hex chars of sha256 over <code>scenarios/&lt;scenario&gt;/requirements.yml</code>, <code>requirements.yml</code>, <code>diffusion.lock</code>, <code>meta/main.yml</code>, <code>diffusion.toml</code> (with the <code>cache_id</code> line stripped) and, when <code>cache-uv: 'true'</code>, <code>pyproject.toml</code> + <code>uv.lock</code></li>
+          <li><code>cache-key-suffix</code> — optional extra disambiguation (e.g. a matrix over runner images)</li>
+        </ul>
+        <p>Restore falls back to the same role/scenario prefix, then to the same role/OS/arch prefix — never to a bare <code>diffusion-cache-</code>. If <code>diffusion.toml</code> has no <code>cache_id</code>, the action derives a deterministic one (first 16 hex chars of sha256 of <code>&lt;owner&gt;/&lt;repo&gt;/&lt;working-directory&gt;</code>) and, on Diffusion v0.9.1+ (which support <code>--cache-id</code> and <code>cache path</code>), passes it as <code>diffusion cache enable --cache-id &lt;derived&gt;</code> — a committed <code>cache_id</code> still wins and is used as-is. Older pinned <code>diffusion-version</code>s before v0.9.1 fall back to writing <code>cache_id</code> into <code>diffusion.toml</code> before <code>cache enable</code>, with a <code>::notice::</code>. The action caches whatever <code>diffusion cache path</code> reports — the absolute role cache directory (e.g. <code>~/.diffusion/cache/role_&lt;cache_id&gt;/</code>) — which honours <code>[cache] cache_path</code>; a <code>::warning::</code> is emitted when <code>cache_path</code> is set but the directory doesn't exist and Diffusion falls back to the default location. Diffusion versions before v0.9.1 don't have <code>cache path</code> and fall back to caching <code>~/.diffusion/cache</code> directly, with a notice.</p>
+        <pre><code>jobs:
+  test:
+    name: Molecule (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [default, ubuntu]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Polar-Team/diffusion/diffusion-test@main
+        with:
+          scenario: ${{ matrix.scenario }}
+          cache-enabled: 'true'</code><button class="copy-btn" onclick="copyCode(this)">copy</button></pre>
       </div>
       <div id="tab-ci-gl" class="tab-panel">
         <pre><code>molecule-test:

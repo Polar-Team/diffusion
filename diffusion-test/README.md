@@ -48,6 +48,7 @@ That's it! This will run:
 | `cache-enabled` | Enable caching for Ansible roles, collections, and optionally UV/Docker | No | `false` |
 | `cache-uv` | Cache UV/Python packages (requires `cache-enabled: true`) | No | `false` |
 | `cache-docker` | Cache DinD Docker images as tarballs (requires `cache-enabled: true`) | No | `false` |
+| `cache-key-suffix` | Extra disambiguation appended to the cache key and restore prefixes (e.g. a matrix value). Sanitized to `[a-z0-9._-]` | No | `""` |
 
 ## Examples
 
@@ -179,8 +180,112 @@ jobs:
 | UV packages | Python packages installed via UV | `cache-uv: true` |
 | Docker images | DinD images pulled inside the molecule container | `cache-docker: true` |
 
-The cache key is derived from `diffusion.toml`, `requirements.yml`, and
-`diffusion.lock` so that dependency changes automatically invalidate the cache.
+#### Cache keys
+
+Every job gets its own cache entry, scoped by runner platform, role and Molecule
+scenario. The key has the form:
+
+```
+diffusion-cache-<os>-<arch>-<role-slug>-<scenario>[-<suffix>]-<deps-hash>
+
+# working-directory ".", scenario default
+diffusion-cache-linux-x64-root-cdb4ee2a-default-0c4e4200a63646ca
+# working-directory ".", scenario ubuntu
+diffusion-cache-linux-x64-root-cdb4ee2a-ubuntu-9b8cb9cb19f7e167
+```
+
+| Segment | Source | Example |
+|---------|--------|---------|
+| `<os>` | `runner.os`, lowercased | `linux` |
+| `<arch>` | `runner.arch`, lowercased | `x64` |
+| `<role-slug>` | `working-directory`, sanitized, plus 8 hex chars of the raw path | `.` → `root-cdb4ee2a`, `roles/foo` → `roles-foo-e4a7b971` |
+| `<scenario>` | `scenario` input, sanitized | `default`, `ubuntu` |
+| `<suffix>` | `cache-key-suffix` input, sanitized (omitted when empty) | `image-2404` |
+| `<deps-hash>` | 16 hex chars of sha256 over the dependency inputs | `0c4e4200a63646ca` |
+
+`<deps-hash>` covers, in this order and skipping missing files:
+`scenarios/<scenario>/requirements.yml`, `requirements.yml`, `diffusion.lock`,
+`meta/main.yml`, `diffusion.toml` (with the `cache_id` line removed), and — only
+when `cache-uv: true` — `pyproject.toml` and `uv.lock`.
+
+Restore falls back progressively but always stays scoped:
+
+1. `diffusion-cache-<os>-<arch>-<role>-<scenario>-` — same role + scenario, older dependency hash
+2. `diffusion-cache-<os>-<arch>-<role>-` — same role, any scenario (roles/collections are shareable)
+
+It never falls back to a bare `diffusion-cache-` prefix, so a job can no longer
+restore an unrelated role's cache.
+
+The save step is skipped when the restore was an exact hit (nothing new to
+write), and `always()` keeps it running when tests fail. Because the key is
+unique per OS/arch + role + scenario + dependency set, concurrent matrix jobs no
+longer fail with `Unable to reserve cache with key ...`.
+
+#### Cached path
+
+The action caches whatever `diffusion cache path` reports — the absolute role
+cache directory (for example `/home/runner/.diffusion/cache/role_<cache_id>`).
+It uses the same resolver Molecule uses, so `[cache] cache_path` in
+`diffusion.toml` is honoured (only if that directory exists; otherwise Diffusion
+falls back to `~/.diffusion/cache` and the action emits a `::warning::`). The
+role-specific directory is cached rather than the whole `~/.diffusion/cache`, so
+entries stay small and scoped to the role. The same path is used for both
+restore and save (the path is part of the `actions/cache` version). Older
+Diffusion versions without `cache path` fall back to `~/.diffusion/cache` with a
+notice.
+
+#### Deterministic `cache_id`
+
+Diffusion keeps cache data in `<cache dir>/role_<cache_id>/`. If
+`diffusion.toml` has no `cache_id` (or an empty one), `diffusion cache enable`
+generates a fresh random 16-hex ID on every run, which would make restored data
+invisible.
+
+The action checks `diffusion.toml` (read-only):
+
+- a committed `cache_id` is always used as-is (`diffusion cache enable`);
+- otherwise it derives `sha256("<owner>/<repo>/<working-directory>")`, keeps the
+  first 16 hex chars, and runs `diffusion cache enable --cache-id <derived>`
+  (the ID is validated as `[A-Za-z0-9_-]{1,64}` and persisted to `[cache]
+  cache_id`). `diffusion.toml` is not edited by the action.
+
+**Older Diffusion versions** (`--cache-id` and `cache path` require Diffusion
+v0.9.1 or newer; older pinned `diffusion-version`s use the fallback) are detected via
+`diffusion cache enable --help`. For those, the action falls back to injecting
+`cache_id` into `diffusion.toml` with bash before `cache enable` (a warning is
+emitted for dotted `cache.*` keys) and prints a `::notice::`. Upgrading
+`diffusion-version` removes the fallback.
+
+Committing `cache_id` yourself is optional but recommended if you want the ID to
+be stable outside CI too.
+
+### Matrix over scenarios
+
+Each matrix leg computes a different key (`...-default-...` vs `...-ubuntu-...`),
+so scenarios cache independently and in parallel:
+
+```yaml
+jobs:
+  test:
+    name: Molecule (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [default, ubuntu]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Diffusion Tests
+        uses: Polar-Team/diffusion/diffusion-test@main
+        with:
+          scenario: ${{ matrix.scenario }}
+          cache-enabled: 'true'
+```
+
+If you also run a matrix over runner images (not just `runs-on` values), add
+`cache-key-suffix: ${{ matrix.image }}` so entries stay separated.
 
 ## Requirements
 
@@ -257,7 +362,7 @@ pinned = "3.13"
 
 1. **Checkout** - Checks out your role repository
 2. **Install Diffusion** - Downloads and installs Diffusion binary
-3. **Configure cache** (if enabled) - Runs `diffusion cache enable` and restores cached artifacts from previous runs
+3. **Configure cache** (if enabled) - Runs `diffusion cache enable` (passing `--cache-id <derived>` only when no `cache_id` is committed in diffusion.toml; a committed one wins; TOML fallback on Diffusion older than v0.9.1), resolves the cache path with `diffusion cache path`, and restores cached artifacts from previous runs
 4. **Converge** - Applies your role to test instance
 5. **Lint** (optional) - Runs yamllint and ansible-lint
 6. **Verify** (optional) - Runs verification tests

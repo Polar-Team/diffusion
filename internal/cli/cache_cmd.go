@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"diffusion/internal/cache"
 	"diffusion/internal/config"
@@ -21,6 +22,7 @@ func NewCacheCmd(cli *CLI) *cobra.Command {
 	cacheCmd.AddCommand(newCacheCleanCmd())
 	cacheCmd.AddCommand(newCacheStatusCmd())
 	cacheCmd.AddCommand(newCacheListCmd())
+	cacheCmd.AddCommand(newCachePathCmd())
 
 	return cacheCmd
 }
@@ -28,6 +30,7 @@ func NewCacheCmd(cli *CLI) *cobra.Command {
 func newCacheEnableCmd() *cobra.Command {
 	var dockerCache bool
 	var uvCache bool
+	var cacheIDFlag string
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -38,10 +41,22 @@ func newCacheEnableCmd() *cobra.Command {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
 
-			// Generate or get cache ID
-			cacheID, err := cache.GetOrCreateCacheID(cfg)
-			if err != nil {
-				return fmt.Errorf("failed to generate cache ID: %w", err)
+			var cacheID string
+			var previousCacheID string
+			if cmd.Flags().Changed("cache-id") {
+				if err := cache.ValidateCacheID(cacheIDFlag); err != nil {
+					return err
+				}
+				if cfg.CacheConfig != nil {
+					previousCacheID = cfg.CacheConfig.CacheID
+				}
+				cacheID = cacheIDFlag
+			} else {
+				// Generate or get cache ID
+				cacheID, err = cache.GetOrCreateCacheID(cfg)
+				if err != nil {
+					return fmt.Errorf("failed to generate cache ID: %w", err)
+				}
 			}
 
 			// Initialize CacheConfig if needed
@@ -71,17 +86,22 @@ func newCacheEnableCmd() *cobra.Command {
 				return fmt.Errorf("failed to save config: %w", err)
 			}
 
-			fmt.Printf("\033[32mCache enabled for this role\033[0m\n")
-			fmt.Printf("\033[35mCache ID:      \033[0m\033[38;2;127;255;212m%s\033[0m\n", cacheID)
-			fmt.Printf("\033[35mCache Path:    \033[0m\033[38;2;127;255;212m%s\033[0m\n", cacheDir)
-			fmt.Printf("\033[35mDocker cache:  \033[0m\033[38;2;127;255;212m%t\033[0m\n", cfg.CacheConfig.DockerCache)
-			fmt.Printf("\033[35mUV cache:      \033[0m\033[38;2;127;255;212m%t\033[0m\n", cfg.CacheConfig.UVCache)
+			if previousCacheID != "" && previousCacheID != cacheID {
+				fmt.Fprintf(cmd.OutOrStdout(), "\033[33mCache ID overridden: %s -> %s\033[0m\n", previousCacheID, cacheID)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "\033[32mCache enabled for this role\033[0m\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "\033[35mCache ID:      \033[0m\033[38;2;127;255;212m%s\033[0m\n", cacheID)
+			fmt.Fprintf(cmd.OutOrStdout(), "\033[35mCache Path:    \033[0m\033[38;2;127;255;212m%s\033[0m\n", cacheDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "\033[35mDocker cache:  \033[0m\033[38;2;127;255;212m%t\033[0m\n", cfg.CacheConfig.DockerCache)
+			fmt.Fprintf(cmd.OutOrStdout(), "\033[35mUV cache:      \033[0m\033[38;2;127;255;212m%t\033[0m\n", cfg.CacheConfig.UVCache)
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&dockerCache, "docker", false, "Enable Docker image caching (saves/loads image tarballs)")
 	cmd.Flags().BoolVar(&uvCache, "uv", false, "Enable UV/Python package caching")
+	cmd.Flags().StringVar(&cacheIDFlag, "cache-id", "", "Explicit cache ID to use instead of generating a random one (must match ^[A-Za-z0-9_-]{1,64}$); overrides any existing committed cache_id")
 
 	return cmd
 }
@@ -222,6 +242,43 @@ func newCacheStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newCachePathCmd() *cobra.Command {
+	var base bool
+
+	cmd := &cobra.Command{
+		Use:   "path",
+		Short: "Print the effective cache directory for this role",
+		Long:  "Print the absolute, effective role cache directory (the same path used by 'diffusion molecule'). Intended for scripting, e.g. $(diffusion cache path).",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			if cfg.CacheConfig == nil || cfg.CacheConfig.CacheID == "" {
+				return fmt.Errorf("cache is not configured for this role (run 'diffusion cache enable' first)")
+			}
+
+			cacheDir, err := cache.GetCacheDir(cfg.CacheConfig.CacheID, cfg.CacheConfig.CachePath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve cache directory: %w", err)
+			}
+
+			if base {
+				fmt.Fprintln(cmd.OutOrStdout(), filepath.Dir(cacheDir))
+				return nil
+			}
+
+			fmt.Fprintln(cmd.OutOrStdout(), cacheDir)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&base, "base", false, "Print the parent directory containing all role_* cache directories instead of the role-specific path")
+
+	return cmd
 }
 
 func newCacheListCmd() *cobra.Command {

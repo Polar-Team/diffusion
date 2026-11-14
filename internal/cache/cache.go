@@ -6,9 +6,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"diffusion/internal/config"
 )
+
+// cacheIDPattern restricts cache IDs to characters that are safe as a path
+// segment on every supported platform (used as role_<id>).
+var cacheIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// ValidateCacheID validates a user-supplied cache ID. Cache IDs are used
+// verbatim as a path segment (role_<id>), so they must be restricted to a
+// safe character set and length to avoid path traversal or invalid paths.
+func ValidateCacheID(id string) error {
+	if !cacheIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid cache ID %q: must match %s (1-64 characters: letters, digits, '-' or '_')", id, cacheIDPattern.String())
+	}
+	return nil
+}
 
 // GetCacheDir returns the cache directory for the current role
 func GetCacheDir(cacheID string, customPath string) (string, error) {
@@ -16,7 +31,11 @@ func GetCacheDir(cacheID string, customPath string) (string, error) {
 	cacheDir := ""
 	if customPath != "" {
 		if _, err := os.Stat(customPath); err == nil {
-			cacheDir = filepath.Join(customPath, "cache", fmt.Sprintf("role_%s", cacheID))
+			absPath, err := filepath.Abs(customPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to resolve absolute cache path: %w", err)
+			}
+			cacheDir = filepath.Join(absPath, "cache", fmt.Sprintf("role_%s", cacheID))
 		} else {
 			homeDir, err := os.UserHomeDir()
 			if err != nil {
