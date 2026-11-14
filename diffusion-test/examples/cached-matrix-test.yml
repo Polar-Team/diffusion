@@ -1,0 +1,47 @@
+---
+# Example: Diffusion Testing with Caching across Multiple Scenarios
+# Every matrix leg gets its own cache key
+# (diffusion-cache-<os>-<arch>-<role>-<scenario>-<deps-hash>), so scenarios
+# cache independently and in parallel instead of racing on one shared key.
+# Requires Diffusion v0.9.1 or newer for
+# `cache enable --cache-id` / `cache path`; older versions use a fallback.
+# The cached path is whatever `diffusion cache path` reports, so
+# [cache] cache_path in diffusion.toml is honoured.
+
+name: Test (Cached Matrix)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Molecule (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - default
+          - ubuntu
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Diffusion Tests
+        uses: Polar-Team/diffusion/diffusion-test@main
+        with:
+          diffusion-version: 'latest'
+          scenario: ${{ matrix.scenario }}
+          cache-enabled: 'true'
+          cache-uv: 'true'
+          cache-docker: 'true'
+          run-lint: 'true'
+          run-verify: 'true'
+          run-idempotence: 'true'
+          # Only needed when the matrix spans runner images rather than
+          # runs-on values alone, e.g. cache-key-suffix: ${{ matrix.image }}

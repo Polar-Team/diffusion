@@ -48,6 +48,10 @@ inputs:
     description: "Cache DinD Docker images as tarballs (requires cache-enabled: true)"
     required: false
     default: "false"
+  cache-key-suffix:
+    description: "Optional extra disambiguation appended to the cache key and restore prefixes (e.g. a matrix value such as an OS image). Sanitized to [a-z0-9._-]."
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -65,11 +69,13 @@ runs:
 
     - name: Download Diffusion
       shell: bash
+      env:
+        DIFFUSION_VERSION_INPUT: ${{ inputs.diffusion-version }}
       run: |
-        if [ "${{ inputs.diffusion-version }}" = "latest" ]; then
+        if [ "${DIFFUSION_VERSION_INPUT}" = "latest" ]; then
           LATEST_RELEASE=$(curl -s https://api.github.com/repos/Polar-Team/diffusion/releases/latest | jq -r .tag_name)
         else
-          LATEST_RELEASE="${{ inputs.diffusion-version }}"
+          LATEST_RELEASE="${DIFFUSION_VERSION_INPUT}"
         fi
         echo "DIFFUSION_RELEASE=${LATEST_RELEASE}" >> "$GITHUB_ENV"
 
@@ -138,22 +144,193 @@ runs:
         diffusion --version
 
     # --- Cache setup ---
-    - name: Configure Diffusion cache
+    #
+    # The cache is scoped per runner OS/arch, per role (working-directory) and
+    # per Molecule scenario, so concurrent matrix jobs never compute the same
+    # key (which made actions/cache/save fail with "Unable to reserve cache").
+    #
+    # Newer Diffusion releases support `cache enable --cache-id`, so the ID is
+    # passed on the command line. Older pinned versions fall back to injecting
+    # cache_id into diffusion.toml with bash before `cache enable` runs.
+    - name: Derive deterministic cache ID
       if: inputs.cache-enabled == 'true'
+      id: cache-id
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        DIFFUSION_WORKDIR: ${{ inputs.working-directory }}
+        GITHUB_REPOSITORY_NAME: ${{ github.repository }}
       run: |
+        set -euo pipefail
+
+        ENABLE_HELP=$(diffusion cache enable --help 2>&1 || true)
+        if grep -q -- '--cache-id' <<<"${ENABLE_HELP}"; then
+          CACHE_ID_SUPPORTED=true
+        else
+          CACHE_ID_SUPPORTED=false
+        fi
+        echo "cache-id-flag=${CACHE_ID_SUPPORTED}" >> "$GITHUB_OUTPUT"
+
+        if [ ! -f diffusion.toml ]; then
+          if [ "${CACHE_ID_SUPPORTED}" = "true" ]; then
+            : # --cache-id below creates/persists the config; fall through.
+          else
+            echo "::warning::diffusion.toml not found in '${DIFFUSION_WORKDIR:-.}'; skipping deterministic cache_id"
+            exit 0
+          fi
+        fi
+
+        # A cache_id already committed to diffusion.toml always wins.
+        # An empty value (cache_id = "") is treated as missing.
+        # Strip quotes/whitespace so both "id" and 'id' are recognised.
+        EXISTING_ID=$(awk '
+          /^[[:space:]]*cache_id[[:space:]]*=/ {
+            line = $0
+            sub(/^[^=]*=[[:space:]]*/, "", line)
+            sub(/[[:space:]]*#.*$/, "", line)
+            print line
+            exit
+          }
+        ' diffusion.toml 2>/dev/null | tr -d "\"'[:space:]" || true)
+
+        if [ -n "${EXISTING_ID}" ]; then
+          echo "Using committed cache_id from diffusion.toml: ${EXISTING_ID}"
+          exit 0
+        fi
+
+        # Without a committed cache_id, `diffusion cache enable` would generate
+        # a fresh random ID on every run. Restored caches live in
+        # ~/.diffusion/cache/role_<id>/, so a random ID silently discards every
+        # restored artifact. Derive a stable ID from <repo>/<working-directory>.
+        SEED="${GITHUB_REPOSITORY_NAME:-unknown}/$(printf '%s' "${DIFFUSION_WORKDIR:-.}")"
+        if command -v sha256sum >/dev/null 2>&1; then
+          CACHE_ID=$(printf '%s' "${SEED}" | sha256sum | cut -c1-16)
+        else
+          CACHE_ID=$(printf '%s' "${SEED}" | shasum -a 256 | cut -c1-16)
+        fi
+
+        if [ "${CACHE_ID_SUPPORTED}" = "true" ]; then
+          echo "cache-id=${CACHE_ID}" >> "$GITHUB_OUTPUT"
+          echo "Derived deterministic cache_id (passed via --cache-id): ${CACHE_ID}"
+          exit 0
+        fi
+
+        echo "::notice::This Diffusion version lacks 'cache enable --cache-id' (requires Diffusion v0.9.1+); falling back to injecting cache_id into diffusion.toml. Upgrade diffusion-version to remove this fallback."
+
+        write_toml() {
+          # Write stdin to diffusion.toml without relying on sed -i portability.
+          tmp_file=$(mktemp)
+          cat > "${tmp_file}"
+          cat "${tmp_file}" > diffusion.toml
+          rm -f "${tmp_file}"
+        }
+
+        CACHE_HEADER_RE='^[[:space:]]*\[[[:space:]]*cache[[:space:]]*\][[:space:]]*(#.*)?$'
+
+        if grep -qE '^[[:space:]]*cache_id[[:space:]]*=' diffusion.toml; then
+          # Replace the empty cache_id in place.
+          awk -v id="${CACHE_ID}" '
+            BEGIN { done = 0 }
+            /^[[:space:]]*cache_id[[:space:]]*=/ && !done {
+              match($0, /^[[:space:]]*/)
+              indent = substr($0, 1, RLENGTH)
+              print indent "cache_id = \"" id "\""
+              done = 1
+              next
+            }
+            { print }
+          ' diffusion.toml | write_toml
+        elif grep -qE "${CACHE_HEADER_RE}" diffusion.toml; then
+          # Insert cache_id right after the existing [cache] header.
+          awk -v id="${CACHE_ID}" '
+            BEGIN { done = 0 }
+            { print }
+            /^[[:space:]]*\[[[:space:]]*cache[[:space:]]*\][[:space:]]*(#.*)?$/ && !done {
+              print "cache_id = \"" id "\""
+              done = 1
+            }
+          ' diffusion.toml | write_toml
+        elif grep -qE '^[[:space:]]*cache\.' diffusion.toml; then
+          # Dotted-key form (cache.enabled = ...). Appending a [cache] table
+          # would duplicate it and break TOML parsing, so bail out loudly
+          # instead of corrupting the file.
+          echo "::warning::diffusion.toml uses dotted cache.* keys; cannot inject cache_id automatically. Commit cache_id under [cache] to make CI caching effective."
+          exit 0
+        else
+          # No cache table yet: append a new top-level table. A table header is
+          # valid at end of file even after other tables / arrays of tables.
+          printf '\n[cache]\ncache_id = "%s"\n' "${CACHE_ID}" >> diffusion.toml
+        fi
+
+        if ! grep -qE "^[[:space:]]*cache_id[[:space:]]*=[[:space:]]*\"?${CACHE_ID}\"?" diffusion.toml; then
+          echo "::warning::failed to persist deterministic cache_id to diffusion.toml; the cache directory will change between runs"
+          exit 0
+        fi
+
+        echo "Injected deterministic cache_id into diffusion.toml: ${CACHE_ID}"
+
+    - name: Configure Diffusion cache
+      if: inputs.cache-enabled == 'true'
+      id: cache-config
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DIFFUSION_CACHE_UV: ${{ inputs.cache-uv }}
+        DIFFUSION_CACHE_DOCKER: ${{ inputs.cache-docker }}
+        DERIVED_CACHE_ID: ${{ steps.cache-id.outputs.cache-id }}
+      run: |
+        set -euo pipefail
         echo "::group::Configuring Diffusion cache"
-        CACHE_FLAGS=""
-        if [ "${{ inputs.cache-uv }}" = "true" ]; then
-          CACHE_FLAGS="${CACHE_FLAGS} --uv"
+        CACHE_FLAGS=()
+        if [ "${DIFFUSION_CACHE_UV}" = "true" ]; then
+          CACHE_FLAGS+=(--uv)
         fi
-        if [ "${{ inputs.cache-docker }}" = "true" ]; then
-          CACHE_FLAGS="${CACHE_FLAGS} --docker"
+        if [ "${DIFFUSION_CACHE_DOCKER}" = "true" ]; then
+          CACHE_FLAGS+=(--docker)
         fi
-        diffusion cache enable${CACHE_FLAGS}
+        # Only set when the flag is supported and no cache_id is committed.
+        if [ -n "${DERIVED_CACHE_ID:-}" ]; then
+          CACHE_FLAGS+=(--cache-id "${DERIVED_CACHE_ID}")
+        fi
+        diffusion cache enable ${CACHE_FLAGS[@]+"${CACHE_FLAGS[@]}"}
         echo "Cache configured:"
         diffusion cache status
+
+        # Resolve the effective role cache dir (honours [cache] cache_path).
+        # Older Diffusion versions lack `cache path`: use the default location.
+        CACHE_DIR=""
+        CACHE_HELP=$(diffusion cache --help 2>&1 || true)
+        if grep -qE '^[[:space:]]+path[[:space:]]' <<<"${CACHE_HELP}"; then
+          CACHE_DIR=$(diffusion cache path 2>/dev/null || true)
+        fi
+        if [ -z "${CACHE_DIR}" ]; then
+          CACHE_DIR="${HOME}/.diffusion/cache"
+          echo "::notice::'diffusion cache path' unavailable; caching default ${CACHE_DIR}. Upgrade diffusion-version to honour cache_path."
+        fi
+
+        # Warn if a configured cache_path was ignored (directory missing).
+        CONFIGURED_PATH=""
+        if [ -f diffusion.toml ]; then
+          CONFIGURED_PATH=$(awk '
+            /^[[:space:]]*cache_path[[:space:]]*=/ {
+              line = $0
+              sub(/^[^=]*=[[:space:]]*/, "", line)
+              sub(/[[:space:]]*#.*$/, "", line)
+              print line
+              exit
+            }
+          ' diffusion.toml | tr -d "\"'" | sed -E 's/[[:space:]]+$//' || true)
+        fi
+        if [ -n "${CONFIGURED_PATH}" ]; then
+          EXPANDED_PATH="${CONFIGURED_PATH/#\~/${HOME}}"
+          case "${CACHE_DIR}" in
+            "${EXPANDED_PATH%/}"/*|"${EXPANDED_PATH%/}") ;;
+            *) echo "::warning::[cache] cache_path '${CONFIGURED_PATH}' is set but was not used (the directory does not exist, or this Diffusion version predates 'cache path'), so the action caches '${CACHE_DIR}'. Create the directory before this action and use a newer diffusion-version to cache it." ;;
+          esac
+        fi
+
+        echo "cache-dir=${CACHE_DIR}" >> "$GITHUB_OUTPUT"
+        echo "Caching path: ${CACHE_DIR}"
         echo "::endgroup::"
 
     - name: Compute cache key
@@ -161,34 +338,115 @@ runs:
       id: cache-key
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        DIFFUSION_SCENARIO: ${{ inputs.scenario }}
+        DIFFUSION_WORKDIR: ${{ inputs.working-directory }}
+        DIFFUSION_CACHE_SUFFIX: ${{ inputs.cache-key-suffix }}
+        DIFFUSION_CACHE_UV: ${{ inputs.cache-uv }}
+        RUNNER_OS_NAME: ${{ runner.os }}
+        RUNNER_ARCH_NAME: ${{ runner.arch }}
       run: |
-        # Build a hash from dependency-relevant files
-        HASH_INPUT=""
-        if [ -f diffusion.toml ]; then
-          HASH_INPUT="${HASH_INPUT}$(cat diffusion.toml)"
-        fi
-        if [ -f requirements.yml ]; then
-          HASH_INPUT="${HASH_INPUT}$(cat requirements.yml)"
-        fi
-        if [ -f diffusion.lock ]; then
-          HASH_INPUT="${HASH_INPUT}$(cat diffusion.lock)"
-        fi
-        FILE_HASH=$(echo -n "${HASH_INPUT}" | sha256sum | cut -d' ' -f1)
-        echo "hash=${FILE_HASH}" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
 
-        # Read cache_id from diffusion.toml for the cache path
-        CACHE_ID=$(grep -E '^\s*cache_id\s*=' diffusion.toml | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d ' ')
-        echo "cache-id=${CACHE_ID}" >> "$GITHUB_OUTPUT"
+        sha256() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum | cut -d' ' -f1
+          else
+            shasum -a 256 | cut -d' ' -f1
+          fi
+        }
+
+        # Lowercase and reduce a string to a safe, stable cache-key segment.
+        slugify() {
+          printf '%s' "$1" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's#[^a-z0-9._-]+#-#g; s#-+#-#g; s#^[._-]+##; s#[._-]+$##'
+        }
+
+        # --- role slug: working-directory, sanitized + short path hash so two
+        # different directories can never collapse into the same key segment.
+        ROLE_BASE=$(slugify "${DIFFUSION_WORKDIR:-.}")
+        if [ -z "${ROLE_BASE}" ]; then
+          ROLE_BASE="root"
+        fi
+        ROLE_PATH_HASH=$(printf '%s' "${DIFFUSION_WORKDIR:-.}" | sha256 | cut -c1-8)
+        ROLE_SLUG="${ROLE_BASE}-${ROLE_PATH_HASH}"
+
+        # --- scenario (raw value is used for file paths, slug for the key).
+        SCENARIO_RAW="${DIFFUSION_SCENARIO:-default}"
+        SCENARIO_SLUG=$(slugify "${SCENARIO_RAW}")
+        if [ -z "${SCENARIO_SLUG}" ]; then
+          SCENARIO_SLUG="default"
+        fi
+
+        # --- optional user-provided suffix for extra disambiguation.
+        SUFFIX=""
+        if [ -n "${DIFFUSION_CACHE_SUFFIX:-}" ]; then
+          SUFFIX_SLUG=$(slugify "${DIFFUSION_CACHE_SUFFIX}")
+          if [ -n "${SUFFIX_SLUG}" ]; then
+            SUFFIX="-${SUFFIX_SLUG}"
+          fi
+        fi
+
+        # --- deps hash: scenario requirements, lock file, meta, and (when the
+        # UV cache is on) pyproject/uv.lock. diffusion.toml is hashed with the
+        # cache_id line stripped so a regenerated ID does not bust the key.
+        # Missing files are tolerated.
+        DEPS_HASH_INPUT=""
+        add_file() {
+          if [ -f "$1" ]; then
+            DEPS_HASH_INPUT="${DEPS_HASH_INPUT}$1:$(sha256 < "$1")"$'\n'
+          fi
+        }
+
+        add_file "scenarios/${SCENARIO_RAW}/requirements.yml"
+        add_file "requirements.yml"
+        add_file "diffusion.lock"
+        add_file "meta/main.yml"
+        if [ "${DIFFUSION_CACHE_UV}" = "true" ]; then
+          add_file "pyproject.toml"
+          add_file "uv.lock"
+        fi
+        if [ -f diffusion.toml ]; then
+          TOML_HASH=$(sed -E 's/^[[:space:]]*cache_id[[:space:]]*=.*$//' diffusion.toml | sha256)
+          DEPS_HASH_INPUT="${DEPS_HASH_INPUT}diffusion.toml:${TOML_HASH}"$'\n'
+        fi
+
+        if [ -z "${DEPS_HASH_INPUT}" ]; then
+          DEPS_HASH="nohash"
+        else
+          DEPS_HASH=$(printf '%s' "${DEPS_HASH_INPUT}" | sha256 | cut -c1-16)
+        fi
+
+        OS_SLUG=$(slugify "${RUNNER_OS_NAME:-unknown}")
+        ARCH_SLUG=$(slugify "${RUNNER_ARCH_NAME:-unknown}")
+
+        KEY_PREFIX="diffusion-cache-${OS_SLUG}-${ARCH_SLUG}-${ROLE_SLUG}-${SCENARIO_SLUG}${SUFFIX}"
+        CACHE_KEY="${KEY_PREFIX}-${DEPS_HASH}"
+
+        # Progressive, but always scoped fallbacks:
+        #   1. same role/scenario, older deps hash
+        #   2. same role, any scenario (roles/collections are shareable)
+        # Never falls back to the bare `diffusion-cache-` prefix, which could
+        # restore an unrelated role's cache.
+        {
+          echo "key=${CACHE_KEY}"
+          echo "restore-keys<<DIFFUSION_RESTORE_KEYS"
+          echo "${KEY_PREFIX}-"
+          echo "diffusion-cache-${OS_SLUG}-${ARCH_SLUG}-${ROLE_SLUG}-"
+          echo "DIFFUSION_RESTORE_KEYS"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Computed cache key: ${CACHE_KEY}"
 
     - name: Restore Diffusion cache
-      if: inputs.cache-enabled == 'true'
+      if: inputs.cache-enabled == 'true' && steps.cache-key.outputs.key != '' && steps.cache-config.outputs.cache-dir != ''
       id: restore-cache
       uses: actions/cache/restore@v4
       with:
-        path: ~/.diffusion/cache
-        key: diffusion-cache-${{ steps.cache-key.outputs.hash }}
-        restore-keys: |
-          diffusion-cache-
+        path: ${{ steps.cache-config.outputs.cache-dir }}
+        key: ${{ steps.cache-key.outputs.key }}
+        restore-keys: ${{ steps.cache-key.outputs.restore-keys }}
 
     - name: Disable AppArmor unprivileged userns restriction
       if: runner.os == 'Linux'
@@ -237,36 +495,44 @@ runs:
       if: inputs.run-converge == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        DIFFUSION_SCENARIO: ${{ inputs.scenario }}
       run: |
         echo "::group::Running molecule converge"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }}
+        diffusion molecule --ci --scenario "${DIFFUSION_SCENARIO}"
         echo "::endgroup::"
 
     - name: Run lint
       if: inputs.run-lint == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        DIFFUSION_SCENARIO: ${{ inputs.scenario }}
       run: |
         echo "::group::Running molecule lint"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }} --lint
+        diffusion molecule --ci --scenario "${DIFFUSION_SCENARIO}" --lint
         echo "::endgroup::"
 
     - name: Run verify
       if: inputs.run-verify == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        DIFFUSION_SCENARIO: ${{ inputs.scenario }}
       run: |
         echo "::group::Running molecule verify"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }} --verify
+        diffusion molecule --ci --scenario "${DIFFUSION_SCENARIO}" --verify
         echo "::endgroup::"
 
     - name: Run idempotence
       if: inputs.run-idempotence == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        DIFFUSION_SCENARIO: ${{ inputs.scenario }}
       run: |
         echo "::group::Running molecule idempotence"
-        diffusion molecule --ci --scenario ${{ inputs.scenario }} --idempotence
+        diffusion molecule --ci --scenario "${DIFFUSION_SCENARIO}" --idempotence
         echo "::endgroup::"
 
     - name: Cleanup
@@ -278,12 +544,17 @@ runs:
         diffusion molecule --ci --wipe || true
         echo "::endgroup::"
 
+    # An exact restore hit means this runner already produced (or restored)
+    # exactly the cache for this OS/arch + role + scenario + deps hash, so
+    # saving again would only race another job ("Unable to reserve cache").
+    # The key is unique per job dimension, so concurrent saves no longer
+    # collide with each other.
     - name: Save Diffusion cache
-      if: always() && inputs.cache-enabled == 'true'
+      if: always() && inputs.cache-enabled == 'true' && steps.cache-key.outputs.key != '' && steps.cache-config.outputs.cache-dir != '' && steps.restore-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
-        path: ~/.diffusion/cache
-        key: diffusion-cache-${{ steps.cache-key.outputs.hash }}
+        path: ${{ steps.cache-config.outputs.cache-dir }}
+        key: ${{ steps.cache-key.outputs.key }}
 
     - name: Show cache status
       if: always() && inputs.cache-enabled == 'true'
