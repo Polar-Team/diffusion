@@ -13,6 +13,7 @@ permission:
     "dev-new-features/Makefile": allow
     "dev-new-features/*.go": allow
     "dev-new-features/*.md": allow
+    "dev-new-features/docs/**": allow
   bash:
     "*": ask
     "git -C dev-new-features*": allow
