@@ -4,13 +4,90 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"diffusion/internal/config"
 	"diffusion/internal/patch"
+	"diffusion/internal/utils"
 
 	"github.com/spf13/cobra"
 )
+
+// stdinStdoutAreTerminals reports whether both stdin and stdout are
+// interactive terminals (including Windows ConPTY/Cygwin terminals).
+// Overridable in tests.
+var stdinStdoutAreTerminals = utils.IsStdinStdoutTerminal
+
+// truthyEnvValue parses v as a boolean the way DIFFUSION_NO_TUI (and
+// similar on/off env vars) are expected to be set: strconv.ParseBool
+// semantics, plus "yes"/"on" (case-insensitive) as true. An empty value
+// is false.
+func truthyEnvValue(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
+	if b, err := strconv.ParseBool(v); err == nil {
+		return b
+	}
+	switch strings.ToLower(v) {
+	case "yes", "on":
+		return true
+	}
+	return false
+}
+
+// autoTUIDisabledByEnv reports whether the environment should turn the
+// TUI off in auto-detect mode: a non-colorable terminal (TERM=dumb), an
+// explicit NO_COLOR request, or DIFFUSION_NO_TUI being truthy. CI
+// detection is handled separately via utils.IsCIEnv. getenv is injected
+// so the logic stays a pure, testable helper.
+func autoTUIDisabledByEnv(getenv func(string) string) bool {
+	if getenv("TERM") == "dumb" {
+		return true
+	}
+	if getenv("NO_COLOR") != "" {
+		return true
+	}
+	if truthyEnvValue(getenv("DIFFUSION_NO_TUI")) {
+		return true
+	}
+	return false
+}
+
+// shouldUseTUI resolves whether `patch analyze` should launch the
+// interactive TUI, given the requested format, the --tui/--no-tui flags,
+// whether stdin/stdout are both real terminals, and whether the
+// environment otherwise disables auto-detection (CI, TERM=dumb,
+// NO_COLOR, DIFFUSION_NO_TUI).
+//
+//   - --tui and --no-tui together is an error.
+//   - --tui requires --format tree.
+//   - --tui requires an interactive terminal on stdin and stdout; it
+//     overrides the auto-disable env vars (CI/TERM/NO_COLOR/DIFFUSION_NO_TUI).
+//   - --no-tui always yields the plain tree.
+//   - Otherwise, auto-detect: tree format + interactive terminal + the
+//     environment doesn't disable auto mode. --no-color alone does NOT
+//     disable the TUI in auto mode (it only removes colors).
+func shouldUseTUI(format string, forceTUI, noTUI, ttyInteractive, autoDisabledByEnv bool) (bool, error) {
+	if forceTUI && noTUI {
+		return false, fmt.Errorf("--tui and --no-tui are mutually exclusive")
+	}
+	if forceTUI {
+		if format != "tree" {
+			return false, fmt.Errorf("--tui requires --format tree")
+		}
+		if !ttyInteractive {
+			return false, fmt.Errorf("--tui requires an interactive terminal on stdin and stdout")
+		}
+		return true, nil
+	}
+	if noTUI {
+		return false, nil
+	}
+	return format == "tree" && ttyInteractive && !autoDisabledByEnv, nil
+}
 
 // NewPatchCmd creates the patch command with subcommands
 func NewPatchCmd(_ *CLI) *cobra.Command {
@@ -68,7 +145,7 @@ func overlayAnnotations(cfg *patch.PatchesConfig, role string) map[string]string
 
 func newPatchAnalyzeCmd() *cobra.Command {
 	var scenario, format string
-	var noColor bool
+	var noColor, forceTUI, noTUI bool
 	var tags []string
 
 	cmd := &cobra.Command{
@@ -81,13 +158,37 @@ The role is resolved on this system (diffusion cache, molecule working
 copies, Galaxy roles path). When missing, a read-only copy is pulled out
 of the running molecule container and analyzed from a temporary copy.
 
+When both stdin and stdout are interactive terminals, "--format tree"
+opens an interactive viewer: j/k (or down/up) move the cursor, g/G (or
+home/end) jump to the top/bottom, ctrl+d/ctrl+u (or pgdown/pgup) scroll
+half a page, and q/esc/ctrl+c quit.
+
+The viewer is automatically disabled (falling back to the plain tree)
+when: output is piped or otherwise not a terminal, CI is detected (the
+CI env var, or GITHUB_ACTIONS/GITLAB_CI/TF_BUILD/TEAMCITY_VERSION/
+BUILDKITE/JENKINS_URL), TERM=dumb, NO_COLOR is set, or DIFFUSION_NO_TUI
+is truthy. --no-color alone keeps the viewer on and only removes colors.
+Use --tui to force the viewer (still requires a terminal) and --no-tui
+to force the plain tree.
+
 EXAMPLES
   diffusion patch analyze geerlingguy.docker
   diffusion patch analyze geerlingguy.docker -s production --format yaml
-  diffusion patch analyze docker --tag install --no-color`,
+  diffusion patch analyze docker --tag install --no-color
+  diffusion patch analyze docker --tui
+  diffusion patch analyze docker | less -R   # piped output is always plain`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			role := args[0]
+			if format != "tree" && format != "yaml" {
+				return fmt.Errorf("unknown format %q (want tree|yaml)", format)
+			}
+			ttyInteractive := stdinStdoutAreTerminals()
+			autoDisabled := utils.IsCIEnv() || autoTUIDisabledByEnv(os.Getenv)
+			useTUI, err := shouldUseTUI(format, forceTUI, noTUI, ttyInteractive, autoDisabled)
+			if err != nil {
+				return err
+			}
 			analysis, err := patch.AnalyzeExternalRole(scenario, role)
 			if err != nil {
 				return err
@@ -100,18 +201,19 @@ EXAMPLES
 				fmt.Print(string(data))
 				return nil
 			}
-			if format != "tree" {
-				return fmt.Errorf("unknown format %q (want tree|yaml)", format)
-			}
 			overlays := map[string]string{}
 			if cfg, err := loadPatchBundles(scenario); err == nil {
 				overlays = overlayAnnotations(cfg, role)
 			}
-			analysis.PrintTree(os.Stdout, patch.TreeOptions{
+			opts := patch.TreeOptions{
 				FilterTags: tags,
 				NoColor:    noColor,
 				Overlays:   overlays,
-			})
+			}
+			if useTUI {
+				return patch.RunTreeTUI(analysis, opts)
+			}
+			analysis.PrintTree(os.Stdout, opts)
 			return nil
 		},
 	}
@@ -120,6 +222,9 @@ EXAMPLES
 	cmd.Flags().StringVar(&format, "format", "tree", "Output format: tree|yaml")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable ANSI colors")
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Highlight tasks with these tags (repeatable or comma-separated)")
+	cmd.Flags().BoolVar(&forceTUI, "tui", false, "Force the interactive TUI viewer")
+	cmd.Flags().BoolVar(&noTUI, "no-tui", false, "Disable the interactive TUI viewer; print the plain tree")
+	cmd.MarkFlagsMutuallyExclusive("tui", "no-tui")
 
 	return cmd
 }

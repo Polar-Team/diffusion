@@ -66,6 +66,14 @@ var branchPalette = []string{
 	"\033[38;5;99m",  // violet
 	"\033[38;5;37m",  // teal
 	"\033[38;5;229m", // pale yellow
+	"\033[38;5;203m", // coral
+	"\033[38;5;178m", // gold
+	"\033[38;5;75m",  // blue
+	"\033[38;5;171m", // orchid
+	"\033[38;5;148m", // yellow-green
+	"\033[38;5;174m", // salmon
+	"\033[38;5;111m", // light steel blue
+	"\033[38;5;77m",  // green
 }
 
 // FileIndex locates one task statement: Index-th entry of File's task
@@ -479,7 +487,7 @@ func (w *walker) walkInclude(id string, hop []FileIndex, fileRel string, line in
 	if !ok || strings.TrimSpace(target) == "" {
 		branch.Opaque = true
 		branch.Warning = "cannot determine include target"
-		w.warn(config.ColorYellow+"%s:%d (%s): cannot determine include target"+config.ColorReset, fileRel, line, id)
+		w.warn("%s:%d (%s): cannot determine include target", fileRel, line, id)
 		w.addBranch(branch)
 		return
 	}
@@ -1302,7 +1310,7 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 			fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
 		}
 		for _, warn := range a.Warnings {
-			_, err := fmt.Fprintf(w, "  - %s\n", warn)
+			_, err := fmt.Fprintf(w, "  - %s\n", colorize(warn, config.ColorYellow, opts.NoColor))
 			if err != nil {
 				fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
 			}
