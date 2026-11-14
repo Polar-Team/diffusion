@@ -5,6 +5,15 @@ All notable changes to the Diffusion project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`diffusion cache enable --cache-id <id>`**: Pin the cache ID explicitly instead of relying on the randomly generated default, so CI runs (e.g. GitHub Actions with `actions/cache`) reuse the same `role_<id>` cache directory across runs without editing `diffusion.toml` manually
+  - The ID is validated against `^[A-Za-z0-9_-]{1,64}$` since it becomes a path segment; invalid values are rejected before any directory creation or config write
+  - An explicit `--cache-id` always wins over an existing committed `cache_id`; overriding an existing ID prints a one-line notice (`old → new`) and does not migrate or delete the previous cache directory
+  - Omitting the flag preserves the previous behaviour (existing `cache_id` reused, otherwise a random one is generated)
+
+- **`diffusion cache path` Command**: Prints the absolute, effective role cache directory (the same path `diffusion molecule` uses internally), for scripting such as `$(diffusion cache path)`
+  - Fails with a non-zero exit code and an error on stderr when caching isn't configured (no `cache_id`)
+  - `--base` prints the parent directory containing all `role_*` cache directories instead
+
 - **`diffusion patch` Command**: Inspect and patch external Ansible roles per scenario without forking them
   - Subcommands: `analyze <role>` (task/branch tree with dotted leaf IDs; `--format tree|yaml`, `--tag`, `--no-color`), `list`, `check` (validate bundles and resolve task IDs against the installed role, exit 1 on failure), `diff` (dry-run), `apply` (`--dry-run`, `--force`)
   - Common flags: `--scenario` / `-s` (default `default`); `diff` / `apply` also take `--role` / `-r` (container `molecule-<role>`, default: first running molecule container) and `--bundle <name>`
@@ -111,6 +120,7 @@ All notable changes to the Diffusion project will be documented in this file.
 - **Molecule Container**: Python builds 3.13.15 / 3.12.14 / 3.11.16; Alpine packages updated (git 2.54.0, curl 8.22.0, openssl 3.5.8, xz 5.8.4, gcc 15.2.0)
 
 ### Fixed
+- **`diffusion-test` Action Cache Collisions**: cache keys are now scoped per runner OS/arch, role (`working-directory`) and scenario (`diffusion-cache-<os>-<arch>-<role-slug>-<scenario>-<deps-hash>`), so matrix jobs over `scenario` no longer collide in `actions/cache/save` (`Unable to reserve cache with key ...`). The hash now covers `scenarios/<scenario>/requirements.yml`, `meta/main.yml`, `diffusion.toml` and (with `cache-uv`) `pyproject.toml` / `uv.lock`, with the `cache_id` line stripped. Restore falls back from role+scenario to role only instead of the bare `diffusion-cache-` prefix, saving is skipped on an exact hit, and a deterministic `cache_id` (derived when none is committed) is passed via `diffusion cache enable --cache-id <derived>` on Diffusion v0.9.1+ (older pinned `diffusion-version`s before v0.9.1 fall back to writing `cache_id` into `diffusion.toml`, with a notice). The action now caches the role-specific directory reported by `diffusion cache path`, honouring `[cache] cache_path`, instead of the whole `~/.diffusion/cache`. New optional `cache-key-suffix` input; `inputs.*` are passed to shell steps via `env:`. Note: the key namespace changed, so the first run after upgrading starts with a cold cache.
 - **MCP `check_lock_file_scenarios`**: `diffusion.toml` dependency names are now read case-insensitively (`Name`), so `--scenario` values backed only by `diffusion.toml` prefixes are recognised; the MCP CLI reference now states that `diffusion.lock` is YAML and uses the correct `--tag` flag
 - **Terraform Provider — PEM Keys With Escaped Newlines**: `ssh_private_keys` values containing literal `\n` sequences (e.g. keys interpolated from JSON/tfvars strings) are normalised to real newlines before base64 encoding, so the key decodes to a valid PEM file inside the container
 - **`deps check` / `deps sync` in Repositories Without `scenarios/default/`**: Both commands failed with `open scenarios/default/requirements.yml: no such file or directory` when processing `meta/main.yml`; they now read `meta/main.yml` directly
