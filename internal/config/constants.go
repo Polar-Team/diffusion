@@ -135,9 +135,9 @@ const (
 	EnvYCFolderID      = "YC_FOLDER_ID"
 	EnvGCPProjectID    = "GCP_PROJECT_ID"
 	EnvAnsibleRunTags  = "ANSIBLE_RUN_TAGS"
-	EnvDiffusionDebug  = "DIFFUSION_DEBUG" // Set to "1" to enable debug output, "0" to disable.
+	EnvDiffusionDebug  = "DIFFUSION_DEBUG"  // Set to "1" to enable debug output, "0" to disable.
 	EnvDiffusionNoTUI  = "DIFFUSION_NO_TUI" // Truthy value disables the `patch analyze` interactive TUI viewer.
-	MaxArtifactSources = 10                // Maximum number of artifact sources supported
+	MaxArtifactSources = 10                 // Maximum number of artifact sources supported
 )
 
 // GCP-specific constants

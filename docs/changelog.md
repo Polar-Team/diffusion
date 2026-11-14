@@ -5,11 +5,15 @@ All notable changes to the Diffusion project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **Interactive TUI for `diffusion patch analyze --format tree`**: when stdin and stdout are both real terminals, the task/branch tree now opens in an interactive Bubble Tea viewer instead of printing straight to stdout
-  - Keys: `j`/`↓` and `k`/`↑` move the cursor, `g`/`home` and `G`/`end` jump to the top/bottom, `ctrl+d`/`pgdown` and `ctrl+u`/`pgup` scroll about half a page, `q`/`esc`/`ctrl+c` quit and restore the terminal
-  - New `--tui` flag forces the viewer (still requires `--format tree` and a terminal on stdin and stdout) and `--no-tui` forces the plain tree; the two are mutually exclusive and are validated, along with `--format`, before any role analysis runs
-  - Auto-detection falls back to the plain tree when output is piped/redirected, CI is detected (`CI` env var with boolean semantics, or `GITHUB_ACTIONS`/`GITLAB_CI`/`TF_BUILD`/`TEAMCITY_VERSION`/`BUILDKITE`/`JENKINS_URL`), `TERM=dumb`, `NO_COLOR` is set, or the new `DIFFUSION_NO_TUI` env var is truthy; `--no-color` alone keeps the viewer on and only removes its colors
-  - New `internal/utils` helpers: `IsStdinStdoutTerminal()` and `IsCIEnv()`, reused by the CLI's auto-detection instead of duplicating terminal/CI checks
+- **Interactive TUI for `diffusion patch analyze --format tree`**: when stdin and stdout are both a real, interactive console, the task/branch tree now opens in an interactive Bubble Tea viewer instead of printing straight to stdout
+  - Keys: `j`/`↓` and `k`/`↑` move the cursor, `g`/`home` and `G`/`end` jump to the top/bottom, `ctrl+d`/`pgdown` and `ctrl+u`/`pgup` move half a page, `q`/`esc`/`ctrl+c` quit and restore the terminal; the viewer uses the alternate screen, so use `--no-tui` or pipe the output to keep the tree in your scrollback
+  - New `--tui` flag forces the viewer (still requires `--format tree` and an interactive console on stdin and stdout) and `--no-tui` forces the plain tree; the two are mutually exclusive and are validated, along with `--format`, before any role analysis runs
+  - Auto-detection falls back to the plain tree when output is piped/redirected, CI is detected (`CI` env var with boolean semantics, or `GITHUB_ACTIONS`/`GITLAB_CI`/`TF_BUILD`/`TEAMCITY_VERSION`/`BUILDKITE`/`JENKINS_URL` — a vendor variable wins even over an explicit `CI=false`), `TERM=dumb`, `NO_COLOR` is set, or the new `DIFFUSION_NO_TUI` env var is truthy; `--no-color` alone keeps the viewer on and only removes its colors
+  - On Windows, the console check deliberately excludes Git Bash/mintty (MSYS pty): bubbletea's raw keyboard input never engages there, which previously made the viewer look frozen (keys only registered on Enter); `--tui` now fails fast there with a message pointing at winpty/Windows Terminal instead of launching a non-functional viewer
+  - New `internal/utils` helpers: `IsStdinStdoutTerminal()`, `IsCIEnv()`, and the platform-specific `CanRunInteractiveTUI()`, reused by the CLI's auto-detection instead of duplicating terminal/CI checks
+
+### Fixed
+- Analyzer warnings (e.g. "cannot determine include target") no longer embed raw ANSI color escape codes in the stored warning text; `PrintTree` applies color only at render time. This also fixes escape codes leaking into `diffusion patch analyze --format yaml` output and into the TUI viewer's reverse-video selection highlight
 
 - **`diffusion cache enable --cache-id <id>`**: Pin the cache ID explicitly instead of relying on the randomly generated default, so CI runs (e.g. GitHub Actions with `actions/cache`) reuse the same `role_<id>` cache directory across runs without editing `diffusion.toml` manually
   - The ID is validated against `^[A-Za-z0-9_-]{1,64}$` since it becomes a path segment; invalid values are rejected before any directory creation or config write

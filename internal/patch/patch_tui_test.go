@@ -1,6 +1,7 @@
 package patch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -151,11 +152,55 @@ func TestTUIWindowSizeAndViewport(t *testing.T) {
 	if !strings.Contains(view, m.plain[m.cursor]) {
 		t.Errorf("view missing selected plain line %q", m.plain[m.cursor])
 	}
-	if !strings.Contains(view, "/") { // footer position indicator e.g. "N/N"
-		t.Errorf("view missing footer position indicator:\n%s", view)
+	viewLines := strings.Split(view, "\n")
+	lastLine := ansi.Strip(viewLines[len(viewLines)-1])
+	wantPos := fmt.Sprintf("%d/%d", m.cursor+1, n)
+	if !strings.HasSuffix(lastLine, wantPos) {
+		t.Errorf("footer (last line) = %q, want suffix %q", lastLine, wantPos)
 	}
 	if got := strings.Count(view, "\n") + 1; got != m.height {
 		t.Errorf("view has %d lines, want exactly m.height=%d", got, m.height)
+	}
+}
+
+// TestTUIFooterExactPosition pins the footer's position indicator to the
+// exact "cursor/total" string on the last rendered line, so a regression
+// that merely contains a stray "/" elsewhere (e.g. in a file path) can't
+// make the assertion pass trivially.
+func TestTUIFooterExactPosition(t *testing.T) {
+	m := newTestModel(t)
+	n := len(m.plain)
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	last := ansi.Strip(lines[len(lines)-1])
+	want := fmt.Sprintf("%d/%d", m.cursor+1, n)
+	if !strings.HasSuffix(last, want) {
+		t.Fatalf("last line = %q, want suffix %q", last, want)
+	}
+}
+
+// TestTUIFooterPositionVisibleOnNarrowTerminal checks that even on a
+// narrow 40-column terminal, the help text is truncated (not the
+// position indicator), so "cursor/total" is always fully visible.
+func TestTUIFooterPositionVisibleOnNarrowTerminal(t *testing.T) {
+	m := newTestModel(t)
+	n := len(m.plain)
+	m = update(t, m, tea.WindowSizeMsg{Width: 40, Height: 10})
+	m = update(t, m, tea.KeyMsg{Runes: []rune("G"), Type: tea.KeyRunes})
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	last := lines[len(lines)-1]
+	want := fmt.Sprintf("%d/%d", n, n)
+	if !strings.HasSuffix(ansi.Strip(last), want) {
+		t.Fatalf("narrow footer = %q, want suffix %q", last, want)
+	}
+	if ansi.StringWidth(ansi.Strip(last)) > 40 {
+		t.Fatalf("footer line exceeds width 40: %q", last)
 	}
 }
 
@@ -175,12 +220,9 @@ func TestTUIViewContent(t *testing.T) {
 		t.Errorf("view missing title:\n%s", view)
 	}
 
-	// With NoColor, the only ANSI sequences allowed are the reverse-video
-	// highlight on the selected line ("\x1b[7m" ... "\x1b[0m").
-	stripped := view
-	stripped = strings.ReplaceAll(stripped, "\x1b[7m", "")
-	stripped = strings.ReplaceAll(stripped, "\x1b[0m", "")
-	if strings.Contains(stripped, "\x1b[") {
+	// With NoColor, the selected row uses the "▸ " gutter only (no
+	// reverse video), so the view must be strictly ANSI-free.
+	if strings.Contains(view, "\x1b[") {
 		t.Errorf("unexpected ANSI codes in NoColor view:\n%q", view)
 	}
 }
@@ -262,17 +304,45 @@ func TestTUIBodyShorterThanWindow(t *testing.T) {
 }
 
 func TestTUITinyHeights(t *testing.T) {
-	for _, h := range []int{0, 1, 2} {
-		t.Run("height="+strconv.Itoa(h), func(t *testing.T) {
+	cases := []struct {
+		h          int
+		wantTitle  bool
+		wantFooter bool
+	}{
+		{0, false, false},
+		{1, false, false},
+		{2, false, true},
+		{3, true, true},
+	}
+	for _, tc := range cases {
+		t.Run("height="+strconv.Itoa(tc.h), func(t *testing.T) {
 			m := newTestModel(t)
-			m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: h})
+			m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: tc.h})
+			titleRows, bodyRows, footerRows := m.layout()
+
+			if (titleRows > 0) != tc.wantTitle {
+				t.Errorf("height=%d: titleRows=%d, want present=%v", tc.h, titleRows, tc.wantTitle)
+			}
+			if (footerRows > 0) != tc.wantFooter {
+				t.Errorf("height=%d: footerRows=%d, want present=%v", tc.h, footerRows, tc.wantFooter)
+			}
+			if titleRows+bodyRows+footerRows != tc.h {
+				t.Errorf("height=%d: rows sum to %d, want %d", tc.h, titleRows+bodyRows+footerRows, tc.h)
+			}
+
 			view := m.View()
 			lineCount := 0
 			if view != "" {
 				lineCount = strings.Count(view, "\n") + 1
 			}
-			if lineCount > h {
-				t.Errorf("height=%d: view has %d lines (> height):\n%q", h, lineCount, view)
+			if lineCount > tc.h {
+				t.Errorf("height=%d: view has %d lines (> height):\n%q", tc.h, lineCount, view)
+			}
+			if tc.wantTitle && !strings.Contains(view, "role fixture.role") {
+				t.Errorf("height=%d: expected title in view:\n%q", tc.h, view)
+			}
+			if !tc.wantTitle && strings.Contains(view, "role fixture.role") {
+				t.Errorf("height=%d: title should be dropped:\n%q", tc.h, view)
 			}
 			// Must never panic; reaching here is itself a pass.
 		})
@@ -358,9 +428,8 @@ func TestTUITruncatesLongLines(t *testing.T) {
 	m = update(t, m, tea.WindowSizeMsg{Width: 20, Height: 10})
 	view := m.View()
 	for _, line := range strings.Split(view, "\n") {
-		visible := ansi.Strip(line)
-		if len([]rune(visible)) > 20 {
-			t.Errorf("line exceeds width 20 (%d runes): %q", len([]rune(visible)), visible)
+		if w := ansi.StringWidth(line); w > 20 {
+			t.Errorf("line exceeds width 20 (width=%d): %q", w, line)
 		}
 	}
 }

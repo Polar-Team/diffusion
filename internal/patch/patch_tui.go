@@ -267,9 +267,7 @@ func (m analyzeRoleTUIReader) footerLine(width int) string {
 	}
 	posWidth := ansi.StringWidth(pos)
 	availHelp := width - posWidth - 1 // reserve at least one separating space
-	if availHelp < 0 {
-		availHelp = 0
-	}
+	availHelp = max(availHelp, 0)
 	help := ansi.Truncate(footerHelp, availHelp, "…")
 	gap := width - ansi.StringWidth(help) - posWidth
 	if gap < 1 {

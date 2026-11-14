@@ -845,7 +845,7 @@ my_variable: "default_value"
       </table></div>
 
       <h3>Interactive tree viewer (TUI)</h3>
-      <p><code>diffusion patch analyze --format tree</code> opens an interactive Bubble Tea viewer whenever both stdin and stdout are real terminals. Keys:</p>
+      <p><code>diffusion patch analyze --format tree</code> opens an interactive Bubble Tea viewer whenever both stdin and stdout are a real, interactive console. The viewer uses the alternate screen; use <code>--no-tui</code> or pipe the output if you want the tree to stay in your scrollback. Keys:</p>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Keys</th><th>Action</th></tr></thead>
         <tbody>
@@ -853,20 +853,21 @@ my_variable: "default_value"
           <tr><td><code>k</code> / <code>↑</code></td><td>Move the cursor up</td></tr>
           <tr><td><code>g</code> / <code>home</code></td><td>Jump to the top</td></tr>
           <tr><td><code>G</code> / <code>end</code></td><td>Jump to the bottom</td></tr>
-          <tr><td><code>ctrl+d</code> / <code>pgdown</code></td><td>Scroll down about half a page</td></tr>
-          <tr><td><code>ctrl+u</code> / <code>pgup</code></td><td>Scroll up about half a page</td></tr>
+          <tr><td><code>ctrl+d</code> / <code>pgdown</code></td><td>Move down half a page</td></tr>
+          <tr><td><code>ctrl+u</code> / <code>pgup</code></td><td>Move up half a page</td></tr>
           <tr><td><code>q</code> / <code>esc</code> / <code>ctrl+c</code></td><td>Quit and restore the terminal</td></tr>
         </tbody>
       </table></div>
       <p>The viewer is automatically <strong>disabled</strong>, falling back to the plain tree, when any of the following is true:</p>
       <ul>
         <li>stdout or stdin is not a terminal (piped/redirected output, e.g. <code>| less</code> or <code>&gt; file</code>)</li>
-        <li>CI is detected: the <code>CI</code> env var (parsed as a boolean — <code>CI=false</code>/<code>CI=0</code> don't count), or any of <code>GITHUB_ACTIONS</code>, <code>GITLAB_CI</code>, <code>TF_BUILD</code>, <code>TEAMCITY_VERSION</code>, <code>BUILDKITE</code>, <code>JENKINS_URL</code></li>
+        <li>CI is detected: the <code>CI</code> env var (parsed as a boolean — <code>CI=false</code>/<code>CI=0</code> don't count unless a vendor variable below is also set), or any of <code>GITHUB_ACTIONS</code>, <code>GITLAB_CI</code>, <code>TF_BUILD</code>, <code>TEAMCITY_VERSION</code>, <code>BUILDKITE</code>, <code>JENKINS_URL</code></li>
         <li><code>TERM=dumb</code></li>
         <li><code>NO_COLOR</code> is set (non-empty)</li>
         <li><code>DIFFUSION_NO_TUI</code> is truthy (e.g. <code>1</code>, <code>true</code>, <code>yes</code>, <code>on</code>)</li>
       </ul>
-      <p><code>--no-color</code> alone does <strong>not</strong> disable the viewer — it only removes colors from it. <code>--tui</code> forces the viewer regardless of the env checks above, but still fails if stdin/stdout aren't both terminals; <code>--tui --format yaml</code> and <code>--tui --no-tui</code> are rejected before any role analysis runs.</p>
+      <div class="note warn">On Windows, the viewer requires a real console (a native console window or Windows Terminal/ConPTY). Under Git Bash/mintty, stdin/stdout are an MSYS pty, not a real console: the viewer's raw keyboard input never engages there, so keys only register on Enter and the TUI looks frozen. Use winpty, Windows Terminal, PowerShell, or cmd.exe instead — or pass <code>--no-tui</code>.</div>
+      <p><code>--no-color</code> alone does <strong>not</strong> disable the viewer — it only removes colors from it. <code>--tui</code> forces the viewer regardless of the env checks above, but still fails if stdin/stdout aren't both a real console (same mintty caveat); <code>--tui --format yaml</code> and <code>--tui --no-tui</code> are rejected before any role analysis runs.</p>
 
       <h3>Workflow</h3>
       <pre><code>diffusion molecule --converge                      <span style="color:var(--muted)"># install roles into the container</span>
