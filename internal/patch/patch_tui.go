@@ -214,7 +214,7 @@ func (m analyzeRoleTUIReader) bodyHeight() int {
 // content) doesn't divide by zero or leave the cursor stuck.
 func (m analyzeRoleTUIReader) scrollHeight() int {
 	h := m.bodyHeight()
-	h = max(h, 0)
+	h = max(h, 1)
 	return h
 }
 

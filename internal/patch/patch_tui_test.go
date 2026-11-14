@@ -767,3 +767,23 @@ func TestTUIVerticalMovesPreserveXOffset(t *testing.T) {
 		}
 	}
 }
+
+// TestTUIScrollHeightFloor guards the scrollHeight >= 1 invariant: at
+// heights where the body has 0 rows, cursor/offset arithmetic must still
+// use a 1-row window so the cursor can move and stays clamped.
+func TestTUIScrollHeightFloor(t *testing.T) {
+	for _, h := range []int{0, 1, 2} {
+		m := newTestModel(t)
+		m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: h})
+		if got := m.scrollHeight(); got != 1 {
+			t.Fatalf("height %d: scrollHeight = %d, want 1", h, got)
+		}
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		if m.cursor != 1 {
+			t.Fatalf("height %d: j should move cursor to 1, got %d", h, m.cursor)
+		}
+		if m.offset > m.cursor {
+			t.Fatalf("height %d: offset %d past cursor %d", h, m.offset, m.cursor)
+		}
+	}
+}
