@@ -1287,9 +1287,9 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Role name and org are auto-detected from meta/main.yml if present.",
                 "In CI mode (--ci), the repo is cloned inside the container instead of volume-mounting.",
                 "First run without --ci creates diffusion.toml interactively if it doesn't exist.",
-                "Scenario patches: when scenarios/<scenario>/patch.yml declares bundles, converge, verify and the default flow AUTO-APPLY them inside the container right before molecule runs and remove the overlay again afterwards (see 'diffusion patch'). A patch error FAILS the run ('patch apply failed: ...') — testing pristine roles silently would give false confidence. Without patch.yml nothing changes.",
+                "Scenario patches: when scenarios/<scenario>/patch.yml declares bundles, converge, verify, idempotence and the default flow AUTO-APPLY them inside the container right before molecule runs and remove the overlay again afterwards (see 'diffusion patch'). For idempotence this means both internal converge passes run against the patched roles, and the overlay is removed once 'molecule idempotence' returns, even if it fails. A patch error FAILS the run ('patch apply failed: ...') — testing pristine roles silently would give false confidence. Without patch.yml nothing changes.",
                 "Before auto-patching (and without --force) diffusion runs 'ansible-galaxy install -r molecule/<scenario>/requirements.yml' so the targeted roles exist in the container; a failure there is only a warning ('warning: galaxy install before patching failed').",
-                "--force now runs 'ansible-galaxy install --force -r molecule/<scenario>/requirements.yml' as a separate best-effort step BEFORE patching (previously chained into the converge command), so a forced reinstall can never wipe the patch overlay.",
+                "--force only runs 'ansible-galaxy install --force -r molecule/<scenario>/requirements.yml' as a separate best-effort step BEFORE patching for converge and the default flow (previously chained into the converge command, so a forced reinstall can never wipe the patch overlay); --verify and --idempotence do not do a forced reinstall before patching.",
                 "--destroy and --wipe first remove any leftover patch overlay (bind mounts under /root/.ansible/roles and /var/lib/diffusion-patch/<scenario>) so molecule sees pristine roles.",
                 "CI mode clones the repository inside the container with up to 10 attempts; after the final failure: 'failed to clone repository —container after 10 attempts: <err>'.",
             ],
@@ -1327,7 +1327,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                     "default": "false",
                 },
                 "--idempotence": {
-                    "description": "Run molecule idempotence check",
+                    "description": "Run molecule idempotence check (auto-applies scenario patches first, like converge/verify; removed again once idempotence returns, even on failure)",
                     "default": "false",
                 },
                 "--destroy": {
@@ -2050,7 +2050,7 @@ def get_diffusion_cli_reference(command: str = "") -> str:
                 "Patch bundles live in scenarios/<scenario>/patch.yml; overlay sources live in scenarios/<scenario>/patch/files/ and scenarios/<scenario>/patch/templates/.",
                 "Patching never mutates the host: the role is copied inside the container to /var/lib/diffusion-patch/<scenario>/work/<role> (pristine copy in .../backup/<role>), streamed to a throwaway host temp dir, patched, streamed back and BIND-MOUNTED over /root/.ansible/roles/<role>.",
                 "The patch dir lives under /var/lib (container writable layer), NOT /tmp: the molecule image mounts /tmp as tmpfs and 'docker cp' cannot read out of a tmpfs mount.",
-                "'diffusion molecule' (converge, verify, default flow) auto-applies the scenario's bundles before molecule runs and removes the overlay afterwards. 'diffusion patch apply' leaves the overlay in place until the container is destroyed, 'diffusion molecule --destroy/--wipe' runs, or the next molecule run replaces it.",
+                "'diffusion molecule' (converge, verify, idempotence, default flow) auto-applies the scenario's bundles before molecule runs and removes the overlay afterwards (for idempotence, after 'molecule idempotence' returns, even on failure). 'diffusion patch apply' leaves the overlay in place until the container is destroyed, 'diffusion molecule --destroy/--wipe' runs, or the next molecule run replaces it.",
                 "patch.yml is fully validated on load — ANY invalid bundle makes 'diffusion molecule' fail with 'patch apply failed: invalid patch config: ...'.",
                 "Role names in bundles must be declared in diffusion.toml [dependencies] roles for the bundle's scenario. Run diffusion patch from the project root (diffusion.toml is read from the current directory).",
                 "Task IDs are POSITIONAL (tree order from 'patch analyze'). Upgrading the external role can shift IDs — re-run 'patch analyze' and 'patch check' after every role version bump.",
@@ -2574,7 +2574,7 @@ def troubleshoot_molecule_container(role: str) -> str:
             "suggestion": (
                 "Overlays persist after 'diffusion patch apply' by design, but should NOT remain "
                 "after a 'diffusion molecule' run finished. Use inspect_patch_overlays for details. "
-                "'diffusion molecule --destroy/--wipe' always unmount them; converge/verify/'patch apply' "
+                "'diffusion molecule --destroy/--wipe' always unmount them; converge/verify/idempotence/'patch apply' "
                 "self-heal only while the scenario's patch.yml still declares bundles."
                 if overlay_mounts
                 else ""
@@ -3458,7 +3458,7 @@ def check_patch_config(project_path: str = "", scenario: str = "default") -> str
     """Statically validate scenarios/<scenario>/patch.yml for `diffusion patch`.
 
     Mirrors the validation diffusion runs when it loads patch.yml (which also
-    happens automatically during `diffusion molecule` converge/verify):
+    happens automatically during `diffusion molecule` converge/verify/idempotence):
     top-level 'Bundles' key (case-sensitive), unique bundle names, role_name
     declared in diffusion.toml [dependencies] for the bundle scenario, task_id
     syntax ('1.3.1' / 'h1'), duplicate IDs, at least one action, overlay files
@@ -3545,9 +3545,10 @@ def inspect_patch_overlays(role: str, scenario: str = "") -> str:
     backup and the patched work copy.
 
     Interpretation: overlays persist after `diffusion patch apply` by design;
-    after a `diffusion molecule` converge/verify finished they should be gone.
-    `diffusion molecule --destroy/--wipe` always remove leftovers; converge,
-    verify and `patch apply` self-heal only while patch.yml declares bundles.
+    after a `diffusion molecule` converge/verify/idempotence finished they
+    should be gone. `diffusion molecule --destroy/--wipe` always remove
+    leftovers; converge, verify, idempotence and `patch apply` self-heal only
+    while patch.yml declares bundles.
 
     Args:
         role: The role under test (container will be molecule-<role>).
@@ -3636,7 +3637,7 @@ def inspect_patch_overlays(role: str, scenario: str = "") -> str:
         report["note"] = (
             "Overlays are expected after 'diffusion patch apply'. If they are left over from an "
             "interrupted 'diffusion molecule' run: 'diffusion molecule --destroy' / '--wipe' always "
-            "unmount them; converge/verify/'patch apply' self-heal only while the scenario's "
+            "unmount them; converge/verify/idempotence/'patch apply' self-heal only while the scenario's "
             "patch.yml still declares bundles. A mount that resists 'umount -l' produces "
             "'stale patch overlay still mounted in container ...' — restart the container."
         )
@@ -4220,10 +4221,21 @@ _TROUBLESHOOTING_CASES: dict[str, dict[str, Any]] = {
         "cause": "'mount --bind' inside the container needs CAP_SYS_ADMIN; the diffusion molecule container normally runs privileged (Docker-in-Docker). A custom/non-privileged image or runtime breaks it.",
         "fix": ["Use the standard diffusion-molecule-container image started by 'diffusion molecule' (privileged)."],
     },
+    "idempotence-fails-only-with-patches": {
+        "area": "patch",
+        "symptom": "'diffusion molecule --idempotence' fails (changes reported on the second converge pass) only when scenarios/<scenario>/patch.yml declares bundles; the same role passes --idempotence without patch.yml",
+        "trigger": "scenarios/<scenario>/patch.yml declares bundles — 'molecule idempotence' runs both its internal converge passes against the bind-mounted patched role, so a non-idempotent patch (e.g. a new_module/new_module_setup task without a proper 'changed_when', or an overlay file always rewritten) surfaces here even though the same role is idempotent without patch.yml.",
+        "cause": "The patch overlay is applied once before 'molecule idempotence' runs and stays mounted for both of its internal converge passes, so idempotence bugs introduced by the patch itself (not the original role) show up.",
+        "fix": [
+            "Re-run 'diffusion molecule --converge' twice in a row against the patched container: since --converge auto-applies the same overlay, the second pass should also report 'changed' tasks from the patched role, reproducing the issue outside of molecule idempotence's own reporting.",
+            "Check the patched task(s) with check_patch_config / diffusion patch check: add or fix 'changed_when' via new_conditions, or make overlay files/templates idempotent.",
+            "Temporarily move patch.yml away and re-run --idempotence to confirm the unpatched role is idempotent, isolating the regression to the patch bundle.",
+        ],
+    },
     "patch-apply-failed-molecule": {
         "area": "patch",
-        "symptom": "patch apply failed: <reason> (converge/verify exits non-zero before molecule runs)",
-        "trigger": "diffusion molecule (converge, verify, default flow) with scenarios/<s>/patch.yml present",
+        "symptom": "patch apply failed: <reason> (converge/verify/idempotence exits non-zero before molecule runs)",
+        "trigger": "diffusion molecule (converge, verify, idempotence, default flow) with scenarios/<s>/patch.yml present",
         "cause": "By design a patch error FAILS the run — silently testing pristine roles would give false confidence.",
         "fix": [
             "Look up <reason> in this guide (query 'patch').",

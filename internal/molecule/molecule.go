@@ -175,7 +175,7 @@ func handleSubcommands(opts *MoleculeOptions, cfg *config.Config, path, roleDirN
 		return runVerify(opts, cfg, path, roleDirName, roleMoleculePath, scenario)
 	}
 	if opts.IdempotenceFlag {
-		return runIdempotence(opts, roleDirName)
+		return runIdempotence(opts, scenario, roleDirName)
 	}
 	if opts.DestroyFlag {
 		return runDestroy(opts, roleDirName)
@@ -484,14 +484,31 @@ func verifyDiffusionTests(opts *MoleculeOptions, scenario string) error {
 	return nil
 }
 
+// Test seams for the idempotence workflow. They default to the real
+// implementations and are only overridden by unit tests.
+var (
+	ensurePatchedRolesFn    = ensurePatchedRolesForMolecule
+	dockerExecInteractiveFn = utils.DockerExecInteractive
+)
+
 // runIdempotence runs molecule idempotence inside the container.
-func runIdempotence(opts *MoleculeOptions, roleDirName string) error {
+func runIdempotence(opts *MoleculeOptions, scenario, roleDirName string) error {
 	tagEnv := ""
 	if opts.TagFlag != "" {
 		tagEnv = fmt.Sprintf("ANSIBLE_RUN_TAGS=%s ", opts.TagFlag)
 	}
+
+	// Auto-apply scenario patches inside the container (no-op without
+	// patch.yml). The overlay is removed again once idempotence returns.
+	_, restorePatches, err := ensurePatchedRolesFn(opts, scenario, roleDirName)
+	if err != nil {
+		log.Printf(config.ColorRed+"patch apply failed: %v"+config.ColorReset, err)
+		return fmt.Errorf("patch apply failed: %w", err)
+	}
+	defer restorePatches()
+
 	cmdStr := fmt.Sprintf("cd ./%s && %smolecule idempotence%s", roleDirName, tagEnv, scenarioFlag(opts))
-	if err := utils.DockerExecInteractive(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
+	if err := dockerExecInteractiveFn(opts.RoleFlag, "/bin/sh", opts.CIMode, "-c", cmdStr); err != nil {
 		log.Printf(config.ColorRed+"Idempotence failed: %v"+config.ColorReset, err)
 		return fmt.Errorf("idempotence failed: %w", err)
 	}
