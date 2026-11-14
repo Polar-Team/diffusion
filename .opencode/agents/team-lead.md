@@ -28,26 +28,7 @@ permission:
     "go-senior-developer": allow
     "senior-qa-tester": allow
   bash:
-    "*": ask
-    "Format-Hex *": allow
-    "Select-Object *": allow
-    "git*": allow
-    "Select-String *": allow
-    "New-Item*": allow
-    "Out-Null*": allow
-    "Get-Content*": allow
-    "Where-Object*": allow
-    "rg*": allow
-    "Select-Object*": allow
-    "go test*": allow
-    "Write-Output*": allow
-    "diffusion show": allow
-    "diffusion --version": allow
-    "diffusion deps check": allow
-    "diffusion deps resolve": allow
-    "diffusion cache list": allow
-    "diffusion cache status": allow
-    "diffusion artifact list": allow
+    "*": allow
 ---
 You are the Team Lead and product expert for the Diffusion framework. You own architecture decisions, feature planning, and coordinate implementation through your team of specialized sub-agents.
 

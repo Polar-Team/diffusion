@@ -1,5 +1,4 @@
 ﻿{
-  "$schema": "https://opencode.ai/config.json",
   "default_agent": "team-lead",
   "skills": {
     "paths": [
@@ -18,7 +17,7 @@
         "/var/run/docker.sock:/var/run/docker.sock",
         "-v",
         "./:/project",
-        "ghcr.io/polar-team/diffusion-mcp-server:latest-amd64"
+        "ghcr.io/polar-team/diffusion-mcp-server:latest"
       ],
       "enabled": true
     }
