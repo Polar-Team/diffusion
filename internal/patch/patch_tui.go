@@ -22,6 +22,14 @@ const (
 	defaultTUIWidth  = 120
 )
 
+// gutterWidth is the fixed width (in cells) of the "▸ "/"  " cursor
+// gutter prefixed to every body row. It is never scrolled horizontally.
+const gutterWidth = 2
+
+// horizontalScrollStep is how many cells h/l (left/right) move the
+// shared horizontal offset per key press.
+const horizontalScrollStep = 8
+
 // titleStyleOn/footerStyleOn/styleOff give the title and footer a light
 // visual distinction from the body when colors are enabled. They are
 // plain text when opts.NoColor is set.
@@ -32,7 +40,7 @@ const (
 )
 
 // footerHelp is the static key-help portion of the footer line.
-const footerHelp = "j/k/↑/↓ move • g/G/home/end • ctrl+d/u/pgup/pgdn • q/esc/ctrl+c quit"
+const footerHelp = "j/k/↑/↓ move • h/l/←/→ scroll • 0/$ col start/end • g/G/home/end • ctrl+d/u/pgup/pgdn • q/esc/ctrl+c quit"
 
 // analyzeRoleTUIReader is the Bubble Tea model backing RunTreeTUI. It
 // holds two parallel line slices (colored and plain) built once from a
@@ -42,8 +50,14 @@ type analyzeRoleTUIReader struct {
 	colored []string
 	plain   []string
 
-	cursor int
-	offset int
+	cursor  int
+	offset  int
+	xOffset int // shared horizontal scroll offset (cells), applied to every body line
+
+	// widestLineCells is the width (in cells) of the widest body line,
+	// precomputed once so maxXOffset doesn't rescan every line on every
+	// keypress/resize.
+	widestLineCells int
 
 	width  int
 	height int // last known terminal height (rows)
@@ -78,13 +92,21 @@ func newAnalyzeRoleTUIReader(a *RoleAnalysis, opts TreeOptions) analyzeRoleTUIRe
 		plain = plain[1:]
 	}
 
+	widest := 0
+	for _, p := range plain {
+		if w := ansi.StringWidth(p); w > widest {
+			widest = w
+		}
+	}
+
 	return analyzeRoleTUIReader{
-		title:   title,
-		colored: colored,
-		plain:   plain,
-		width:   defaultTUIWidth,
-		height:  defaultTUIHeight,
-		noColor: opts.NoColor,
+		title:           title,
+		colored:         colored,
+		plain:           plain,
+		widestLineCells: widest,
+		width:           defaultTUIWidth,
+		height:          defaultTUIHeight,
+		noColor:         opts.NoColor,
 	}
 }
 
@@ -127,6 +149,39 @@ func (m analyzeRoleTUIReader) layoutHeight() int {
 		return 0
 	}
 	return m.height
+}
+
+// effectiveWidth returns the width used for layout: the last known
+// terminal width once ready, or the default otherwise. Mirrors
+// layoutHeight's handling of the pre-ready/transient-zero case.
+func (m analyzeRoleTUIReader) effectiveWidth() int {
+	if !m.ready || m.width <= 0 {
+		return defaultTUIWidth
+	}
+	return m.width
+}
+
+// contentWidth is the number of cells available for scrollable line
+// content, i.e. the terminal width minus the fixed gutter.
+func (m analyzeRoleTUIReader) contentWidth() int {
+	return max(m.effectiveWidth()-gutterWidth, 0)
+}
+
+// maxXOffset is the largest horizontal offset that still shows some new
+// content: once the widest body line already fits in contentWidth, this
+// is 0 and h/l become no-ops.
+func (m analyzeRoleTUIReader) maxXOffset() int {
+	return max(m.widestLineCells-m.contentWidth(), 0)
+}
+
+// clampXOffset keeps xOffset within [0, maxXOffset()].
+func (m *analyzeRoleTUIReader) clampXOffset() {
+	if m.xOffset < 0 {
+		m.xOffset = 0
+	}
+	if mx := m.maxXOffset(); m.xOffset > mx {
+		m.xOffset = mx
+	}
 }
 
 // layout splits the available rows into title/body/footer, dropping the
@@ -201,6 +256,7 @@ func (m analyzeRoleTUIReader) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 		m.clampCursor()
+		m.clampXOffset()
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -224,6 +280,20 @@ func (m analyzeRoleTUIReader) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+u", "pgup":
 			m.cursor -= halfPageStep(m.scrollHeight())
 			m.clampCursor()
+		case "h", "left":
+			m.xOffset -= horizontalScrollStep
+			m.clampXOffset()
+		case "l", "right":
+			m.xOffset += horizontalScrollStep
+			m.clampXOffset()
+		case "0":
+			m.xOffset = 0
+		case "$":
+			if len(m.plain) > 0 {
+				lineWidth := ansi.StringWidth(m.plain[m.cursor])
+				m.xOffset = lineWidth - m.contentWidth()
+				m.clampXOffset()
+			}
 		}
 	}
 	return m, nil
@@ -234,7 +304,7 @@ func (m analyzeRoleTUIReader) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // short for a true half-page.
 func halfPageStep(h int) int {
 	step := h / 2
-	step = max(step, 0)
+	step = max(step, 1)
 	return step
 }
 
@@ -246,35 +316,79 @@ func styled(s, on string, noColor bool) string {
 	return on + s + styleOff
 }
 
-// footerLine composes the footer: help text on the left, "cursor/total"
-// right-aligned. Only the help text is truncated (from the right, with
-// an ellipsis) so the position indicator stays fully visible even on a
-// narrow terminal. Widths are measured with ansi.StringWidth so the
-// (ANSI-free) help/position text lines up regardless of wide runes.
+// hcut applies the model's shared horizontal scroll window to s, which
+// must be a single (possibly colored) body line: it cuts the cell range
+// [xOffset, xOffset+contentWidth), then REPLACES (not adds) the first
+// visible cell with "…" when something was scrolled off on the left, and
+// the last visible cell with "…" when content continues past the right
+// edge -- so the window's total width never grows past contentWidth and
+// scrolling all the way to the end of a line (via "$") still reveals its
+// true last character instead of losing it to a redundant tail marker.
+// Leading/trailing SGI escape codes in s survive every cut: ansi.Cut
+// copies escape sequences unconditionally, independent of the visible-
+// column bookkeeping, so a line wrapped as "\x1b[36m...\x1b[0m" keeps
+// both ends after scrolling (verified empirically; see
+// patch_tui_test.go).
+func (m analyzeRoleTUIReader) hcut(s string) string {
+	cw := m.contentWidth()
+	if cw <= 0 {
+		return ""
+	}
+	total := ansi.StringWidth(s)
+	if total == 0 || m.xOffset >= total {
+		return "" // empty, or fully scrolled past
+	}
+	left := m.xOffset
+	right := left + cw
+	cutRight := right < total
+	cutLeft := left > 0
+
+	windowed := ansi.Cut(s, left, right)
+
+	if cutLeft {
+		if w := ansi.StringWidth(windowed); w > 0 {
+			windowed = "…" + ansi.Cut(windowed, 1, w)
+		}
+	}
+	if cutRight {
+		if w := ansi.StringWidth(windowed); w > 0 {
+			windowed = ansi.Cut(windowed, 0, w-1) + "…"
+		}
+	}
+	return windowed
+}
+
+// footerLine composes the footer: help text on the left, then (when
+// scrolled horizontally) "col N", then "cursor/total" right-aligned.
+// Only the help text is truncated (from the right, with an ellipsis) so
+// the position indicator stays fully visible even on a narrow terminal.
+// Widths are measured with ansi.StringWidth so the (ANSI-free)
+// help/position text lines up regardless of wide runes.
 func (m analyzeRoleTUIReader) footerLine(width int) string {
 	pos := "0/0"
 	if len(m.plain) > 0 {
 		pos = fmt.Sprintf("%d/%d", m.cursor+1, len(m.plain))
+	}
+	if m.xOffset > 0 {
+		pos = fmt.Sprintf("col %d  %s", m.xOffset, pos)
 	}
 	posWidth := ansi.StringWidth(pos)
 	availHelp := width - posWidth - 1 // reserve at least one separating space
 	availHelp = max(availHelp, 0)
 	help := ansi.Truncate(footerHelp, availHelp, "…")
 	gap := width - ansi.StringWidth(help) - posWidth
-	gap = max(gap, 0)
+	gap = max(gap, 1)
 	return help + strings.Repeat(" ", gap) + pos
 }
 
 // View satisfies tea.Model.
 func (m analyzeRoleTUIReader) View() string {
-	width := m.width
-	if !m.ready || width <= 0 {
-		width = defaultTUIWidth
-	}
+	width := m.effectiveWidth()
 	titleRows, bodyRows, footerRows := m.layout()
 
 	var lines []string
 	if titleRows > 0 {
+		// The title is never horizontally scrolled.
 		lines = append(lines, ansi.Truncate(styled(m.title, titleStyleOn, m.noColor), width, "…"))
 	}
 
@@ -290,14 +404,17 @@ func (m analyzeRoleTUIReader) View() string {
 			// No reverse video in NoColor mode: the gutter alone marks
 			// the cursor, and the row is otherwise plain text.
 			gutter = "▸ "
-			line = m.plain[i]
+			line = m.hcut(m.plain[i])
 		case i == m.cursor:
 			gutter = "▸ "
-			line = "\x1b[7m" + m.plain[i] + "\x1b[0m"
+			// Cut the plain line first, then wrap it in reverse video,
+			// so the highlight is always one unbroken \x1b[7m...\x1b[0m
+			// pair, however the horizontal window lands.
+			line = "\x1b[7m" + m.hcut(m.plain[i]) + "\x1b[0m"
 		default:
-			line = m.colored[i]
+			line = m.hcut(m.colored[i])
 		}
-		lines = append(lines, ansi.Truncate(gutter+line, width, "…"))
+		lines = append(lines, gutter+line)
 		shown++
 	}
 	// Pad remaining body rows so the footer stays pinned at the bottom.

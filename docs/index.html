@@ -851,6 +851,10 @@ my_variable: "default_value"
         <tbody>
           <tr><td><code>j</code> / <code>↓</code></td><td>Move the cursor down</td></tr>
           <tr><td><code>k</code> / <code>↑</code></td><td>Move the cursor up</td></tr>
+          <tr><td><code>h</code> / <code>←</code></td><td>Scroll the view left (long lines), 8 columns at a time</td></tr>
+          <tr><td><code>l</code> / <code>→</code></td><td>Scroll the view right (long lines), 8 columns at a time</td></tr>
+          <tr><td><code>0</code></td><td>Jump back to column 0</td></tr>
+          <tr><td><code>$</code></td><td>Scroll so the end of the selected line is visible</td></tr>
           <tr><td><code>g</code> / <code>home</code></td><td>Jump to the top</td></tr>
           <tr><td><code>G</code> / <code>end</code></td><td>Jump to the bottom</td></tr>
           <tr><td><code>ctrl+d</code> / <code>pgdown</code></td><td>Move down half a page</td></tr>
@@ -858,6 +862,7 @@ my_variable: "default_value"
           <tr><td><code>q</code> / <code>esc</code> / <code>ctrl+c</code></td><td>Quit and restore the terminal</td></tr>
         </tbody>
       </table></div>
+      <p>Long lines are no longer cut off at the terminal width: the horizontal scroll offset (like <code>less -S</code>) is shared across all rows so the tree's indentation stays aligned, and the footer shows <code>col N</code> next to the cursor position whenever you've scrolled right.</p>
       <p>The viewer is automatically <strong>disabled</strong>, falling back to the plain tree, when any of the following is true:</p>
       <ul>
         <li>stdout or stdin is not a terminal (piped/redirected output, e.g. <code>| less</code> or <code>&gt; file</code>)</li>

@@ -164,9 +164,11 @@ copies, Galaxy roles path). When missing, a read-only copy is pulled out
 of the running molecule container and analyzed from a temporary copy.
 
 When both stdin and stdout are an interactive console, "--format tree"
-opens an interactive viewer: j/k (or down/up) move the cursor, g/G (or
-home/end) jump to the top/bottom, ctrl+d/ctrl+u (or pgdown/pgup) move
-half a page, and q/esc/ctrl+c quit. The viewer uses the alternate
+opens an interactive viewer: j/k (or down/up) move the cursor, h/l (or
+left/right, or ←/→) scroll the view horizontally for long lines, 0
+jumps to column 0 and $ scrolls to the end of the selected line, g/G
+(or home/end) jump to the top/bottom, ctrl+d/ctrl+u (or pgdown/pgup)
+move half a page, and q/esc/ctrl+c quit. The viewer uses the alternate
 screen; use --no-tui or pipe the output if you want the tree to stay in
 your scrollback.
 
