@@ -699,8 +699,8 @@ func (m analyzeRoleTUIReader) View() string {
 		case i == m.cursor && m.noColor:
 			// Plain "◀●▶" marker, no ANSI at all, matching the colour
 			// variant's glyph but with no highlight codes.
-			gutter = "◀●▶ "
-			line = m.hcutWidth(m.plain[i], m.selectedContentWidth())
+			gutter = "◀●▶"
+			line = m.hcutWidth(m.plain[i], m.selectedContentWidth()) + "◀●▶"
 		case i == m.cursor:
 			gutter = config.ColorPAnalyzerSelector + "◀●▶" + config.ColorReset
 			// Cut the plain line first, then wrap it in the selected-row
