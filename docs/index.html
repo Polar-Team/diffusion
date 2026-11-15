@@ -845,7 +845,7 @@ my_variable: "default_value"
       </table></div>
 
       <h3>Interactive tree viewer (TUI)</h3>
-      <p><code>diffusion patch analyze --format tree</code> opens an interactive Bubble Tea viewer whenever both stdin and stdout are a real, interactive console. The viewer uses the alternate screen; use <code>--no-tui</code> or pipe the output if you want the tree to stay in your scrollback. Keys:</p>
+      <p><code>diffusion patch analyze --format tree</code> opens an interactive Bubble Tea viewer whenever both stdin and stdout are a real, interactive console. Each row shows only its tree glyph, ID and name (a <strong>slim</strong> list) — module, file:line, src/dest, notify, tags and overlay annotations move to a <strong>Details</strong> pop-up. The viewer never shows the plain tree's "↳" handler-dependency sub-rows under tasks/branches; handlers appear only in their own <code>handlers:</code> section, with their IDs (<code>h1</code>, <code>h1.2</code>, …), so they stay patchable — a handler's Details shows a <code>notified by</code> field listing the tasks/branches that notify it instead. The viewer uses the alternate screen; use <code>--no-tui</code> or pipe the output if you want the tree to stay in your scrollback. Keys:</p>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Keys</th><th>Action</th></tr></thead>
         <tbody>
@@ -859,10 +859,24 @@ my_variable: "default_value"
           <tr><td><code>G</code> / <code>end</code></td><td>Jump to the bottom</td></tr>
           <tr><td><code>ctrl+d</code> / <code>pgdown</code></td><td>Move down half a page</td></tr>
           <tr><td><code>ctrl+u</code> / <code>pgup</code></td><td>Move up half a page</td></tr>
+          <tr><td><code>enter</code> / <code>space</code></td><td>Open the row menu (branches, tasks/handlers and warnings only)</td></tr>
           <tr><td><code>q</code> / <code>esc</code> / <code>ctrl+c</code></td><td>Quit and restore the terminal</td></tr>
         </tbody>
       </table></div>
-      <p>Long lines are no longer cut off at the terminal width: the horizontal scroll offset (like <code>less -S</code>) is shared across all rows so the tree's indentation stays aligned, and the footer shows <code>col N</code> next to the cursor position whenever you've scrolled right.</p>
+      <p>The row menu floats just below the selected row (above it if there's more room there, e.g. near the bottom of the screen), with a magenta (<code>ColorPAnalyzerSelector</code>) rounded border and title — the same magenta as the <code>◀●▶</code> cursor — and currently has one item, <strong>Details</strong>, designed to grow more actions later. The Details box sizes itself to the widest unwrapped "key: value" line (keys aligned to a common column), capped to the terminal width minus a 2-cell margin on each side, with a minimum of <code>min(60, width)</code> so it's never cramped; it shifts left instead of narrowing if it doesn't fit to the right of the cursor, and only wraps a value (at word boundaries, and after <code>/</code>, <code>-</code>, <code>_</code>, <code>.</code> for paths/URLs) when it truly doesn't fit — never truncating it:</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Mode</th><th>Keys</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>Menu</td><td><code>j</code>/<code>k</code>/<code>↑</code>/<code>↓</code></td><td>Move between items</td></tr>
+          <tr><td>Menu</td><td><code>enter</code>/<code>space</code></td><td>Activate the item (e.g. open Details)</td></tr>
+          <tr><td>Menu</td><td><code>esc</code> / <code>h</code> / <code>←</code> / <code>q</code></td><td>Close the menu, back to the list</td></tr>
+          <tr><td>Details</td><td><code>j</code>/<code>k</code>/<code>↑</code>/<code>↓</code></td><td>Scroll the box when its content overflows</td></tr>
+          <tr><td>Details</td><td><code>esc</code></td><td>Back one step, to the menu</td></tr>
+          <tr><td>Details</td><td><code>q</code></td><td>Close everything, back to the list</td></tr>
+          <tr><td>Any</td><td><code>ctrl+c</code></td><td>Quit the program</td></tr>
+        </tbody>
+      </table></div>
+      <p>List navigation is frozen while the menu or Details is open; the selected row keeps its highlight underneath the pop-up, and the selected menu item uses the same black-on-aquamarine style as the selected list row (never reverse video). Resizing the terminal re-places and re-clamps an open pop-up. Long lines are no longer cut off at the terminal width: the horizontal scroll offset (like <code>less -S</code>) is shared across all rows so the tree's indentation stays aligned, and the footer shows <code>col N</code> next to the cursor position whenever you've scrolled right.</p>
       <p>The viewer is automatically <strong>disabled</strong>, falling back to the plain tree, when any of the following is true:</p>
       <ul>
         <li>stdout or stdin is not a terminal (piped/redirected output, e.g. <code>| less</code> or <code>&gt; file</code>)</li>

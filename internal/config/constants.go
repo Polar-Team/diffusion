@@ -43,6 +43,8 @@ const (
 	ColorPAnalyzerSalmon         = "\033[38;5;174m"
 	ColorPAnalyzerLightSteelBlue = "\033[38;5;111m"
 	ColorPAnalyzerGreen          = "\033[38;5;77m"
+	ColorPAnalyzerSelector       = "\033[38;5;201m"
+	ColorPAnalyzerSelectedRow    = "\033[30;48;5;122m"
 )
 
 // Default values

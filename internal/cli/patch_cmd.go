@@ -164,13 +164,24 @@ copies, Galaxy roles path). When missing, a read-only copy is pulled out
 of the running molecule container and analyzed from a temporary copy.
 
 When both stdin and stdout are an interactive console, "--format tree"
-opens an interactive viewer: j/k (or down/up) move the cursor, h/l (or
+opens an interactive viewer. Each row shows only its ID and name; enter
+or space on a branch, task/handler, or warning row opens a small
+magenta-bordered menu under it -- choose "Details" to see the module,
+file:line, src/dest, notify targets (resolved to handler IDs),
+inherited/own tags and overlay in a floating box, also magenta-bordered
+and sized to its content (wrapping only when a value truly doesn't
+fit). The viewer never shows the plain tree's "↳" handler-dependency
+sub-rows: handlers appear only in their own "handlers:" section with
+their IDs, so they stay patchable; a handler's Details shows who
+notifies it instead. Keys: j/k (or down/up) move the cursor, h/l (or
 left/right, or ←/→) scroll the view horizontally for long lines, 0
 jumps to column 0 and $ scrolls to the end of the selected line, g/G
 (or home/end) jump to the top/bottom, ctrl+d/ctrl+u (or pgdown/pgup)
-move half a page, and q/esc/ctrl+c quit. The viewer uses the alternate
-screen; use --no-tui or pipe the output if you want the tree to stay in
-your scrollback.
+move half a page, enter/space opens the menu, and q/esc/ctrl+c quit.
+Inside the menu: j/k move, enter/space selects, esc/h/←/q close it.
+Inside Details: j/k scroll the box, esc goes back to the menu, q
+closes everything. The viewer uses the alternate screen; use --no-tui
+or pipe the output if you want the tree to stay in your scrollback.
 
 The viewer is automatically disabled (falling back to the plain tree)
 when: output is piped or otherwise not a terminal, CI is detected (the
