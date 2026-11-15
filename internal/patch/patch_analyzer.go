@@ -56,24 +56,24 @@ const ansiReset = "\033[0m"
 // colors (red/green/yellow) are deliberately excluded so errors, matches
 // and warnings stay readable against branch colors.
 var branchPalette = []string{
-	"\033[38;5;45m",  // cyan
-	"\033[38;5;207m", // pink
-	"\033[38;5;141m", // purple
-	"\033[38;5;214m", // orange
-	"\033[38;5;81m",  // sky
-	"\033[38;5;212m", // magenta
-	"\033[38;5;120m", // lime
-	"\033[38;5;99m",  // violet
-	"\033[38;5;37m",  // teal
-	"\033[38;5;229m", // pale yellow
-	"\033[38;5;203m", // coral
-	"\033[38;5;178m", // gold
-	"\033[38;5;75m",  // blue
-	"\033[38;5;171m", // orchid
-	"\033[38;5;148m", // yellow-green
-	"\033[38;5;174m", // salmon
-	"\033[38;5;111m", // light steel blue
-	"\033[38;5;77m",  // green
+	config.ColorPAnalyzerCyan,
+	config.ColorPAnalyzerPink,
+	config.ColorPAnalyzerPurple,
+	config.ColorPAnalyzerOrange,
+	config.ColorPAnalyzerSky,
+	config.ColorPAnalyzerMagenta,
+	config.ColorPAnalyzerLime,
+	config.ColorPAnalyzerViolet,
+	config.ColorPAnalyzerTeal,
+	config.ColorPAnalyzerPaleYellow,
+	config.ColorPAnalyzerCoral,
+	config.ColorPAnalyzerGold,
+	config.ColorPAnalyzerBlue,
+	config.ColorPAnalyzerOrchid,
+	config.ColorPAnalyzerYellowGreen,
+	config.ColorPAnalyzerSalmon,
+	config.ColorPAnalyzerLightSteelBlue,
+	config.ColorPAnalyzerGreen,
 }
 
 // FileIndex locates one task statement: Index-th entry of File's task

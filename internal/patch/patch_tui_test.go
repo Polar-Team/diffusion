@@ -250,16 +250,15 @@ func TestTUISelectionHighlightIsUnbroken(t *testing.T) {
 		mi.clampCursor()
 		view := mi.View()
 		const open, closeSeq = "\x1b[7m", "\x1b[0m"
-		start := strings.Index(view, open)
-		if start == -1 {
+		_, after, found := strings.Cut(view, open)
+		if !found {
 			t.Fatalf("row %d: no reverse-video start found in view:\n%s", i, view)
 		}
-		rest := view[start+len(open):]
-		end := strings.Index(rest, closeSeq)
-		if end == -1 {
+
+		highlighted, _, found := strings.Cut(after, closeSeq)
+		if !found {
 			t.Fatalf("row %d: no reverse-video end found in view:\n%s", i, view)
 		}
-		highlighted := rest[:end]
 		if strings.Contains(highlighted, "\x1b[") {
 			t.Errorf("row %d: highlighted segment contains embedded ANSI: %q", i, highlighted)
 		}
@@ -373,9 +372,8 @@ func TestTUIResizeWhileScrolled(t *testing.T) {
 		t.Fatalf("cursor not visible after shrink: offset=%d bodyHeight=%d cursor=%d", m.offset, m.bodyHeight(), m.cursor)
 	}
 	maxOffset := n - m.scrollHeight()
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
+	maxOffset = max(maxOffset, 0)
+
 	if m.offset > maxOffset {
 		t.Fatalf("offset %d exceeds max %d after shrink", m.offset, maxOffset)
 	}
@@ -427,7 +425,7 @@ func TestTUITruncatesLongLines(t *testing.T) {
 	m := newTestModel(t)
 	m = update(t, m, tea.WindowSizeMsg{Width: 20, Height: 10})
 	view := m.View()
-	for _, line := range strings.Split(view, "\n") {
+	for line := range strings.SplitSeq(view, "\n") {
 		if w := ansi.StringWidth(line); w > 20 {
 			t.Errorf("line exceeds width 20 (width=%d): %q", w, line)
 		}
@@ -471,7 +469,7 @@ func TestTUIHorizontalScrollStepAndClamp(t *testing.T) {
 	}
 
 	// l clamps at maxXOffset however many times it's pressed.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		m = update(t, m, tea.KeyMsg{Runes: []rune("l"), Type: tea.KeyRunes})
 	}
 	if m.xOffset != m.maxXOffset() {
@@ -544,7 +542,7 @@ func TestTUIHorizontalScrollLeftEllipsis(t *testing.T) {
 
 	// At offset 0, no row should start its content with a left ellipsis.
 	view := m.View()
-	for _, line := range strings.Split(view, "\n") {
+	for line := range strings.SplitSeq(view, "\n") {
 		content := strings.TrimPrefix(strings.TrimPrefix(line, "▸ "), "  ")
 		if strings.HasPrefix(ansi.Strip(content), "…") {
 			t.Errorf("unexpected leading ellipsis at xOffset=0: %q", line)
@@ -585,7 +583,7 @@ func TestTUIHorizontalScrollRowWidths(t *testing.T) {
 		m.xOffset = xOff
 		m.clampXOffset()
 		view := m.View()
-		for _, line := range strings.Split(view, "\n") {
+		for line := range strings.SplitSeq(view, "\n") {
 			if w := ansi.StringWidth(line); w > 80 {
 				t.Errorf("xOffset=%d: line exceeds width 80 (width=%d): %q", m.xOffset, w, line)
 			}
@@ -604,16 +602,15 @@ func TestTUIHorizontalScrollHighlightStillUnbroken(t *testing.T) {
 
 	view := m.View()
 	const open, closeSeq = "\x1b[7m", "\x1b[0m"
-	start := strings.Index(view, open)
-	if start == -1 {
+	_, after, found := strings.Cut(view, open)
+	if !found {
 		t.Fatalf("no reverse-video start found in view:\n%s", view)
 	}
-	rest := view[start+len(open):]
-	end := strings.Index(rest, closeSeq)
-	if end == -1 {
+
+	highlighted, _, found := strings.Cut(after, closeSeq)
+	if !found {
 		t.Fatalf("no reverse-video end found in view:\n%s", view)
 	}
-	highlighted := rest[:end]
 	if strings.Contains(highlighted, "\x1b[") {
 		t.Errorf("highlighted segment contains embedded ANSI after scroll: %q", highlighted)
 	}
@@ -631,7 +628,7 @@ func TestTUIHorizontalScrollColorPreserved(t *testing.T) {
 	// reverse-video, and scroll right.
 	m.cursor = 1 // "│   ├── ● 1.1 [copy] ..." (not the cursor row)
 	m.clampCursor()
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		m = update(t, m, tea.KeyMsg{Runes: []rune("l"), Type: tea.KeyRunes})
 	}
 	if m.xOffset == 0 {
@@ -662,7 +659,7 @@ func TestTUIHorizontalScrollNoColorStrictlyAnsiFree(t *testing.T) {
 	}
 	m := newAnalyzeRoleTUIReader(a, TreeOptions{NoColor: true})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 15})
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		m = update(t, m, tea.KeyMsg{Runes: []rune("l"), Type: tea.KeyRunes})
 	}
 	if m.xOffset == 0 {
@@ -677,7 +674,7 @@ func TestTUIHorizontalScrollNoColorStrictlyAnsiFree(t *testing.T) {
 func TestTUIHorizontalScrollReclampsOnResize(t *testing.T) {
 	m := newTestModel(t)
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 10})
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		m = update(t, m, tea.KeyMsg{Runes: []rune("l"), Type: tea.KeyRunes})
 	}
 	wide := m.xOffset

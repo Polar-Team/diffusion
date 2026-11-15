@@ -6,6 +6,7 @@ package patch
 
 import (
 	"bytes"
+	"diffusion/internal/config"
 	"fmt"
 	"strings"
 
@@ -378,7 +379,10 @@ func (m analyzeRoleTUIReader) footerLine(width int) string {
 	help := ansi.Truncate(footerHelp, availHelp, "…")
 	gap := width - ansi.StringWidth(help) - posWidth
 	gap = max(gap, 1)
-	return help + strings.Repeat(" ", gap) + pos
+	if m.noColor {
+		return help + strings.Repeat(" ", gap) + pos
+	}
+	return config.ColorPAnalyzerLightSteelBlue + help + strings.Repeat(" ", gap) + pos + config.ColorReset
 }
 
 // View satisfies tea.Model.

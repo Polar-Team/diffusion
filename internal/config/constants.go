@@ -22,6 +22,29 @@ const (
 	ColorAquamarine = "\033[38;2;127;255;212m"
 )
 
+// Patch Branches Pallet
+
+const (
+	ColorPAnalyzerCyan           = "\033[38;5;45m"
+	ColorPAnalyzerPink           = "\033[38;5;207m"
+	ColorPAnalyzerPurple         = "\033[38;5;141m"
+	ColorPAnalyzerOrange         = "\033[38;5;214m"
+	ColorPAnalyzerSky            = "\033[38;5;81m"
+	ColorPAnalyzerMagenta        = "\033[38;5;212m"
+	ColorPAnalyzerLime           = "\033[38;5;120m"
+	ColorPAnalyzerViolet         = "\033[38;5;99m"
+	ColorPAnalyzerTeal           = "\033[38;5;37m"
+	ColorPAnalyzerPaleYellow     = "\033[38;5;229m"
+	ColorPAnalyzerCoral          = "\033[38;5;203m"
+	ColorPAnalyzerGold           = "\033[38;5;178m"
+	ColorPAnalyzerBlue           = "\033[38;5;75m"
+	ColorPAnalyzerOrchid         = "\033[38;5;171m"
+	ColorPAnalyzerYellowGreen    = "\033[38;5;148m"
+	ColorPAnalyzerSalmon         = "\033[38;5;174m"
+	ColorPAnalyzerLightSteelBlue = "\033[38;5;111m"
+	ColorPAnalyzerGreen          = "\033[38;5;77m"
+)
+
 // Default values
 const (
 	DefaultScenario              = "default"
