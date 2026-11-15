@@ -47,7 +47,7 @@ const gutterWidth = len(listGutter)
 // These are measured with ansi.StringWidth, not assumed.
 const (
 	selectedGutterWidthColor   = 3
-	selectedGutterWidthNoColor = 4
+	selectedGutterWidthNoColor = 3
 )
 
 // horizontalScrollStep is how many cells h/l (left/right) move the

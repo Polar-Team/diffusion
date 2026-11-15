@@ -1377,12 +1377,12 @@ func TestTUISelectedGutterStringsPinned(t *testing.T) {
 		t.Errorf("selectedGutterWidthColor = %d, want 3", selectedGutterWidthColor)
 	}
 
-	wantNoColor := "◀●▶ "
+	wantNoColor := "◀●▶"
 	if w := ansi.StringWidth(wantNoColor); w != selectedGutterWidthNoColor {
 		t.Errorf("NoColor gutter width = %d, want %d", w, selectedGutterWidthNoColor)
 	}
-	if selectedGutterWidthNoColor != 4 {
-		t.Errorf("selectedGutterWidthNoColor = %d, want 4", selectedGutterWidthNoColor)
+	if selectedGutterWidthNoColor != 3 {
+		t.Errorf("selectedGutterWidthNoColor = %d, want 3", selectedGutterWidthNoColor)
 	}
 
 	m := newTestModel(t)
