@@ -55,3 +55,66 @@ func TestIsTerminal_StdoutFd(t *testing.T) {
 	fd := os.Stdout.Fd()
 	t.Logf("os.Stdout.Fd() = %d", fd)
 }
+
+func TestIsStdinStdoutTerminal(t *testing.T) {
+	// Under `go test`, stdin/stdout are typically piped, so this should be
+	// false. Just assert it doesn't panic and matches reality either way.
+	result := IsStdinStdoutTerminal()
+	t.Logf("IsStdinStdoutTerminal() = %v", result)
+}
+
+func TestIsCIEnvPure(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"nothing set", map[string]string{}, false},
+		{"CI=true", map[string]string{"CI": "true"}, true},
+		{"CI=1", map[string]string{"CI": "1"}, true},
+		{"CI=false", map[string]string{"CI": "false"}, false},
+		{"CI=0", map[string]string{"CI": "0"}, false},
+		{"CI=yes (unparseable, non-empty)", map[string]string{"CI": "yes"}, true},
+		{"CI with surrounding whitespace, false", map[string]string{"CI": "  false  "}, false},
+		{"CI with surrounding whitespace, true", map[string]string{"CI": "  true  "}, true},
+		{"CI=false but GITHUB_ACTIONS set", map[string]string{"CI": "false", "GITHUB_ACTIONS": "true"}, true},
+		{"GITHUB_ACTIONS set", map[string]string{"GITHUB_ACTIONS": "true"}, true},
+		{"GITLAB_CI set", map[string]string{"GITLAB_CI": "true"}, true},
+		{"TF_BUILD set", map[string]string{"TF_BUILD": "True"}, true},
+		{"TEAMCITY_VERSION set", map[string]string{"TEAMCITY_VERSION": "2023.1"}, true},
+		{"BUILDKITE set", map[string]string{"BUILDKITE": "true"}, true},
+		{"JENKINS_URL set", map[string]string{"JENKINS_URL": "http://jenkins"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := func(k string) string { return tc.env[k] }
+			if got := isCIEnv(lookup); got != tc.want {
+				t.Errorf("isCIEnv(%v) = %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsCIEnv_RealEnv(t *testing.T) {
+	// Exercise the exported wrapper against the real environment, using
+	// t.Setenv so it's isolated and restored automatically.
+	t.Setenv("CI", "true")
+	for _, k := range ciEnvVendorVars {
+		t.Setenv(k, "")
+	}
+	if !IsCIEnv() {
+		t.Error("expected IsCIEnv() to be true with CI=true")
+	}
+
+	t.Setenv("CI", "false")
+	if IsCIEnv() {
+		t.Error("expected IsCIEnv() to be false with CI=false and no vendor vars")
+	}
+}
+
+func TestCanRunInteractiveTUI(t *testing.T) {
+	// Under `go test`, stdin/stdout are piped, so this should be false on
+	// every platform. Just assert it doesn't panic.
+	result := CanRunInteractiveTUI()
+	t.Logf("CanRunInteractiveTUI() = %v", result)
+}

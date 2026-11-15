@@ -22,6 +22,31 @@ const (
 	ColorAquamarine = "\033[38;2;127;255;212m"
 )
 
+// Patch Branches Pallet
+
+const (
+	ColorPAnalyzerCyan           = "\033[38;5;45m"
+	ColorPAnalyzerPink           = "\033[38;5;207m"
+	ColorPAnalyzerPurple         = "\033[38;5;141m"
+	ColorPAnalyzerOrange         = "\033[38;5;214m"
+	ColorPAnalyzerSky            = "\033[38;5;81m"
+	ColorPAnalyzerMagenta        = "\033[38;5;212m"
+	ColorPAnalyzerLime           = "\033[38;5;120m"
+	ColorPAnalyzerViolet         = "\033[38;5;99m"
+	ColorPAnalyzerTeal           = "\033[38;5;37m"
+	ColorPAnalyzerPaleYellow     = "\033[38;5;229m"
+	ColorPAnalyzerCoral          = "\033[38;5;203m"
+	ColorPAnalyzerGold           = "\033[38;5;178m"
+	ColorPAnalyzerBlue           = "\033[38;5;75m"
+	ColorPAnalyzerOrchid         = "\033[38;5;171m"
+	ColorPAnalyzerYellowGreen    = "\033[38;5;148m"
+	ColorPAnalyzerSalmon         = "\033[38;5;174m"
+	ColorPAnalyzerLightSteelBlue = "\033[38;5;111m"
+	ColorPAnalyzerGreen          = "\033[38;5;77m"
+	ColorPAnalyzerSelector       = "\033[38;5;201m"
+	ColorPAnalyzerSelectedRow    = "\033[30;48;5;122m"
+)
+
 // Default values
 const (
 	DefaultScenario              = "default"
@@ -135,8 +160,9 @@ const (
 	EnvYCFolderID      = "YC_FOLDER_ID"
 	EnvGCPProjectID    = "GCP_PROJECT_ID"
 	EnvAnsibleRunTags  = "ANSIBLE_RUN_TAGS"
-	EnvDiffusionDebug  = "DIFFUSION_DEBUG" // Set to "1" to enable debug output, "0" to disable.
-	MaxArtifactSources = 10                // Maximum number of artifact sources supported
+	EnvDiffusionDebug  = "DIFFUSION_DEBUG"  // Set to "1" to enable debug output, "0" to disable.
+	EnvDiffusionNoTUI  = "DIFFUSION_NO_TUI" // Truthy value disables the `patch analyze` interactive TUI viewer.
+	MaxArtifactSources = 10                 // Maximum number of artifact sources supported
 )
 
 // GCP-specific constants

@@ -56,16 +56,24 @@ const ansiReset = "\033[0m"
 // colors (red/green/yellow) are deliberately excluded so errors, matches
 // and warnings stay readable against branch colors.
 var branchPalette = []string{
-	"\033[38;5;45m",  // cyan
-	"\033[38;5;207m", // pink
-	"\033[38;5;141m", // purple
-	"\033[38;5;214m", // orange
-	"\033[38;5;81m",  // sky
-	"\033[38;5;212m", // magenta
-	"\033[38;5;120m", // lime
-	"\033[38;5;99m",  // violet
-	"\033[38;5;37m",  // teal
-	"\033[38;5;229m", // pale yellow
+	config.ColorPAnalyzerCyan,
+	config.ColorPAnalyzerPink,
+	config.ColorPAnalyzerPurple,
+	config.ColorPAnalyzerOrange,
+	config.ColorPAnalyzerSky,
+	config.ColorPAnalyzerMagenta,
+	config.ColorPAnalyzerLime,
+	config.ColorPAnalyzerViolet,
+	config.ColorPAnalyzerTeal,
+	config.ColorPAnalyzerPaleYellow,
+	config.ColorPAnalyzerCoral,
+	config.ColorPAnalyzerGold,
+	config.ColorPAnalyzerBlue,
+	config.ColorPAnalyzerOrchid,
+	config.ColorPAnalyzerYellowGreen,
+	config.ColorPAnalyzerSalmon,
+	config.ColorPAnalyzerLightSteelBlue,
+	config.ColorPAnalyzerGreen,
 }
 
 // FileIndex locates one task statement: Index-th entry of File's task
@@ -479,7 +487,7 @@ func (w *walker) walkInclude(id string, hop []FileIndex, fileRel string, line in
 	if !ok || strings.TrimSpace(target) == "" {
 		branch.Opaque = true
 		branch.Warning = "cannot determine include target"
-		w.warn(config.ColorYellow+"%s:%d (%s): cannot determine include target"+config.ColorReset, fileRel, line, id)
+		w.warn("%s:%d (%s): cannot determine include target", fileRel, line, id)
 		w.addBranch(branch)
 		return
 	}
@@ -1017,47 +1025,90 @@ func colorize(s, code string, noColor bool) string {
 	return code + s + ansiReset
 }
 
-// nearestTaggedBranch returns the closest enclosing branch of leafID that
-// carries tags, or nil.
-func (a *RoleAnalysis) nearestTaggedBranch(leafID string) *BranchNode {
-	for parent := parentAnyID(leafID); parent != ""; parent = parentAnyID(parent) {
-		if b := a.FindBranchByID(parent); b != nil && len(b.Tags) > 0 {
-			return b
-		}
-	}
-	return nil
+// treeRowKind classifies a structured tree row (see treeRow / buildTreeRows).
+type treeRowKind int
+
+const (
+	rowHeader treeRowKind = iota
+	rowBranch
+	rowLeaf
+	rowNotifyRef
+	rowSection // "handlers:" / "warnings:"
+	rowWarning
+)
+
+// treeRow is one structured row of the analyzed tree, shared by PrintTree
+// (which formats it in FULL form) and the TUI (which formats it in SLIM
+// form). Rows are built once by buildTreeRows from a single walk, so the
+// two renderers can never drift relative to each other or to the
+// underlying analysis.
+type treeRow struct {
+	Kind   treeRowKind
+	Prefix string // tree indentation + glyph, e.g. "│   ├── "
+	Color  string // subtree/branch colour ("" for none); always the
+	// real colour regardless of NoColor -- formatting decides whether to
+	// emit it.
+	Branch *BranchNode // rowBranch
+	Leaf   *TaskNode   // rowLeaf; rowNotifyRef: resolved handler def (nil if undefined)
+	Notify string      // rowNotifyRef: the notify name
+	Owner  string      // rowNotifyRef: ID of the branch/leaf that owns this notify
+	Text   string      // rowHeader/rowSection/rowWarning text
+	Match  bool        // --tag filter match (★)
+
+	// Ancestor is the nearest enclosing tagged branch for a rowLeaf, used
+	// both by PrintTree's "⇄ inherits" marker and by the TUI's Details
+	// "inherits" field. nil when none or not a rowLeaf.
+	Ancestor *BranchNode
+	// Overlay is the resolved "<= <path>" overlay annotation for a
+	// rowLeaf, "" when none.
+	Overlay string
 }
 
-// tagMarker builds the ◆/⇄ intersection marker for a leaf or branch.
-func tagMarker(tags []string, ancestor *BranchNode) string {
-	var sb strings.Builder
-	if len(tags) > 0 {
-		sb.WriteString(" ◆ tags:[")
-		sb.WriteString(strings.Join(tags, ","))
-		sb.WriteString("]")
-	}
-	if ancestor != nil {
-		if len(tags) > 0 {
-			sb.WriteString(" ⇄ ∩ [")
-			sb.WriteString(strings.Join(ancestor.Tags, ","))
-			sb.WriteString("]")
-		} else {
-			sb.WriteString(" ⇄ inherits [")
-			sb.WriteString(strings.Join(ancestor.Tags, ","))
-			sb.WriteString("]")
-		}
-	}
-	return sb.String()
+// notifyDep is one resolved (or undefined) notify target, used while
+// building the ↳ rows under a branch/leaf that notifies handlers.
+type notifyDep struct {
+	name string
+	leaf *TaskNode // nil when undefined
 }
 
-// PrintTree renders the branch/leaf tree with per-branch colors and tag
-// intersection markers. Branches print with ▶, leaves with ●. Handler
-// leaves render in a trailing "handlers:" section.
-func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
-	if a == nil || w == nil {
-		return
+// appendNotifyRows appends one rowNotifyRef per resolved (or undefined)
+// notify target of owner, in the given prefix/color, with ├──/└── glyphs
+// assigned by position.
+func appendNotifyRows(rows *[]treeRow, a *RoleAnalysis, ownerID, prefix, color string, notify []string) {
+	var deps []notifyDep
+	for _, n := range notify {
+		defs := a.handlerDefs(n)
+		if len(defs) == 0 {
+			deps = append(deps, notifyDep{name: n})
+			continue
+		}
+		for _, h := range defs {
+			deps = append(deps, notifyDep{name: n, leaf: h})
+		}
 	}
-	showTags := !opts.HideTags || len(opts.FilterTags) > 0
+	for di, d := range deps {
+		glyph := "├── "
+		if di == len(deps)-1 {
+			glyph = "└── "
+		}
+		*rows = append(*rows, treeRow{
+			Kind: rowNotifyRef, Prefix: prefix + glyph, Color: color,
+			Leaf: d.leaf, Notify: d.name, Owner: ownerID,
+		})
+	}
+}
+
+// buildTreeRows walks a's branch/leaf tree once and returns the ordered,
+// structured rows PrintTree and the TUI both render: task roots first (in
+// the same order PrintTree has always used), then a "handlers:" section
+// when handler leaves exist, then a "warnings:" section. This is the
+// single source of truth for tree structure, sorting, colours and
+// tag/overlay resolution; PrintTree and the TUI only differ in how they
+// format each row's text.
+func buildTreeRows(a *RoleAnalysis, opts TreeOptions) []treeRow {
+	if a == nil {
+		return nil
+	}
 	filter := map[string]bool{}
 	for _, t := range opts.FilterTags {
 		filter[t] = true
@@ -1073,15 +1124,19 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 		}
 		return false
 	}
-	// Overlay annotations keyed by canonical leaf ID.
 	overlays := map[string]string{}
-	// subtreeColor returns the top-branch color enclosing id, so every line
-	// inside a branch subtree (nested branches and leaves) renders in the
-	// branch color. Top-level leaves and invalid IDs get "" (default).
-	subtreeColor := func(id string) string {
-		if opts.NoColor {
-			return ""
+	for id, ref := range opts.Overlays {
+		if canon, err := canonicalAnyID(id); err == nil {
+			overlays[canon] = ref
 		}
+	}
+	// subtreeColor returns the top-branch colour enclosing id, so every
+	// row inside a branch subtree (nested branches and leaves) renders in
+	// the branch colour. Top-level leaves and invalid IDs get "". Always
+	// computed (independent of opts.NoColor): formatting decides whether
+	// to actually emit it, so the same rows serve both colour and
+	// NoColor renders.
+	subtreeColor := func(id string) string {
 		handler, parts, err := splitTaskID(id)
 		if err != nil || len(parts) <= 1 {
 			return ""
@@ -1094,24 +1149,6 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 			return b.Color
 		}
 		return ""
-	}
-	for id, ref := range opts.Overlays {
-		if canon, err := canonicalAnyID(id); err == nil {
-			overlays[canon] = ref
-		}
-	}
-	tasks, handlers := 0, 0
-	for _, l := range a.Leaves {
-		if handler, _, _ := splitTaskID(l.ID); handler {
-			handlers++
-		} else {
-			tasks++
-		}
-	}
-	_, err := fmt.Fprintf(w, "role %s %s (scenario: %s) — %d tasks, %d handlers, %d branches\n",
-		a.RoleName, a.RolePath, a.Scenario, tasks, handlers, len(a.Branches))
-	if err != nil {
-		fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
 	}
 
 	type item struct {
@@ -1142,10 +1179,10 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 			return pi[len(pi)-1] < pj[len(pj)-1]
 		})
 	}
-	// branchMatches reports whether a branch subtree or its own tags match.
-	// Handler branches only see handler leaves (h-prefix), task branches
-	// only task leaves.
-	var branchMatches = func(id string) bool {
+	// branchMatches reports whether a branch subtree or its own tags
+	// match. Handler branches only see handler leaves (h-prefix), task
+	// branches only task leaves.
+	branchMatches := func(id string) bool {
 		if b := a.FindBranchByID(id); b != nil && matches(b.Tags) {
 			return true
 		}
@@ -1164,36 +1201,20 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 		return false
 	}
 
-	// renderNotifyDeps prints handler dependency lines for notify names
-	// under the owner's line. childPrefix is the indentation for the dep
-	// lines, ownerColor tints them like the rest of the subtree.
-	renderNotifyDeps := func(childPrefix, ownerColor string, notify []string) {
-		var deps []string
-		for _, n := range notify {
-			defs := a.handlerDefs(n)
-			if len(defs) == 0 {
-				deps = append(deps, fmt.Sprintf("↳ ? [handler] %s (undefined)", n))
-				continue
-			}
-			for _, h := range defs {
-				s := fmt.Sprintf("↳ %s [%s] %s", h.ID, h.Module, h.Name)
-				if showTags && len(h.Tags) > 0 {
-					s += tagMarker(h.Tags, nil)
-				}
-				deps = append(deps, s)
-			}
-		}
-		for di, d := range deps {
-			g := "├── "
-			if di == len(deps)-1 {
-				g = "└── "
-			}
-			_, err := fmt.Fprintln(w, colorize(childPrefix+g+d, ownerColor, opts.NoColor))
-			if err != nil {
-				fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
-			}
+	var rows []treeRow
+
+	tasks, handlers := 0, 0
+	for _, l := range a.Leaves {
+		if handler, _, _ := splitTaskID(l.ID); handler {
+			handlers++
+		} else {
+			tasks++
 		}
 	}
+	rows = append(rows, treeRow{Kind: rowHeader, Text: fmt.Sprintf(
+		"role %s %s (scenario: %s) — %d tasks, %d handlers, %d branches",
+		a.RoleName, a.RolePath, a.Scenario, tasks, handlers, len(a.Branches),
+	)})
 
 	var render func(parent, prefix string)
 	render = func(parent, prefix string) {
@@ -1206,68 +1227,29 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 			}
 			if it.branch != nil {
 				b := it.branch
-				line := fmt.Sprintf("%s▶ %s [branch %s] %s:%d", prefix+glyph, b.ID, b.Kind, b.File, b.Line)
-				if b.Name != "" {
-					line += " " + b.Name
-				}
-				if b.Target != "" {
-					line += " -> " + b.Target
-				}
-				if b.Opaque {
-					line += " (opaque"
-					if b.Warning != "" {
-						line += ": " + b.Warning
-					}
-					line += ")"
-				}
-				if showTags {
-					line += tagMarker(b.Tags, nil)
-				}
-				if len(filter) > 0 && branchMatches(b.ID) {
-					line += colorize(" ★", "\033[32m", opts.NoColor)
-				}
-				_, err := fmt.Fprintln(w, colorize(line, b.Color, opts.NoColor))
-				if err != nil {
-					fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
-				}
+				rows = append(rows, treeRow{
+					Kind: rowBranch, Prefix: prefix + glyph, Color: b.Color, Branch: b,
+					Match: len(filter) > 0 && branchMatches(b.ID),
+				})
 				if len(b.Notify) > 0 {
-					renderNotifyDeps(prefix+cont, b.Color, b.Notify)
+					appendNotifyRows(&rows, a, b.ID, prefix+cont, b.Color, b.Notify)
 				}
 				render(it.id, prefix+cont)
 				continue
 			}
 			l := it.leaf
-			line := fmt.Sprintf("%s● %s [%s] %s:%d", prefix+glyph, l.ID, l.Module, l.File, l.Line)
-			if l.Name != "" {
-				line += " " + l.Name
-			}
-			if l.Src != "" {
-				line += " src=" + l.Src
-			}
-			if l.Dest != "" {
-				line += " dest=" + l.Dest
-			}
+			rows = append(rows, treeRow{
+				Kind: rowLeaf, Prefix: prefix + glyph, Color: subtreeColor(l.ID), Leaf: l,
+				Ancestor: a.nearestTaggedBranch(l.ID),
+				Overlay:  overlays[l.ID],
+				Match:    len(filter) > 0 && matches(l.Tags),
+			})
 			if len(l.Notify) > 0 {
-				line += " notify=" + strings.Join(l.Notify, ",")
-			}
-			if ref, ok := overlays[l.ID]; ok {
-				line += " <= " + ref
-			}
-			if showTags {
-				line += tagMarker(l.Tags, a.nearestTaggedBranch(l.ID))
-			}
-			if len(filter) > 0 && matches(l.Tags) {
-				line += colorize(" ★", "\033[32m", opts.NoColor)
-			}
-			_, err := fmt.Fprintln(w, colorize(line, subtreeColor(l.ID), opts.NoColor))
-			if err != nil {
-				fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
-			}
-			if len(l.Notify) > 0 {
-				renderNotifyDeps(prefix+cont, subtreeColor(l.ID), l.Notify)
+				appendNotifyRows(&rows, a, l.ID, prefix+cont, subtreeColor(l.ID), l.Notify)
 			}
 		}
 	}
+
 	// Tasks tree first, then the handlers section.
 	var taskRoots, handlerRoots []string
 	for _, it := range children[""] {
@@ -1284,10 +1266,7 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 	}
 	render("", "")
 	if len(handlerRoots) > 0 {
-		_, err := fmt.Fprintln(w, "handlers:")
-		if err != nil {
-			fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
-		}
+		rows = append(rows, treeRow{Kind: rowSection, Text: "handlers:"})
 		children[""] = nil
 		for _, id := range handlerRoots {
 			children[""] = append(children[""], byID[id])
@@ -1297,15 +1276,167 @@ func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
 	children[""] = saved
 
 	if len(a.Warnings) > 0 {
-		_, err := fmt.Fprintln(w, "warnings:")
-		if err != nil {
-			fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
-		}
+		rows = append(rows, treeRow{Kind: rowSection, Text: "warnings:"})
 		for _, warn := range a.Warnings {
-			_, err := fmt.Fprintf(w, "  - %s\n", warn)
-			if err != nil {
-				fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
-			}
+			rows = append(rows, treeRow{Kind: rowWarning, Text: warn})
+		}
+	}
+
+	return rows
+}
+
+// showTagsFor reports whether tag markers should be rendered, matching
+// PrintTree's historical rule.
+func showTagsFor(opts TreeOptions) bool {
+	return !opts.HideTags || len(opts.FilterTags) > 0
+}
+
+// formatFullBranch renders row (Kind == rowBranch) in PrintTree's
+// historical full format.
+func formatFullBranch(row treeRow, opts TreeOptions) string {
+	b := row.Branch
+	line := fmt.Sprintf("%s▶ %s [branch %s] %s:%d", row.Prefix, b.ID, b.Kind, b.File, b.Line)
+	if b.Name != "" {
+		line += " " + b.Name
+	}
+	if b.Target != "" {
+		line += " -> " + b.Target
+	}
+	if b.Opaque {
+		line += " (opaque"
+		if b.Warning != "" {
+			line += ": " + b.Warning
+		}
+		line += ")"
+	}
+	if showTagsFor(opts) {
+		line += tagMarker(b.Tags, nil)
+	}
+	if row.Match {
+		line += colorize(" ★", "\033[32m", opts.NoColor)
+	}
+	return colorize(line, b.Color, opts.NoColor)
+}
+
+// formatFullLeaf renders row (Kind == rowLeaf) in PrintTree's historical
+// full format.
+func formatFullLeaf(row treeRow, opts TreeOptions) string {
+	l := row.Leaf
+	line := fmt.Sprintf("%s● %s [%s] %s:%d", row.Prefix, l.ID, l.Module, l.File, l.Line)
+	if l.Name != "" {
+		line += " " + l.Name
+	}
+	if l.Src != "" {
+		line += " src=" + l.Src
+	}
+	if l.Dest != "" {
+		line += " dest=" + l.Dest
+	}
+	if len(l.Notify) > 0 {
+		line += " notify=" + strings.Join(l.Notify, ",")
+	}
+	if row.Overlay != "" {
+		line += " <= " + row.Overlay
+	}
+	if showTagsFor(opts) {
+		line += tagMarker(l.Tags, row.Ancestor)
+	}
+	if row.Match {
+		line += colorize(" ★", "\033[32m", opts.NoColor)
+	}
+	return colorize(line, row.Color, opts.NoColor)
+}
+
+// formatFullNotifyRef renders row (Kind == rowNotifyRef) in PrintTree's
+// historical full format.
+func formatFullNotifyRef(row treeRow, opts TreeOptions) string {
+	var s string
+	if row.Leaf == nil {
+		s = fmt.Sprintf("↳ ? [handler] %s (undefined)", row.Notify)
+	} else {
+		h := row.Leaf
+		s = fmt.Sprintf("↳ %s [%s] %s", h.ID, h.Module, h.Name)
+		if showTagsFor(opts) && len(h.Tags) > 0 {
+			s += tagMarker(h.Tags, nil)
+		}
+	}
+	return colorize(row.Prefix+s, row.Color, opts.NoColor)
+}
+
+// nearestTaggedBranch returns the closest enclosing branch of leafID that
+// carries tags, or nil.
+func (a *RoleAnalysis) nearestTaggedBranch(leafID string) *BranchNode {
+	for parent := parentAnyID(leafID); parent != ""; parent = parentAnyID(parent) {
+		if b := a.FindBranchByID(parent); b != nil && len(b.Tags) > 0 {
+			return b
+		}
+	}
+	return nil
+}
+
+// branchChain returns the enclosing branch IDs of id from the outermost
+// to the innermost (e.g. ["1", "1.3"] for a leaf under include_tasks 1
+// then block 1.3), for the TUI's Details "branch" field.
+func (a *RoleAnalysis) branchChain(id string) []*BranchNode {
+	var chain []*BranchNode
+	for parent := parentAnyID(id); parent != ""; parent = parentAnyID(parent) {
+		if b := a.FindBranchByID(parent); b != nil {
+			chain = append(chain, b)
+		}
+	}
+	slices.Reverse(chain)
+	return chain
+}
+
+// tagMarker builds the ◆/⇄ intersection marker for a leaf or branch.
+func tagMarker(tags []string, ancestor *BranchNode) string {
+	var sb strings.Builder
+	if len(tags) > 0 {
+		sb.WriteString(" ◆ tags:[")
+		sb.WriteString(strings.Join(tags, ","))
+		sb.WriteString("]")
+	}
+	if ancestor != nil {
+		if len(tags) > 0 {
+			sb.WriteString(" ⇄ ∩ [")
+			sb.WriteString(strings.Join(ancestor.Tags, ","))
+			sb.WriteString("]")
+		} else {
+			sb.WriteString(" ⇄ inherits [")
+			sb.WriteString(strings.Join(ancestor.Tags, ","))
+			sb.WriteString("]")
+		}
+	}
+	return sb.String()
+}
+
+// PrintTree renders the branch/leaf tree with per-branch colors and tag
+// intersection markers. Branches print with ▶, leaves with ●. Handler
+// leaves render in a trailing "handlers:" section. Its output is built
+// from buildTreeRows, the same structured rows the interactive TUI
+// renders (in a slimmer format); this function must keep producing
+// byte-for-byte identical output to before the row-model refactor (see
+// the golden test in patch_tree_golden_test.go).
+func (a *RoleAnalysis) PrintTree(w io.Writer, opts TreeOptions) {
+	if a == nil || w == nil {
+		return
+	}
+	for _, row := range buildTreeRows(a, opts) {
+		var line string
+		switch row.Kind {
+		case rowHeader, rowSection:
+			line = row.Text
+		case rowBranch:
+			line = formatFullBranch(row, opts)
+		case rowLeaf:
+			line = formatFullLeaf(row, opts)
+		case rowNotifyRef:
+			line = formatFullNotifyRef(row, opts)
+		case rowWarning:
+			line = "  - " + colorize(row.Text, config.ColorYellow, opts.NoColor)
+		}
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			fmt.Printf(config.ColorRed+"failed to write tree output: %v"+config.ColorReset+"\n", err)
 		}
 	}
 }

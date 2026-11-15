@@ -171,6 +171,7 @@ Entry point: `cmd/diffusion/main.go` → calls `internal/cli.Execute()`
 | `github.com/BurntSushi/toml` | TOML config parsing |
 | `github.com/hashicorp/vault-client-go` | HashiCorp Vault integration |
 | `gopkg.in/yaml.v3` | YAML parsing |
+| `github.com/charmbracelet/bubbletea` | Interactive TUI viewer for `patch analyze` |
 
 ## Build & Test
 
