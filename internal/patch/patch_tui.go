@@ -407,14 +407,14 @@ func (m analyzeRoleTUIReader) View() string {
 		case i == m.cursor && m.noColor:
 			// No reverse video in NoColor mode: the gutter alone marks
 			// the cursor, and the row is otherwise plain text.
-			gutter = "▸ "
+			gutter = "◀●▶ "
 			line = m.hcut(m.plain[i])
 		case i == m.cursor:
-			gutter = "▸ "
+			gutter = "\x1b[38;5;201m❯◀●▶\x1b[0m  "
 			// Cut the plain line first, then wrap it in reverse video,
 			// so the highlight is always one unbroken \x1b[7m...\x1b[0m
 			// pair, however the horizontal window lands.
-			line = "\x1b[7m" + m.hcut(m.plain[i]) + "\x1b[0m"
+			line = "\x1b[30;48;5;122m" + m.hcut(m.plain[i]) + "\x1b[0m"
 		default:
 			line = m.hcut(m.colored[i])
 		}
