@@ -410,7 +410,7 @@ func (m analyzeRoleTUIReader) View() string {
 			gutter = "◀●▶ "
 			line = m.hcut(m.plain[i])
 		case i == m.cursor:
-			gutter = "\x1b[38;5;201m❯◀●▶\x1b[0m  "
+			gutter = "\x1b[38;5;201m◀●▶\x1b[0m  "
 			// Cut the plain line first, then wrap it in reverse video,
 			// so the highlight is always one unbroken \x1b[7m...\x1b[0m
 			// pair, however the horizontal window lands.
